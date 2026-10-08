@@ -1,6 +1,6 @@
 const $=id=>document.getElementById(id);
 const example=$("source");
-const checks=[];
+const checks=[];const compilerVersion="0.2.0";
 function lex(src){const out=[];const rx=/\s+|\/\/[^\n]*|"(?:\\.|[^"\\])*"|\d+(?:\.\d+)?(?:u32|f64)?|[a-zA-Z_]\w*|[{}()<>:,;!+=*\/-]/gy;let p=0;while(p<src.length){rx.lastIndex=p;const m=rx.exec(src);if(!m)throw Error("Unexpected token at position "+p);if(!/^\s|^\/\//.test(m[0]))out.push(m[0]);p=rx.lastIndex;}out.push("EOF");return out;}
 function parse(tokens){let i=0;const peek=()=>tokens[i],eat=v=>{const t=tokens[i++];if(v&&v!==t)throw Error("Expected "+v+" but got "+t);return t;};
 function expr(min=0){let n,t=peek();if(t==="("){eat("(");n=expr();eat(")");}else if(t.startsWith('"')){eat();n={kind:"literal",value:JSON.parse(t),type:"&str"};}else if(/^\d/.test(t)){eat();n={kind:"literal",value:Number(t.replace(/(u32|f64)$/,"")),type:t.includes(".")||t.endsWith("f64")?"f64":"u32"};}else{const name=eat();const macro=peek()==="!";if(macro)eat("!");if(peek()==="("){eat("(");const args=[];while(peek()!==")"){args.push(expr());if(peek()!==",")break;eat(",");}eat(")");n={kind:"call",name,args,macro};}else n={kind:"variable",name};}

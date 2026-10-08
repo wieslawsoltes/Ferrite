@@ -36,6 +36,21 @@ textarea{width:100%;height:100%;resize:none;border:0;outline:0;background:#1d1e2
 
 /* JetBrains New UI inspired restrained colors and density */
 :root{--bg:#17191d;--panel:#22252c;--edge:#343943;--accent:#75a7ff;--text:#d5d9e1;--muted:#8995a7}header{background:#24272e;box-shadow:0 1px 3px #101216}#run{background:#356c54}#run:hover{background:#418467}.rail{background:#1e2126}.pane{background:#22252c}.tabbar{background:#252932}.tab.active{background:#303745;border-bottom-color:#80aaff}.editor-header{background:#20242a}.editor,textarea{background:#1b1f25}#inspector-content{background:#1b1f25}.statusbar{background:#2b527d}.cfg-block:hover,.instance-card:hover{border-color:#82b1ff}.tree-item.selected{background:#33435a}button:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #6eacff;outline-offset:-2px}
+
+#gutter{flex:none;overflow:hidden;scrollbar-width:none;padding:14px 4px 14px 2px;font:13px/1.65 ui-monospace,monospace}
+.gutter-line{height:21.45px;white-space:nowrap;cursor:pointer}.gutter-line:hover{color:#abc7fa}.gutter-run{color:#5cb78f;font-weight:bold}
+.project-folder{padding-top:6px;padding-bottom:6px;color:#aeb9cb;font-size:12px;cursor:pointer}
+#cargo-toolwindow{position:fixed;z-index:35;right:25px;top:54px;width:340px;max-height:70vh;overflow:auto;background:#272c35;border:1px solid #495262;box-shadow:0 14px 55px #0009;border-radius:10px;padding:14px}
+.cargo-title{font-weight:700;margin-bottom:12px;font-size:15px}
+.cargo-actions{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:14px}.cargo-actions button{border-radius:6px;background:#35445b;padding:7px}
+.cargo-section{padding:12px 0;border-top:1px solid #3d4553}.cargo-row{padding:5px 9px;color:#a8c4ed}.cargo-warning{color:#efa58a;padding:8px}
+.command-overlay{position:fixed;inset:0;z-index:100;background:#0008;display:flex;justify-content:center;align-items:flex-start;padding-top:min(16vh,150px)}
+.command-panel{width:min(630px,94vw);background:#282e39;border:1px solid #586374;box-shadow:0 22px 70px #000a;border-radius:12px;overflow:hidden}
+.command-panel input{width:100%;padding:16px;border:0;border-bottom:1px solid #465062;outline:0;background:#292e38;color:#e6eaf5;font:14px system-ui}
+.command-results{max-height:440px;overflow:auto;padding:7px}.command-result{display:block;width:100%;padding:10px 14px;text-align:left;border-radius:6px}.command-result:hover{background:#384b65}
+.callgraph-card{border:1px solid #495369;background:#292f3b;margin:10px 0;border-radius:8px;padding:9px}
+.callgraph-edge{display:block;padding:6px 14px;color:#98b5e5;text-align:left;width:100%}.graph-summary{padding:10px;color:#9db7d2}
+#source{font-variant-ligatures:normal}
 </style></head><body>
 <header><div class="brand">◈ Ferrite <span>Rust IDE</span></div><div class="crumb">File　 Edit　 View　 Navigate　 Code　 Refactor　 Run　 Tools　 VCS</div>
 <select id="examples" aria-label="Select Rust example"></select>
@@ -45,10 +60,11 @@ textarea{width:100%;height:100%;resize:none;border:0;outline:0;background:#1d1e2
 <aside class="pane" id="project"><div class="pane-title">PROJECT <span style="margin-left:auto">⌄</span></div>
 <div class="tree-group">⌄ ferrite-demo <button id="new-file" title="Create file">＋</button><button id="delete-file" title="Delete active file">−</button></div><div id="project-tree"></div></aside>
 <div class="split vertical" data-split="left"></div>
-<main class="center"><div class="tabbar" id="open-files"></div><div class="editor-header">Ferrite › <span id="editor-file">src/main.rs</span> <span id="dirty"></span></div><div class="editor"><textarea id="source" spellcheck="false" aria-label="Rust source editor"></textarea></div>
+<main class="center"><div class="tabbar" id="open-files"></div><div class="editor-header">Ferrite › <span id="editor-file">src/main.rs</span> <span id="dirty"></span></div><div class="editor"><div id="gutter" class="line-numbers" aria-label="Editor gutter"></div><textarea id="source" spellcheck="false" aria-label="Rust source editor"></textarea></div>
 <div class="split horizontal" data-split="bottom"></div><section id="bottom"><div class="tabbar"><button class="tab active">▣ Run</button><button class="tab" onclick="document.getElementById('terminal').textContent='Use the Compiler pane to inspect intermediate representations.'">Build</button></div><pre class="console" id="terminal"></pre></section></main>
 <div class="split vertical" data-split="right"></div>
 <aside class="pane" id="inspector"><div class="pane-title">RUST COMPILER EXPLORER <span style="margin-left:auto;color:#9295a3">Rust subset</span></div><div class="tabbar" id="inspector-tabs"></div><div id="inspector-content" class="visualizer"></div>
 <div class="pane-title">COMPILER PASSES / WALL TIME</div><div id="passes" style="padding:8px 0 13px"></div></aside>
 </div><div class="statusbar"><span id="status">Ready</span><span>UTF-8　 ·　 Rust　 ·　 Ferrite JS backend　 ·　 Educational subset</span></div>
+<aside id="cargo-toolwindow" class="hidden" aria-label="Cargo tool window"></aside>
 <script type="module" src="./src/workspace.js"></script></body></html>

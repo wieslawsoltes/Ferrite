@@ -21,6 +21,18 @@ Find in Files has source-linked results, include/exclude masks, explicit replace
 
 Every compiler representation uses original-file UTF-16 spans: selecting a token, AST/HIR node, symbol, obligation, ownership event, generic instance, MIR instruction, call site, diagnostic or mapped generated-JavaScript line navigates to the source. Editor selections highlight matching visible items. Edits invalidate old spans instead of navigating into obsolete source.
 
+## Coding agents, Rust MCP and terminals
+
+The **Coding Agent** and **Terminal** tool windows connect to an opt-in local bridge. Ferrite includes a provider-neutral streamed coding harness (OpenAI / Anthropic / Gemini API keys and model discovery), durable sessions, bounded context compaction, tool approvals, conflict-checked edit previews/checkpoints, plans, read-only child agents, an execution visualizer, and a real headless CLI.
+
+A shared **28-tool MCP registry** exposes workspace operations, compiler stages/MIR execution, native Cargo/processes, PTY lifecycle, **44 rust-analyzer/LSP request methods**, and **21 revision-checked IDE commands**. Native commands use the persistent checkout and installed toolchain. A separate bounded browser shell provides editor-workspace utilities without pretending to run Cargo. API login is separate from installed coding agents' own account login.
+
+```sh
+npm run agent:bridge -- --workspace /absolute/path/to/project --trust-workspace
+```
+
+Open **Coding Agent → Connect**, enter the bridge URL/token, sign in with a provider API key, choose a tool-capable model, and explicitly import the native workspace to enable source synchronization. For the deployed Pages IDE, add `--origin https://wieslawsoltes.github.io`. Native execution has host permissions and is **not sandboxed**. See the [agent workbench guide](docs/agent-workbench.md) for permissions, recovery, context limits, terminal requirements, MCP client configuration, tests and compatibility boundaries.
+
 ## Compiler pipeline
 
 `Cargo planning → file parsing → module/name resolution → built-in macro lowering → type/trait analysis → conservative ownership analysis → generic specialization → typed register MIR → verification → optimization → JavaScript/VM and WebAssembly execution`

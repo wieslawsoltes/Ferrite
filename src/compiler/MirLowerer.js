@@ -109,6 +109,11 @@ export class MirLowerer {
       }
       case 'cast': return this.emit('cast', {value: this.expr(node.value), targetType: node.target}, node, node.type);
       case 'block': return this.block(node);
+      case 'ifLet': {
+        const value = this.expr(node.value), condition = this.patternTest(node.pattern, value);
+        return this.conditional(condition, () => { this.bind(node.pattern, value); return this.block(node.then); },
+          () => node.otherwise ? this.expr(node.otherwise) : this.unit(node), node);
+      }
       case 'ifExpr': return this.conditional(this.expr(node.condition), () => this.block(node.then),
         () => node.otherwise ? this.expr(node.otherwise) : this.unit(node), node);
       case 'loopExpr': return this.loopExpression(node);
@@ -151,6 +156,16 @@ export class MirLowerer {
     this.terminate('unreachable', {}, node);
     if (reaches) this.current = done; else done.terminator = {kind: 'unreachable', span: node.span};
     return result;
+  }
+  whileLet(node) {
+    const test = this.newBlock('while-let test', node), body = this.newBlock('pattern matched', node), done = this.newBlock('while-let exit', node);
+    this.goto(test, node); this.current = test;
+    const value = this.expr(node.value), condition = this.patternTest(node.pattern, value);
+    this.branch(condition, body, done, node); this.current = body;
+    this.bind(node.pattern, value);
+    this.loops.push({break: done, continue: test, result: null, hasBreak: false});
+    this.block(node.then); this.loops.pop();
+    if (this.current) this.goto(test, node); this.current = done;
   }
   loopExpression(node) {
     const body = this.newBlock('loop', node), done = this.newBlock('loop exit', node), result = this.register(node.type, node);
@@ -208,6 +223,7 @@ export class MirLowerer {
         this.goto(frame.break, node); break;
       }
       case 'continue': this.goto(this.loops.at(-1).continue, node); break;
+      case 'whileLet': this.whileLet(node); break;
       case 'while': this.whileLoop(node); break;
       case 'for': this.forLoop(node); break;
       default: throw new Error(`Missing statement lowering for ${node.kind}`);

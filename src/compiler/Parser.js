@@ -4,7 +4,7 @@ import {TokenCursor} from './TokenCursor.js';
 
 const PRECEDENCE = {'||': 1, '&&': 2, '|': 3, '^': 4, '&': 5, '==': 6, '!=': 6,
   '<': 7, '>': 7, '<=': 7, '>=': 7, '+': 8, '-': 8, '*': 9, '/': 9, '%': 9};
-const BLOCK_EXPRESSIONS = new Set(['ifExpr', 'match', 'block', 'loopExpr']);
+const BLOCK_EXPRESSIONS = new Set(['ifExpr', 'ifLet', 'match', 'block', 'loopExpr']);
 
 /** Recursive-descent items/statements and Pratt expressions with complete source spans. */
 export class Parser {
@@ -171,6 +171,11 @@ export class Parser {
         body.push(this.c.node(kind, start, {value})); continue;
       }
       if (this.c.match('while')) {
+        if (this.c.match('let')) {
+          const pattern = this.pattern(); this.c.eat('=');
+          const value = this.expr(0, false), then = this.block();
+          body.push(this.c.node('whileLet', start, {pattern, value, then})); continue;
+        }
         const condition = this.expr(0, false), then = this.block();
         body.push(this.c.node('while', start, {condition, then})); continue;
       }
@@ -247,6 +252,12 @@ export class Parser {
     const start = this.c.peek();
     if (this.c.is('{')) return this.block();
     if (this.c.match('if')) {
+      if (this.c.match('let')) {
+        const pattern = this.pattern(); this.c.eat('=');
+        const value = this.expr(0, false), then = this.block();
+        const otherwise = this.c.match('else') ? (this.c.is('if') ? this.expr() : this.block()) : null;
+        return this.c.node('ifLet', start, {pattern, value, then, otherwise});
+      }
       const condition = this.expr(0, false), then = this.block();
       const otherwise = this.c.match('else') ? (this.c.is('if') ? this.expr() : this.block()) : null;
       return this.c.node('ifExpr', start, {condition, then, otherwise});

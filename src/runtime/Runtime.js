@@ -3,6 +3,7 @@ export class Runtime {
   constructor({maxSteps = 1000000, maxOutput = 1000000, maxDepth = 256, overflow = 'checked'} = {}) {
     this.maxSteps = maxSteps; this.maxOutput = maxOutput; this.maxDepth = maxDepth; this.overflow = overflow;
     this.steps = 0; this.depth = 0; this.output = ''; this.span = null;
+    this.integerBounds = new Map();
   }
   fail(message, code = 'RUNTIME') {
     const error = new Error(message); error.code = code; error.span = this.span; throw error;
@@ -15,8 +16,11 @@ export class Runtime {
   leave() { this.depth--; }
   integer(type) { return /^(?:[iu](?:8|16|32|64|128)|[iu]size)$/.test(type); }
   bounds(type) {
+    const existing = this.integerBounds.get(type);
+    if (existing) return existing;
     const bits = type.endsWith('size') ? 32 : Number(type.slice(1)), signed = type[0] === 'i';
-    return {bits, signed, min: signed ? -(1n << BigInt(bits - 1)) : 0n, max: (1n << BigInt(bits - (signed ? 1 : 0))) - 1n};
+    const bounds = Object.freeze({bits, signed, min: signed ? -(1n << BigInt(bits - 1)) : 0n, max: (1n << BigInt(bits - (signed ? 1 : 0))) - 1n});
+    this.integerBounds.set(type, bounds); return bounds;
   }
   normalize(value, type, wrapping = false) {
     if (!this.integer(type)) return type === 'f32' ? Math.fround(Number(value)) : value;

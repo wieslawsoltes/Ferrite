@@ -82,8 +82,8 @@ export class OwnershipAnalyzer {
       return [];
     }
     if (node.kind === 'block') { this.block(node); return []; }
-    if (node.kind === 'ifExpr') {
-      this.value(node.condition);
+    if (node.kind === 'ifExpr' || node.kind === 'ifLet') {
+      this.value(node.kind === 'ifLet' ? node.value : node.condition);
       const before = new Set(this.moved); this.block(node.then); const yes = new Set(this.moved);
       this.moved = new Set(before); if (node.otherwise) this.value(node.otherwise);
       this.moved = new Set([...yes, ...this.moved]); return [];
@@ -136,7 +136,8 @@ export class OwnershipAnalyzer {
         const roots = this.value(node.value);
         if (T.reference(node.value?.type) && node.value?.type !== '&str' && roots.some(root => !this.instance.locals[root]?.parameter))
           throw new Diagnostic('E0515', 'Cannot return a reference to a local value', node.span);
-      } else if (node.kind === 'while' || node.kind === 'for') {
+      } else if (['while', 'whileLet', 'for'].includes(node.kind)) {
+        if (node.kind === 'whileLet') this.value(node.value);
         if (node.condition) this.value(node.condition);
         if (node.from) this.value(node.from);
         if (node.to) this.value(node.to);

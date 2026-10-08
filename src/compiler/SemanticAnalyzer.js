@@ -209,6 +209,8 @@ export class SemanticAnalyzer {
           if (!T.numeric(left)) throw new Diagnostic('E0369', `Arithmetic requires numeric operands, got ${left}`, node.span);
           type = left;
         }
+        if (['&', '|', '^'].includes(node.op) && !T.integer(left))
+          throw new Diagnostic('E0369', 'Bitwise operators require integer operands', node.span);
         node.operandType = left; break;
       }
       case 'cast': {
@@ -217,6 +219,13 @@ export class SemanticAnalyzer {
         type = node.target; break;
       }
       case 'block': return this.block(node, ctx, expected);
+      case 'ifLet': {
+        const scrutinee = this.infer(node.value, ctx);
+        ctx.push(); this.pattern(node.pattern, scrutinee, ctx);
+        const yes = this.block(node.then, ctx, expected); ctx.pop();
+        const no = node.otherwise ? this.infer(node.otherwise, ctx, expected) : '()';
+        type = T.join(yes, no, node); break;
+      }
       case 'ifExpr': {
         T.unify('bool', this.infer(node.condition, ctx, 'bool'), new Map(), node.condition);
         const yes = this.block(node.then, ctx, expected);
@@ -393,6 +402,8 @@ export class SemanticAnalyzer {
     const builtins = ['len', 'clone', 'push', 'pop', 'push_str', 'to_string', 'unwrap', 'is_some', 'is_none', 'is_ok', 'is_err'];
     if (builtins.includes(method)) {
       node.receiver = receiver; node.receiverDeref = base !== original; node.builtin = `method::${method}`;
+      if (['push', 'pop', 'push_str'].includes(method) && T.reference(original) && !original.startsWith('&mut '))
+        throw new Diagnostic('E0596', 'Cannot mutate through a shared reference', receiver.span);
       const expectCount = ['push', 'push_str'].includes(method) ? 1 : 0;
       if (node.args.length !== expectCount) throw new Diagnostic('E0061', `${method} expects ${expectCount} argument(s)`, node.span);
       if (method === 'len' && (array || app.name === 'Vec' || ['String', '&str'].includes(base))) return 'usize';
@@ -467,6 +478,13 @@ export class SemanticAnalyzer {
         type = '!'; break;
       }
       case 'expression': this.infer(node.value, ctx); type = node.value.type === '!' ? '!' : '()'; break;
+      case 'whileLet': {
+        const scrutinee = this.infer(node.value, ctx);
+        ctx.push(); this.pattern(node.pattern, scrutinee, ctx);
+        ctx.loops.push({kind: 'while', type: '!', breaks: []});
+        T.unify('()', this.block(node.then, ctx, '()'), new Map(), node.then);
+        ctx.loops.pop(); ctx.pop(); break;
+      }
       case 'while': {
         T.unify('bool', this.infer(node.condition, ctx, 'bool'), new Map(), node);
         ctx.loops.push({kind: 'while', type: '!', breaks: []});

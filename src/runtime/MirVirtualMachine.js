@@ -4,6 +4,7 @@ import {Runtime} from './Runtime.js';
 export class MirVirtualMachine {
   constructor(functions, {entry = 'main<>', args = [], ...options} = {}) {
     this.functions = new Map(functions.map(fn => [fn.instance, fn]));
+    this.blockMaps = new Map(functions.map(fn => [fn.instance, new Map(fn.blocks.map(block => [block.id, block]))]));
     this.runtime = new Runtime(options); this.frames = []; this.done = false; this.result = null;
     this.last = null; this.trace = []; this.maxTrace = options.maxTrace ?? 2000;
     if (entry) this.push(entry, args, null); else this.done = true;
@@ -14,7 +15,7 @@ export class MirVirtualMachine {
     this.runtime.enter();
     const cells = this.runtime.cells(fn.registers.length);
     fn.params.forEach((slot, i) => { cells[slot].value = args[i]; });
-    this.frames.push({fn, cells, blocks: new Map(fn.blocks.map(block => [block.id, block])), block: fn.entry, ip: 0, returnTo});
+    this.frames.push({fn, cells, blocks: this.blockMaps.get(name), block: fn.entry, ip: 0, returnTo});
   }
   reference(frame, place) {
     return this.runtime.reference(frame.cells, place.slot, place.path.map(part => part.kind === 'index' ? {...part, value: frame.cells[part.register].value} : part));

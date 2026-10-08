@@ -1,6 +1,12 @@
 /** Three-way source synchronization. Local and native divergent edits stop the sync, never overwrite. */
 export class WorkspaceSynchronizer {
-  constructor(model, client, {onStatus = () => {}} = {}) { this.model = model; this.client = client; this.onStatus = onStatus; this.baseline = null; this.enabled = false; this.applying = false; this.queue = Promise.resolve(); this.timer = null; this.conflicts = []; this.generation = 0; }
+  constructor(model, client, {onStatus = () => {}} = {}) { this.model = model; this.client = client; this.onStatus = onStatus; this.baseline = null; this.enabled = false; this.applying = false; this.queue = Promise.resolve(); this.timer = null; this.conflicts = []; this.generation = 0;
+    this.unsubscribe = model.subscribe(event => {
+      if (event.kind !== 'replace' || this.applying) return;
+      const linked = this.enabled; this.disconnect();
+      if (linked) this.onStatus('Workspace replaced · agent synchronization is off; explicitly import the native checkout to reconnect.');
+    });
+  }
   import() {
     const generation = ++this.generation, revision = this.model.revision;
     this.enabled = false; clearTimeout(this.timer);
@@ -56,5 +62,6 @@ export class WorkspaceSynchronizer {
     });
     this.queue = operation; return operation;
   }
+  dispose() { this.disconnect(); this.unsubscribe(); }
   disconnect() { ++this.generation; clearTimeout(this.timer); this.enabled = false; this.baseline = null; this.conflicts = []; }
 }

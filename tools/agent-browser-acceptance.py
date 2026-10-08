@@ -29,6 +29,7 @@ def run():
     bridge=subprocess.Popen(['node','tests/fixtures/agent-browser-bridge.mjs',base],cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     connection=json.loads(bridge.stdout.readline())
     errors=[]
+    network=[]
     def api(path,data=None):
         request=urllib.request.Request(connection['url']+path,data=None if data is None else json.dumps(data).encode(),headers={'Authorization':'Bearer '+connection['token'],'Content-Type':'application/json'})
         with urllib.request.urlopen(request,timeout=30) as response:return json.load(response)
@@ -37,6 +38,8 @@ def run():
         context=browser.new_context(viewport={'width':1700,'height':1100},accept_downloads=True)
         page=context.new_page();page.set_default_timeout(15000)
         page.on('pageerror',lambda error: errors.append(str(error)))
+        page.on('console',lambda message: network.append({'type':message.type,'text':message.text}) if message.type in ['warning','error'] else None)
+        page.on('requestfailed',lambda request: network.append({'url':request.url,'failure':request.failure}))
         page.on('dialog',lambda dialog: dialog.accept())
         try:
             if MEMORY:
@@ -49,13 +52,22 @@ def run():
                 page.expose_function('ferriteTestBridge',bridge_fetch)
                 page.evaluate('''() => { const native=window.fetch;window.fetch=async(url,options={})=>{if(String(url).startsWith('http://127.0.0.1:')){const result=await window.ferriteTestBridge(String(url),{method:options.method,headers:options.headers,body:options.body});return new Response(result.text,{status:result.status,headers:{'content-type':'application/json'}});}return native(url,options);}; }''')
                 base_module.memory_document(page)
+                page.add_style_tag(content=(ROOT/'styles/agent.css').read_text())
             else:page.goto(base+'/',wait_until='networkidle')
             page.wait_for_function('!!window.ferrite?.getBuild()')
             page.locator('[data-tool="agent"]').click()
             agent=page.locator('.agent-workbench');expect(agent).to_be_visible()
             agent.get_by_role('button',name='Connect',exact=True).click()
             page.locator('#agent-bridge-url').fill(connection['url']);page.locator('#agent-bridge-token').fill(connection['token']);page.locator('#agent-trust-host').check()
+            # Exercise failed authentication before the real, deliberately slow handshake.
+            page.locator('#agent-bridge-token').fill('invalid-private-token')
+            page.locator('dialog.agent-dialog').get_by_role('button',name='Connect',exact=True).click()
+            expect(page.locator('dialog.agent-dialog .agent-error')).to_contain_text('bearer token')
+            expect(agent.locator('.agent-badge')).to_have_text('Disconnected')
+            page.locator('#agent-bridge-token').fill(connection['token'])
             page.locator('dialog.agent-dialog').get_by_role('button',name='Connect',exact=True).click();expect(page.locator('dialog.agent-dialog')).to_have_count(0)
+            expect(agent.locator('.agent-error')).to_be_hidden()
+            print('PASS failed authentication recovery and delayed atomic IDE connection')
             agent.get_by_role('button',name='API sign in',exact=True).click();page.locator('#agent-api-key').fill('fixture-private-api-key');page.locator('dialog.agent-dialog').get_by_role('button',name='Validate API key').click();expect(page.locator('dialog.agent-dialog')).to_have_count(0)
             expect(page.locator('#agent-models option')).to_have_count(1);page.locator('#agent-model').fill('test-tool-model')
             agent.get_by_role('button',name='Import native workspace').click();page.wait_for_function('window.ferrite.getSnapshot().files["src/main.rs"].includes("Before agent")')
@@ -107,12 +119,30 @@ def run():
             agent.get_by_role('button',name='Fork',exact=True).click();expect(page.locator('#agent-session-select option')).to_have_count(3)
             agent.get_by_role('button',name='API sign out',exact=True).click();expect(page.locator('#agent-model')).to_have_attribute('placeholder','API sign in required')
             agent.get_by_role('button',name='Disconnect',exact=True).click();expect(agent.locator('.agent-badge')).to_have_text('Disconnected')
+            expect(page.locator('#agent-terminal-tabs option')).to_have_count(1)
+            # Reuse the actual bridge; old PTYs remain native but stale local tabs were retired.
+            agent.get_by_role('button',name='Connect',exact=True).click()
+            page.locator('#agent-bridge-url').fill(connection['url']);page.locator('#agent-bridge-token').fill(connection['token']);page.locator('#agent-trust-host').check()
+            page.locator('dialog.agent-dialog').get_by_role('button',name='Connect',exact=True).click();expect(page.locator('dialog.agent-dialog')).to_have_count(0)
+            expect(page.locator('#agent-terminal-tabs option')).to_have_count(2)
+            expect(agent.locator('.agent-error')).to_be_hidden()
+            agent.get_by_role('button',name='Import native workspace').click()
+            expect(agent.locator('.agent-workspace-status')).to_contain_text('Synchronized')
+            native_before=(Path(connection['root'])/'src/main.rs').read_text()
+            page.locator('#sample-select').select_option(label='Geometry lab · traits & modules')
+            expect(agent.locator('.agent-workspace-status')).to_contain_text('synchronization is off')
+            page.wait_for_timeout(750)
+            assert (Path(connection['root'])/'src/main.rs').read_text()==native_before
+            agent.get_by_role('button',name='Disconnect',exact=True).click();expect(agent.locator('.agent-badge')).to_have_text('Disconnected')
             assert not errors,errors
-            print('PASS session fork, sign-out, disconnect and credential non-persistence')
-            (OUTPUT/'results.json').write_text(json.dumps({'passed':5,'transport':'memory-injected' if MEMORY else 'http','provider':'deterministic fixture; real provider billing not exercised','errors':errors},indent=2))
+            print('PASS session fork, sign-out, reconnect, project-switch isolation and credential non-persistence')
+            (OUTPUT/'results.json').write_text(json.dumps({'passed':6,'transport':'memory-injected' if MEMORY else 'http','provider':'deterministic fixture; real provider billing not exercised','errors':errors},indent=2))
         except Exception:
             page.screenshot(path=str(OUTPUT/'failure.png'),full_page=True)
             (OUTPUT/'errors.json').write_text(json.dumps(errors,indent=2))
+            diagnostics=json.dumps({'network':network,'dialogs':page.locator('dialog .agent-error').all_text_contents(),'agentErrors':page.locator('.agent-workbench > .agent-error').all_text_contents()},indent=2)
+            for secret in [connection['token'],'fixture-private-api-key']:diagnostics=diagnostics.replace(secret,'[REDACTED]')
+            (OUTPUT/'diagnostics.json').write_text(diagnostics)
             raise
         finally:
             context.close();browser.close();bridge.terminate()

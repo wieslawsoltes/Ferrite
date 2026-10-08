@@ -59,7 +59,7 @@ export class CargoBridgeServer {
       try { return await this.runner.run({files: input.files}, input.command, {
       jobs: lease.jobs, toolchain: input.toolchain ?? '',
       args: input.args ?? [], json: input.json === true, offline: input.offline === true, locked: input.locked === true,
-      timeoutMs: Math.min(600000, Math.max(1000, Number(input.timeoutMs) || 120000)), signal: controller.signal,
+      timeoutMs: Math.min(3600000, Math.max(1000, Number(input.timeoutMs) || 120000)), signal: controller.signal,
       onEvent: event => emit({type: 'log', ...event})
     }); } finally { lease.release(); } })();
     this.active = {controller, operation};

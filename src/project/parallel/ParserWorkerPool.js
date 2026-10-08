@@ -37,8 +37,10 @@ export class ParserWorkerPool {
     // Avoid worker startup/clone overhead for small edits; normal serial compilation
     // remains the exact reference path, not a different semantic implementation.
     if (count < 2 || entries.reduce((n, [, source]) => n + source.length, 0) < threshold) return report;
-    this.active = true; let cursor = 0, running = 0; const results = new Array(entries.length);
-    const abort = () => this.dispose(signal.reason ?? new DOMException('Cancelled', 'AbortError'));
+    // Longest-first dispatch reduces the tail of uneven files; commit order remains filename order.
+    const work=entries.map(([file,source],index)=>({file,source,index})).sort((a,b)=>b.source.length-a.source.length||a.index-b.index);
+    this.active = true; let cursor = 0, running = 0, stopped = false; const results = new Array(entries.length);
+    const abort = () => { stopped=true;this.dispose(signal.reason ?? new DOMException('Cancelled', 'AbortError')); };
     signal?.addEventListener('abort', abort, {once: true});
     try {
       signal?.throwIfAborted();
@@ -46,9 +48,9 @@ export class ParserWorkerPool {
       report.usedWorkers = count;
       await Promise.all(lanes.map(async (slot, lane) => {
         for (;;) {
-          signal?.throwIfAborted();
-          const index = cursor++; if (index >= entries.length) return;
-          const [file, source] = entries[index], begin = performance.now() - start;
+          signal?.throwIfAborted();if(stopped)return;
+          const next=work[cursor++];if(!next)return;
+          const {file,source,index}=next,begin = performance.now() - start;
           running++; report.peakActiveTasks = Math.max(report.peakActiveTasks, running);
           const result = await this.execute(slot, file, source); running--;
           if (result.file !== file || (!result.error && (!Array.isArray(result.tokens) || !result.ast))) throw Error('Invalid parser worker result');
@@ -63,7 +65,7 @@ export class ParserWorkerPool {
         cache.adopt({...results[i], source: entries[i][1]}); report.parsedFiles++;
       }
     } catch (error) {
-      this.dispose(error); signal?.throwIfAborted();
+      stopped=true;this.dispose(error); signal?.throwIfAborted();
       report.fallbackReason = error.message; report.usedWorkers = 0; report.parsedFiles = 0;
     } finally { signal?.removeEventListener('abort', abort); this.active = false; }
     report.tasks.sort((a, b) => a.startMs - b.startMs || a.file.localeCompare(b.file));

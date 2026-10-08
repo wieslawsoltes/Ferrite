@@ -31,10 +31,11 @@ export class NativeCargoRunner {
       if (manifestPath) argv.push('--manifest-path', manifestPath);
       if (jobs !== null && ['check','build','run','test','clippy','bench','inspect','rustc','rustdoc','doc'].includes(command)) argv.push('--jobs', String(jobs));
       if (command === 'metadata' && !args.includes('--format-version')) argv.push('--format-version', '1');
-      if (json && ['check', 'build', 'test', 'run', 'clippy', 'bench','inspect'].includes(command) && !args.some(a => a.startsWith('--message-format'))) argv.push('--message-format=json');
+      if (json && ['check', 'build', 'test', 'run', 'clippy', 'bench','inspect'].includes(command) && !cargoArguments.some(a => a.startsWith('--message-format'))) argv.push('--message-format=json');
       if (command !== 'fmt') { if (offline) argv.push('--offline'); if (locked) argv.push('--locked'); } argv.push(...args);
       if(collector){if(!args.includes('--'))argv.push('--');argv.push(...collector.arguments());}
-      const structuredOutput=argv.some((a,i)=>(a.startsWith('--message-format=')&&a.includes('json'))||(a==='--message-format'&&argv[i+1]?.includes('json')));
+      const presentationArguments=argv.slice(0,argv.includes('--')?argv.indexOf('--'):argv.length);
+      const structuredOutput=presentationArguments.some((a,i)=>(a.startsWith('--message-format=')&&a.includes('json'))||(a==='--message-format'&&presentationArguments[i+1]?.includes('json')));
       const logs = new CargoLogStream(onEvent, structuredOutput);
       const start = performance.now();
       const result = await this.process.run('cargo', argv, {cwd: workingDirectory, signal, timeoutMs, onEvent: event => logs.accept(event), onInput: interactive ? write => { this.input = write; } : null});

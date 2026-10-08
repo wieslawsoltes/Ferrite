@@ -38,7 +38,7 @@ export class RepositoryBridgeRouter {
     const closed = () => { if (!response.writableEnded) controller.abort(); }; response.on('close', closed);
     emit({type: 'started', operationId: id});
     const operation = Promise.resolve().then(() => method === 'close' ? this.manager.close(input.id) : this.manager[method](input, {
-      signal: controller.signal, timeoutMs: Math.min(600000, Math.max(1000, Number(input.timeoutMs) || 120000)),
+      signal: controller.signal, timeoutMs: Math.min(3600000, Math.max(1000, Number(input.timeoutMs) || 120000)),
       onEvent: event => emit({type: 'log', ...event})
     }));
     this.operations.set(id, {controller, operation});

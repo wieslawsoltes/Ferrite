@@ -13,7 +13,7 @@ export class RepositoryView {
     this.ref = this.input('Git branch, tag or commit (optional)', 'Default branch');
     this.manifest = this.input('Cargo manifest', 'Cargo.toml'); this.manifest.value = 'Cargo.toml';
     const consent = Dom.element('label', 'trust-label'); this.trust = Dom.element('input'); this.trust.type = 'checkbox'; this.trust.id = 'repository-trust';
-    consent.append(this.trust, document.createTextNode('I trust this repository. Replace the browser workspace; synchronize IDE edits to this checkout. Native builds, build scripts, dependencies and programs run with my local permissions.'));
+    consent.append(this.trust, document.createTextNode('I trust this repository. Replace the browser workspace; synchronize IDE edits to this checkout. Native builds, build scripts, dependencies and programs run with my local permissions. Remote clones are temporary: export or copy changes before closing the bridge.'));
     this.submodules=Dom.element('input');this.submodules.type='checkbox';this.submodules.setAttribute('aria-label','Initialize remote Git submodules');const sub=Dom.element('label','trust-label');sub.append(this.submodules,document.createTextNode('Initialize remote Git submodules (HTTPS/SSH only)'));this.form.append(sub,consent);
     this.openButton = Dom.button('Open repository', null, {icon: 'folder', className: 'primary-button'}); this.openButton.type = 'submit'; this.openButton.id = 'repository-open';
     this.form.append(this.openButton); this.form.onsubmit = event => { event.preventDefault(); this.action(async () => {

@@ -122,7 +122,7 @@ export function analyze(ast){
       if(n.kind==="field"){const t=infer(n.object),s=structs.get(t);if(!s)throw Error("Unknown field base "+t);const f=s.fields.find(x=>x.name===n.field);if(!f)throw Error("Unknown field "+n.field);return f.type;}
       if(n.kind==="unary"){const t=infer(n.value);if(n.op==="!") {if(t!=="bool")throw Error("Logical not requires bool");return "bool";}if(n.op==="-"){if(!isNumber(t))throw Error("Negation requires numeric type");return t;}if(n.op==="&")return "&"+(n.mutable?"mut ":"")+t;if(n.op==="*"){if(!t.startsWith("&"))throw Error("Cannot dereference "+t);return t.replace(/^&(?:mut )?/,"");}}
       if(n.kind==="binary"){const a=infer(n.left),b=infer(n.right);if(!compatible(a,b))throw Error("Invalid operands: "+a+" "+n.op+" "+b);if(["&&","||"].includes(n.op)){if(a!=="bool")throw Error("Boolean operator requires bool");return "bool";}if(["==","!=","<",">","<=",">="].includes(n.op))return "bool";if(!isNumber(a))throw Error("Arithmetic requires numeric operands, got "+a);return a;}
-      if(n.kind==="ifExpr"){if(infer(n.condition)!=="bool")throw Error("if condition must be bool");const a=checkBlock(n.then);const b=n.otherwise?checkBlock(n.otherwise):"()";if(!compatible(a,b))throw Error("Incompatible if branch types "+a+" and "+b);return a;}
+      if(n.kind==="ifExpr"){if(infer(n.condition)!=="bool")throw Error("if condition must be bool");const a=checkBlock(n.then);const b=n.otherwise?(n.otherwise.kind==="ifExpr"?infer(n.otherwise):checkBlock(n.otherwise)):"()";if(!compatible(a,b))throw Error("Incompatible if branch types "+a+" and "+b);return a;}
       if(n.kind==="call"){if(n.macro){if(!["println","print","format"].includes(n.callee.name))throw Error("Unsupported macro "+n.callee.name);if(n.args[0]?.kind!=="literal"||n.args[0].type!=="&str")throw Error("Formatting requires a string literal");const count=(n.args[0].value.match(/\{\}/g)||[]).length;if(count!==n.args.length-1)throw Error("Format argument count mismatch");n.args.slice(1).forEach(infer);return n.callee.name==="format"?"&str":"()";}
         const name=n.callee.name;
         if(name==="clone"){if(n.args.length!==1)throw Error("clone expects one argument");return infer(n.args[0]);}
@@ -135,7 +135,7 @@ export function analyze(ast){
       else if(stmt.kind==="assign"){if(stmt.target.kind!=="variable")throw Error("Only variable assignments are supported");const slot=get(stmt.target.name);if(!slot.mutable)throw Error("Cannot assign to immutable variable "+stmt.target.name);const actual=infer(stmt.value);if(!compatible(slot.type,actual))throw Error("Assignment expects "+slot.type+", got "+actual);}
       else if(stmt.kind==="return"){const actual=infer(stmt.value);if(!compatible(entry.returnType,actual))throw Error("Return expected "+entry.returnType+", got "+actual);}
       else if(stmt.kind==="expression")infer(stmt.value);
-      else if(stmt.kind==="while"||stmt.kind==="if"){if(infer(stmt.condition)!=="bool")throw Error(stmt.kind+" condition must be bool");checkBlock(stmt.then);if(stmt.otherwise)checkBlock(stmt.otherwise);}
+      else if(stmt.kind==="while"||stmt.kind==="if"){if(infer(stmt.condition)!=="bool")throw Error(stmt.kind+" condition must be bool");checkBlock(stmt.then);if(stmt.otherwise){if(stmt.otherwise.kind==="ifExpr")infer(stmt.otherwise);else checkBlock(stmt.otherwise);}}
       else if(stmt.kind==="loop"||stmt.kind==="blockStatement")checkBlock(stmt.then||stmt.block);
     }const type=block.tail?infer(block.tail):"()";scopes.pop();return type;}
     const actualReturn=checkBlock(fn.body);
@@ -170,7 +170,7 @@ export function emitJS(sem){
       case "field":return "("+expr(n.object)+")["+JSON.stringify(n.field)+"]";
       case "binary":return "("+expr(n.left)+" "+n.op+" "+expr(n.right)+")";
       case "unary":return n.op==="&"?"("+expr(n.value)+")":"("+n.op+expr(n.value)+")";
-      case "ifExpr":return "("+expr(n.condition)+" ? "+blockExpr(n.then)+" : "+(n.otherwise?blockExpr(n.otherwise):"undefined")+")";
+      case "ifExpr":return "("+expr(n.condition)+" ? "+blockExpr(n.then)+" : "+(n.otherwise?(n.otherwise.kind==="ifExpr"?expr(n.otherwise):blockExpr(n.otherwise)):"undefined")+")";
       case "call":{
         if(n.macro){const args=n.args.map(expr);const formatted="__fmt("+args[0]+",["+args.slice(1).join(",")+"])";return n.callee.name==="format"?formatted:"__output.push("+formatted+(n.callee.name==="println"?"+'\\n'":"")+")";}
         if(n.callee.name==="clone")return expr(n.args[0]);const target=entries.get(n.resolved);if(!target)throw Error("Missing codegen instance "+n.resolved);return target+"("+n.args.map(expr).join(",")+")";
@@ -182,7 +182,7 @@ export function emitJS(sem){
       case "assign":return expr(n.target)+" "+n.op+" "+expr(n.value)+";";
       case "return":return "return "+expr(n.value)+";";
       case "expression":return expr(n.value)+";";
-      case "if":return "if("+expr(n.condition)+")"+block(n.then)+(n.otherwise?"else "+block(n.otherwise):"");
+      case "if":return "if("+expr(n.condition)+")"+block(n.then)+(n.otherwise?"else "+(n.otherwise.kind==="ifExpr"?expr(n.otherwise)+";":block(n.otherwise)):"");
       case "while":return "while("+expr(n.condition)+")"+block(n.then);
       case "loop":return "while(true)"+block(n.then);
       case "break":return "break;";

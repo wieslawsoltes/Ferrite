@@ -36,7 +36,7 @@ export class BrowserAgentPanels {
     return {tasks, id};
   }
   config() { return {toolRules: {...this.rules}, permissionMinutes: Number(this.lease.input.value)}; }
-  reset() { ++this.renderGeneration; this.changes.replaceChildren(); this.queueList.replaceChildren(); this.questionList.replaceChildren(); this.questions.clear(); this.rules = {}; this.lease.input.value = 10; }
+  reset() { ++this.renderGeneration; this.queuedInput.value = ''; this.scope.value = 'task'; this.changes.replaceChildren(); this.queueList.replaceChildren(); this.questionList.replaceChildren(); this.questions.clear(); this.rules = {}; this.lease.input.value = 10; }
   environmentChanged() {
     this.ruleList.replaceChildren(); this.rules = {}; this.lease.input.value = 10;
     const browser = this.workbench.environment === 'browser';

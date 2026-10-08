@@ -1,6 +1,6 @@
 {
   "name": "ferrite-compiler",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,13 +8,14 @@
     "check": "node tools/check-syntax.mjs && node tools/bundle-workers.mjs --check",
     "build:workers": "node tools/bundle-workers.mjs",
     "test:browser": "python tools/browser-acceptance.py",
-    "test:native": "node tools/native-smoke.mjs",
+    "test:native": "node tools/native-smoke.mjs && node tools/agent-native-smoke.mjs",
     "benchmark": "node tools/benchmark.mjs",
     "cargo:bridge": "node tools/cargo-bridge.mjs",
     "agent:bridge": "node tools/agent-bridge.mjs",
     "agent:mcp": "node tools/agent-mcp.mjs",
     "agent": "node tools/agent.mjs",
-    "test:agent": "node --test tests/agent-*.test.js"
+    "test:agent": "node --test tests/agent-*.test.js",
+    "test:agent:browser": "python tools/agent-browser-acceptance.py"
   },
   "engines": {
     "node": ">=22"

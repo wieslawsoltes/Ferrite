@@ -55,6 +55,7 @@ def memory_document(page):
       return urls['src/ui/main.js'];
     }''', definitions)
     html = (ROOT / 'index.html').read_text().replace('<link rel="stylesheet" href="./styles/ide.css">', '<style>' + (ROOT / 'styles/ide.css').read_text() + '</style>')
+    html = html.replace('<link rel="stylesheet" href="./styles/agent.css">', '<style>' + (ROOT / 'styles/agent.css').read_text() + '</style>')
     page.set_content(html.replace('./src/ui/main.js', entry), wait_until='load')
 
 

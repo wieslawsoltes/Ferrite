@@ -1,17 +1,28 @@
 /** Three-way source synchronization. Local and native divergent edits stop the sync, never overwrite. */
 export class WorkspaceSynchronizer {
-  constructor(model, client, {onStatus = () => {}} = {}) { this.model = model; this.client = client; this.onStatus = onStatus; this.baseline = null; this.enabled = false; this.applying = false; this.queue = Promise.resolve(); this.timer = null; this.conflicts = []; }
-  async import() {
-    const snapshot = await this.client.request('/v1/workspace');
-    this.applying = true; try { this.model.replace(snapshot.files); } finally { this.applying = false; }
-    this.baseline = snapshot; this.enabled = true; this.conflicts = []; this.onStatus('Synchronized to ' + snapshot.root); return snapshot;
+  constructor(model, client, {onStatus = () => {}} = {}) { this.model = model; this.client = client; this.onStatus = onStatus; this.baseline = null; this.enabled = false; this.applying = false; this.queue = Promise.resolve(); this.timer = null; this.conflicts = []; this.generation = 0; }
+  import() {
+    const generation = ++this.generation, revision = this.model.revision;
+    this.enabled = false; clearTimeout(this.timer);
+    const operation = this.queue.catch(() => {}).then(async () => {
+      if (generation !== this.generation) return null;
+      const snapshot = await this.client.request('/v1/workspace');
+      if (generation !== this.generation) return null;
+      if (revision !== this.model.revision) throw Error('Workspace changed during import; retry explicitly. Browser edits were not overwritten.');
+      this.applying = true; try { this.model.replace(snapshot.files); } finally { this.applying = false; }
+      this.baseline = snapshot; this.enabled = true; this.conflicts = []; this.onStatus('Synchronized to ' + snapshot.root); return snapshot;
+    });
+    this.queue = operation; return operation;
   }
-  changed() { if (!this.enabled || this.applying) return; clearTimeout(this.timer); this.timer = setTimeout(() => this.sync().catch(error => this.onStatus(error.message, true)), 500); }
+  changed() { if (!this.enabled || this.applying) return; const generation = this.generation; clearTimeout(this.timer); this.timer = setTimeout(() => { if (generation === this.generation) this.sync().catch(error => { if (generation === this.generation) this.onStatus(error.message, true); }); }, 500); }
   sync() {
     if (!this.enabled || !this.baseline) return Promise.resolve();
+    const generation = this.generation;
     const operation = this.queue.catch(() => {}).then(async () => {
-      if (!this.enabled || !this.client.url) return;
-      const remote = await this.client.request('/v1/workspace'), base = this.baseline.files, local = {...this.model.files};
+      if (!this.enabled || !this.client.url || generation !== this.generation) return;
+      const remote = await this.client.request('/v1/workspace');
+      if (generation !== this.generation) return;
+      const base = this.baseline.files, local = {...this.model.files};
       const paths = new Set([...Object.keys(base), ...Object.keys(remote.files), ...Object.keys(local)]), changes = [], incoming = {}, deleted = [], conflicts = [];
       for (const path of paths) {
         const before = base[path] ?? null, ours = local[path] ?? null, theirs = remote.files[path] ?? null;
@@ -25,6 +36,7 @@ export class WorkspaceSynchronizer {
       if (changes.length) {
         if (changes.length > 100) throw Error('Sync needs more than 100 edits; split the change or re-import the native checkout');
         const result = await this.client.request('/v1/workspace/apply', {changes});
+        if (generation !== this.generation) return;
         for (const change of changes) { if (change.text === null) { delete remote.files[change.path]; delete remote.hashes[change.path]; } else { remote.files[change.path] = change.text; remote.hashes[change.path] = result.changes.find(item => item.path === change.path).afterHash; } }
       }
       const incomingPaths = [...Object.keys(incoming), ...deleted];
@@ -44,5 +56,5 @@ export class WorkspaceSynchronizer {
     });
     this.queue = operation; return operation;
   }
-  disconnect() { clearTimeout(this.timer); this.enabled = false; this.baseline = null; this.conflicts = []; }
+  disconnect() { ++this.generation; clearTimeout(this.timer); this.enabled = false; this.baseline = null; this.conflicts = []; }
 }

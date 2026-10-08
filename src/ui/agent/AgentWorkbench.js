@@ -15,44 +15,50 @@ export class AgentWorkbench {
     actions.bridgeUrl = () => this.client.url ?? 'http://127.0.0.1:8790';
     this.view = new AgentView(app.panels.get('agent'), actions);
     this.sync = new WorkspaceSynchronizer(app.model, this.client, {onStatus: (message, error = false) => { this.view.workspaceStatus.textContent = message; this.view.workspaceStatus.classList.toggle('failed', error); }});
-    this.terminal = new TerminalView(app.panels.get('terminal'), this.client, app.model, {onError: error => this.view.showError(error), onConnect: actions.connect});
+    this.terminal = new TerminalView(app.panels.get('terminal'), this.client, app.model, {onError: error => { if (error.name !== 'AbortError') this.view.showError(error); }, onConnect: actions.connect});
     this.unsubscribe = app.model.subscribe(event => { if (['edit','files','replace'].includes(event.kind)) this.sync.changed(); });
     for (const root of [this.view.root, this.terminal.root]) root.addEventListener('keydown', event => event.stopPropagation());
     this.timer = setInterval(() => this.poll(), 250);
     window.addEventListener('pagehide', () => this.dispose(), {once: true});
   }
-  async guard(operation) { this.view.showError(''); try { return await operation(); } catch (error) { this.view.showError(error); return null; } }
+  async guard(operation) { this.view.showError(''); try { return await operation(); } catch (error) { if (error.name !== 'AbortError') this.view.showError(error); return null; } }
   dialog(title, fields, submit, {message = '', button = 'Connect'} = {}) {
     const dialog = Dom.element('dialog', 'agent-dialog'), form = Dom.element('form'), error = Dom.element('div', 'agent-error'), controls = Dom.element('div', 'agent-toolbar'), inputs = new Map();
     form.append(Dom.element('h2','',title),Dom.element('p','agent-note',message));
     for (const field of fields) { const label = Dom.element('label','agent-field'), input = Dom.element('input'); input.type = field.type ?? 'text'; input.value = field.value ?? ''; input.id = field.id; input.autocomplete = 'off'; input.spellcheck = false; input.required = field.required !== false; label.append(Dom.element('span','',field.label), input); form.append(label); inputs.set(field.id,input); }
     const cancel = Dom.button('Cancel', () => dialog.close()), apply = Dom.button(button); apply.type = 'submit'; apply.classList.add('agent-primary'); controls.append(cancel,apply); form.append(error,controls); dialog.append(form); document.body.append(dialog);
     return new Promise(resolve => {
-      let completed = false;
-      form.onsubmit = async event => { event.preventDefault(); if (!form.reportValidity()) return; apply.disabled = true; error.textContent = ''; try { const values = Object.fromEntries([...inputs].map(([id,node]) => [id,node.type === 'checkbox' ? node.checked : node.value])); await submit(values); completed = true; for (const node of inputs.values()) if (node.type === 'password') node.value = ''; dialog.close(); } catch (failure) { error.textContent = failure.message; } finally { apply.disabled = false; } };
-      dialog.onclose = () => { for (const node of inputs.values()) node.value = ''; dialog.remove(); resolve(completed); };
+      let completed = false; const controller = new AbortController();
+      form.onsubmit = async event => { event.preventDefault(); if (!form.reportValidity()) return; apply.disabled = true; error.textContent = ''; try { const values = Object.fromEntries([...inputs].map(([id,node]) => [id,node.type === 'checkbox' ? node.checked : node.value])); await submit(values, controller.signal); controller.signal.throwIfAborted(); completed = true; for (const node of inputs.values()) if (node.type === 'password') node.value = ''; dialog.close(); } catch (failure) { error.textContent = failure.message; } finally { apply.disabled = false; } };
+      dialog.onclose = () => { controller.abort(new DOMException('Dialog closed', 'AbortError')); for (const node of inputs.values()) node.value = ''; dialog.remove(); resolve(completed); };
       dialog.showModal(); inputs.values().next().value?.focus();
     });
   }
   async connect() {
-    if (this.client.url) throw Error('Disconnect the current bridge before connecting a different workspace.');
+    if (this.client.url || this.client.connecting || this.connecting) throw Error('Disconnect the current bridge before connecting a different workspace.');
     await this.dialog('Connect trusted agent bridge', [
       {id:'agent-bridge-url',label:'Local bridge URL',value:'http://127.0.0.1:8790'},
       {id:'agent-bridge-token',label:'Private bearer token printed by the bridge',type:'password'},
       {id:'agent-trust-host',label:'I trust this checkout and grant native execution on this host (not sandboxed)',type:'checkbox'}
-    ], async values => {
-      const capabilities = await this.client.connect(values['agent-bridge-url'],values['agent-bridge-token']);
+    ], async (values, signal) => {
+      if (!values['agent-trust-host']) throw Error('Explicit host trust is required');
+      this.connecting = true;
+      try {
+      const capabilities = await this.client.connect(values['agent-bridge-url'],values['agent-bridge-token'],{signal});
       this.cursor = (await this.client.request('/v1/events?cursor=0')).cursor; this.lastHeartbeat = 0;
       this.view.connected(true,capabilities); this.view.workspaceStatus.textContent = capabilities.workspace + ' · native workspace; browser synchronization is off';
       await this.refreshSessions(); await this.refreshApprovals(); await this.terminal.reconnect(); await this.heartbeat();
+      signal.throwIfAborted();
+      } catch (error) { await this.disconnect(); throw error; }
+      finally { this.connecting = false; }
     }, {message:'Start npm run agent:bridge -- --workspace /absolute/project --trust-workspace. Add --origin ' + location.origin + ' when serving Ferrite on this origin. Credentials stay in memory, not browser storage.'});
   }
-  async disconnect() { this.sync.disconnect(); await this.client.disconnect(); this.selected = null; this.view.setSession(null); this.view.approvals.replaceChildren(); this.view.approvalCards.clear(); this.view.connected(false); this.view.prompt.disabled = false; this.view.workspaceStatus.textContent = 'Disconnected. Native sessions remain on the bridge for explicit reconnection.'; }
+  async disconnect() { this.sync.disconnect(); this.terminal.disconnect(); const closing = this.client.disconnect(); this.selected = null; this.view.setSession(null); this.view.approvals.replaceChildren(); this.view.approvalCards.clear(); this.view.connected(false); this.view.prompt.disabled = false; this.view.workspaceStatus.textContent = 'Disconnected. Native sessions remain on the bridge for explicit reconnection.'; await closing; }
   async apiLogin() {
     if (!this.client.url) throw Error('Connect the local bridge first.');
     const provider = this.view.provider.value;
-    await this.dialog('API sign in · ' + provider, [{id:'agent-api-key',label:'Provider API key',type:'password'}], async values => {
-      await this.client.request('/v1/providers/connect',{provider,key:values['agent-api-key']}); await this.refreshProviders();
+    await this.dialog('API sign in · ' + provider, [{id:'agent-api-key',label:'Provider API key',type:'password'}], async (values, signal) => {
+      await this.client.request('/v1/providers/connect',{provider,key:values['agent-api-key']},{signal}); await this.refreshProviders();
     }, {message:'API billing is separate from consumer chat subscriptions. The key is validated against the provider’s model API and retained only in bridge memory. Installed CLI account sign-in is available in the Terminal pane.',button:'Validate API key'});
   }
   async apiLogout() { await this.client.request('/v1/providers/disconnect',{provider:this.view.provider.value}); await this.refreshProviders(); }
@@ -95,7 +101,7 @@ export class AgentWorkbench {
   }
   async heartbeat() { const state = this.state(); if (JSON.stringify(state).length > 150000) { state.execution = {type:this.app.lastExecutionEvent?.type,truncated:true}; state.diagnostics = []; } await this.client.request('/v1/ide/heartbeat',{clientId:this.client.clientId,state}, {timeoutMs:5000}); this.lastHeartbeat = Date.now(); }
   async poll() {
-    if (this.polling || !this.client.url || this.disposed) return; this.polling = true;
+    if (this.polling || this.connecting || !this.client.connected || this.disposed) return; this.polling = true; const epoch = this.client.epoch;
     try {
       if (Date.now() - this.lastHeartbeat > 4000) await this.heartbeat();
       const batch = await this.client.request('/v1/events?cursor=' + this.cursor,undefined,{timeoutMs:5000}); this.cursor = batch.cursor;
@@ -110,7 +116,7 @@ export class AgentWorkbench {
       }
       if (refresh) { await this.refreshSessions(); if (this.selected && batch.events.some(event=>event.sessionId===this.selected&&/^session\.(completed|failed|paused|cancelled)$/.test(event.type))) await this.loadSession(this.selected); }
       if (this.sync.enabled && Date.now() - this.lastSync > 2000) { this.lastSync = Date.now(); await this.sync.sync(); }
-    } catch (error) { this.view.showError(error); if (error.code === 'IDE_OWNER' || error.status === 401) await this.disconnect(); }
+    } catch (error) { if (epoch !== this.client.epoch) return; this.view.showError(error); if (error.code === 'IDE_OWNER' || error.status === 401) await this.disconnect(); }
     finally { this.polling = false; }
   }
   async answer(event) {

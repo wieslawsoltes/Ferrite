@@ -34,6 +34,7 @@ export class TerminalView {
     this.attach(result);this.active=result.id;this.updateTabs();this.draw();this.ime.focus();
   }
   attach(metadata){if(this.sessions.has(metadata.id))return;const session={...metadata,title:metadata.executable.split('/').at(-1)+' · '+metadata.id.slice(0,5),cursor:0};session.screen=new VtScreen(metadata.cols,metadata.rows,{onReply:text=>{if(this.client.url&&!session.closed)this.client.request(`/v1/terminals/${session.id}/input`,{text}).catch(this.onError);}});this.sessions.set(session.id,session);this.updateTabs();}
+  disconnect(){for(const id of this.sessions.keys())if(id!=='browser')this.sessions.delete(id);this.active='browser';this.updateTabs();this.draw();}
   async reconnect(){for(const metadata of await this.client.request('/v1/terminals'))this.attach(metadata);}
   async poll(){
     if(this.polling||!this.client.url||this.disposed)return;this.polling=true;
@@ -44,7 +45,7 @@ export class TerminalView {
     }finally{this.polling=false;}
   }
   async send(text){if(this.active==='browser'){this.input.focus();return;}try{if(new TextEncoder().encode(text).length>65536)throw Error('Paste exceeds 64 KiB; split it into smaller chunks');await this.client.request(`/v1/terminals/${this.active}/input`,{text});}catch(error){this.onError(error);}}
-  async closeActive(){if(this.active==='browser')return;try{await this.client.request(`/v1/terminals/${this.active}/close`,{});this.sessions.delete(this.active);this.active='browser';this.updateTabs();this.draw();}catch(error){this.onError(error);}}
+  async closeActive(){const id=this.active;if(id==='browser')return;try{await this.client.request(`/v1/terminals/${id}/close`,{});this.sessions.delete(id);if(this.active===id)this.active='browser';this.updateTabs();this.draw();}catch(error){this.onError(error);}}
   dimensions(){const rect=this.viewport.getBoundingClientRect();return {cols:Math.max(2,Math.min(500,Math.floor((rect.width-24)/7.8)||100)),rows:Math.max(2,Math.min(200,Math.floor((rect.height-16)/18)||24))};}
   resize(){if(!this.viewport.getClientRects().length)return;const {cols,rows}=this.dimensions(),session=this.current();if(session.screen.cols===cols&&session.screen.rows===rows)return;session.screen.resize(cols,rows);if(session.id!=='browser'&&!session.closed&&this.client.url)this.client.request(`/v1/terminals/${session.id}/resize`,{cols,rows}).catch(this.onError);this.draw();}
   static color(value){if(value===null)return null;if(Array.isArray(value))return `rgb(${value.join(',')})`;if(value<16)return TerminalView.palette[value];if(value>=232){const gray=8+(value-232)*10;return `rgb(${gray},${gray},${gray})`;}const n=value-16,level=x=>x?55+x*40:0;return `rgb(${level(Math.floor(n/36))},${level(Math.floor(n/6)%6)},${level(n%6)})`;}

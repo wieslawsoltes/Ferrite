@@ -1,7 +1,7 @@
 // Structured, clickable compiler representations: source coordinates drive selection.
 export function createVisualizer(root,onSelect){
  let selected=null;
- const locate=(value,fallback)=>value?.loc??fallback??null;
+ const locate=(value,fallback)=>value?.loc??(Number.isInteger(value?.line)?{line:value.line,column:value.column??1,offset:value.offset}:null)??fallback??null;
  function label(node,key){if(node===null)return key+": null";if(typeof node!=="object")return key?key+": "+String(node):String(node);
   if(Array.isArray(node))return key+" ["+node.length+"]";
   const name=node.kind||node.name||node.key||node.instance||node.value;
@@ -9,7 +9,7 @@ export function createVisualizer(root,onSelect){
  }
  function build(node,key="",depth=0,fallback=null) {
   const line=document.createElement("div");line.className="viz-line";line.style.paddingLeft=(depth*13)+"px";
-  const loc=locate(node,fallback);line.dataset.line=loc?.line||"";
+  const loc=locate(node,fallback);line.dataset.line=loc?.line||"";line.dataset.column=loc?.column||1;
   if(depth>16){line.textContent="…";return line;}
   const summary=document.createElement("button");summary.type="button";summary.className="viz-node";
   summary.textContent=label(node,key);line.append(summary);

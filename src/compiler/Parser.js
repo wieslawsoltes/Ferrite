@@ -1,6 +1,7 @@
 import {Diagnostic} from './Diagnostic.js';
 import {Lexer} from './Lexer.js';
 import {TokenCursor} from './TokenCursor.js';
+import {AttributeParser} from './AttributeParser.js';
 
 const PRECEDENCE = {'||': 1, '&&': 2, '|': 3, '^': 4, '&': 5, '==': 6, '!=': 6,
   '<': 7, '>': 7, '<=': 7, '>=': 7, '+': 8, '-': 8, '*': 9, '/': 9, '%': 9};
@@ -11,9 +12,9 @@ export class Parser {
   constructor(tokens) { this.c = new TokenCursor(tokens); this.depth = 0; }
   static parse(tokens) { return new Parser(tokens).parse(); }
   parse() {
-    const items = [];
+    const attributes = AttributeParser.read(this.c, {inner:true}), items = [];
     while (!this.c.is('EOF')) items.push(...this.item());
-    return {kind: 'crate', items};
+    return {kind: 'crate', items, attributes};
   }
   list(close, parse) {
     const result = [];
@@ -25,16 +26,7 @@ export class Parser {
     this.c.eat(close);
     return result;
   }
-  attributes() {
-    const attrs = [];
-    while (this.c.match('#')) {
-      this.c.eat('[');
-      const name = this.c.identifier();
-      const args = this.c.match('(') ? this.list(')', () => this.c.identifier()) : [];
-      this.c.eat(']'); attrs.push({name, args});
-    }
-    return attrs;
-  }
+  attributes() { return AttributeParser.read(this.c); }
   generics() {
     if (!this.c.match('<')) return [];
     return this.list('>', () => {
@@ -78,7 +70,7 @@ export class Parser {
       const name = this.c.identifier(), generics = this.generics();
       this.c.eat('{');
       const fields = this.list('}', () => {
-        this.c.match('pub'); const name = this.c.identifier(); this.c.eat(':'); return {name, type: this.type()};
+        const attributes=this.attributes(); this.c.match('pub'); const name = this.c.identifier(); this.c.eat(':'); return {name, type: this.type(), attributes};
       });
       return [this.c.node('struct', start, {name, generics, fields, attributes, visibility})];
     }
@@ -86,9 +78,9 @@ export class Parser {
       const name = this.c.identifier(), generics = this.generics();
       this.c.eat('{');
       const variants = this.list('}', () => {
-        const name = this.c.identifier();
+        const attributes=this.attributes(), name = this.c.identifier();
         const fields = this.c.match('(') ? this.list(')', () => this.type()) : [];
-        return {name, fields};
+        return {name, fields, attributes};
       });
       return [this.c.node('enum', start, {name, generics, variants, attributes, visibility})];
     }
@@ -99,24 +91,24 @@ export class Parser {
       this.c.eat('{'); const methods = [];
       while (!this.c.is('}')) methods.push(...this.item(target, forTrait));
       this.c.eat('}');
-      return [this.c.node('impl', start, {target, trait: forTrait, methods})];
+      return [this.c.node('impl', start, {target, trait: forTrait, methods, attributes})];
     }
     if (this.c.match('trait')) {
       const name = this.c.identifier(); this.c.eat('{'); const methods = [];
       while (!this.c.is('}')) methods.push(...this.item('Self', name));
-      this.c.eat('}'); return [this.c.node('trait', start, {name, methods, visibility})];
+      this.c.eat('}'); return [this.c.node('trait', start, {name, methods, visibility, attributes})];
     }
     if (this.c.match('const')) {
       const name = this.c.identifier(); this.c.eat(':'); const type = this.type(); this.c.eat('=');
       const value = this.expr(); this.c.eat(';');
-      return [this.c.node('const', start, {name, type, value, visibility})];
+      return [this.c.node('const', start, {name, type, value, visibility, attributes})];
     }
     if (this.c.match('mod')) {
       const name = this.c.identifier();
-      if (this.c.match(';')) return [this.c.node('mod', start, {name, external: true, visibility})];
-      this.c.eat('{'); const items = [];
+      if (this.c.match(';')) return [this.c.node('mod', start, {name, external: true, visibility, attributes})];
+      this.c.eat('{'); attributes.push(...AttributeParser.read(this.c,{inner:true})); const items = [];
       while (!this.c.is('}')) items.push(...this.item());
-      this.c.eat('}'); return [this.c.node('mod', start, {name, items, external: false, visibility})];
+      this.c.eat('}'); return [this.c.node('mod', start, {name, items, external: false, visibility, attributes})];
     }
     if (this.c.match('use')) {
       const path = this.path(), imports = [];
@@ -127,7 +119,7 @@ export class Parser {
           return {path: `${path}::${name}`, alias: this.c.match('as') ? this.c.identifier() : name};
         }));
       } else imports.push({path, alias: this.c.match('as') ? this.c.identifier() : path.split('::').at(-1)});
-      this.c.eat(';'); return [this.c.node('use', start, {imports, visibility})];
+      this.c.eat(';'); return [this.c.node('use', start, {imports, visibility, attributes})];
     }
     throw new Diagnostic('F0101', `Unsupported item '${this.c.peek().value}'`, this.c.peek().span);
   }
@@ -229,6 +221,10 @@ export class Parser {
           if (left.kind !== 'variable') throw new Diagnostic('E0005', 'Expected a macro name', left.span);
           const opening = this.c.take().value, closing = {'(': ')', '[': ']', '{': '}'}[opening];
           if (!closing) throw new Diagnostic('E0005', 'Expected macro delimiter', left.span);
+          if(left.name==='cfg'){
+            const predicate=AttributeParser.meta(this.c);this.c.match(',');this.c.eat(closing);
+            left=this.c.node('cfg',start,{predicate});continue;
+          }
           const args = this.list(closing, () => this.expr());
           left = this.c.node('call', start, {callee: left, args, macro: true}); continue;
         }

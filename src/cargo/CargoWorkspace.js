@@ -1,3 +1,5 @@
+import {CargoDependencyResolver} from './CargoDependencyResolver.js';
+import {FeatureResolver} from './FeatureResolver.js';
 import {TomlParser} from './TomlParser.js';
 import {VirtualFileSystem as V} from '../project/VirtualFileSystem.js';
 
@@ -32,13 +34,14 @@ export class CargoWorkspace {
     const target = (kind, name, relative, extra = {}) => {
       const source = V.path(relative, directory);
       if (!Object.hasOwn(this.files, source)) this.errors.push({message: `Missing ${kind} target ${source}`, span: manifest.spans[kind]});
+      if(extra.requiredFeatures!==undefined&&(!Array.isArray(extra.requiredFeatures)||extra.requiredFeatures.some(f=>typeof f!=='string'))){this.errors.push({message:`Invalid required-features for ${name}`});extra.requiredFeatures=[];}
       pkg.targets.push({kind, name, path: source, ...extra});
     };
     const lib = manifest.sections.lib;
     if (lib || Object.hasOwn(this.files, V.path('src/lib.rs', directory))) target('lib', lib?.name ?? pkg.name.replaceAll('-', '_'), lib?.path ?? 'src/lib.rs', {procMacro: lib?.['proc-macro'] === true});
     const bins = manifest.sections.bin ?? [];
     if (!Array.isArray(bins)) this.errors.push({message: 'Use [[bin]], not [bin], for binary targets'});
-    else for (const bin of bins) target('bin', bin.name ?? pkg.name, bin.path ?? (bin.name === pkg.name ? 'src/main.rs' : `src/bin/${bin.name}.rs`));
+    else for (const bin of bins) target('bin', bin.name ?? pkg.name, bin.path ?? (bin.name === pkg.name ? 'src/main.rs' : `src/bin/${bin.name}.rs`), {requiredFeatures:bin['required-features']??[]});
     const mainPath = V.path('src/main.rs', directory);
     if (Object.hasOwn(this.files, mainPath) && !pkg.targets.some(t => t.path === mainPath) && info.autobins !== false) target('bin', pkg.name, 'src/main.rs');
     if (info.autobins !== false) for (const file of Object.keys(this.files)) {
@@ -48,58 +51,25 @@ export class CargoWorkspace {
     if (!pkg.targets.length) this.errors.push({message: `Package ${pkg.name} has no src/main.rs, src/lib.rs or explicit target`});
     return pkg;
   }
-  features(pkg, requested = [], defaults = true) {
-    const declarations = pkg.manifest.sections.features ?? {}, enabled = new Set(), dependencies = new Set(), stack = defaults ? ['default', ...requested] : [...requested];
-    while (stack.length) {
-      const feature = stack.pop(); if (enabled.has(feature)) continue; enabled.add(feature);
-      if (feature.startsWith('dep:')) { dependencies.add(feature.slice(4)); continue; }
-      if (feature.includes('/')) { dependencies.add(feature.split('/')[0].replace('?', '')); continue; }
-      const list = declarations[feature];
-      if (list != null && !Array.isArray(list)) this.errors.push({message: `Feature ${feature} must be an array`});
-      if (Array.isArray(list)) stack.push(...list.filter(x => typeof x === 'string'));
-    }
-    return {enabled: [...enabled], dependencies: [...dependencies]};
+  features(pkg,requested=[],defaults=true){
+    const dependencies=Object.fromEntries(Object.entries(pkg.manifest.dependencies).map(([name,spec])=>[name,typeof spec==='string'?{version:spec}:spec]));
+    return new FeatureResolver(pkg.manifest.sections.features??{},dependencies).resolve(requested,{defaults});
   }
   plan(command = 'check', options = {}) {
     const roots = [...this.packages.values()], selected = options.package ? roots.find(p => p.name === options.package || p.path === options.package) : roots[0];
     if (!selected) this.errors.push({message: `Package not found: ${options.package ?? '(none)'}`});
     const chosen = selected?.targets.find(t => options.target ? t.name === options.target || t.path === options.target : t.kind === 'bin') ?? selected?.targets[0];
     if (options.target && chosen?.name !== options.target && chosen?.path !== options.target) this.errors.push({message: `Target not found: ${options.target}`});
-    const graph = [], order = [], active = new Set(), visited = new Set(), external = [], nativeRequired = [], featureInfo = new Map();
-    const visit = (pkg, features = options.features ?? [], defaults = options.defaultFeatures !== false) => {
-      if (active.has(pkg.id)) { this.errors.push({message: `Cyclic local dependency involving ${pkg.name}`}); return; }
-      if (visited.has(pkg.id)) return;
-      visited.add(pkg.id); active.add(pkg.id);
-      const state = this.features(pkg, features, defaults); featureInfo.set(pkg.id, state);
-      if (pkg.targets.some(t => t.procMacro)) nativeRequired.push(`${pkg.name}: procedural macros require native Cargo`);
-      const buildScript = pkg.manifest.package.build;
-      if (typeof buildScript === 'string' || (buildScript !== false && Object.hasOwn(this.files, V.path('build.rs', pkg.directory)))) nativeRequired.push(`${pkg.name}: build script requires native Cargo`);
-      const sections = [['dependencies', pkg.manifest.dependencies]];
-      if (command === 'test') sections.push(['dev-dependencies', pkg.manifest.sections['dev-dependencies'] ?? {}]);
-      if (Object.keys(pkg.manifest.sections['build-dependencies'] ?? {}).length) nativeRequired.push(`${pkg.name}: build dependencies require native Cargo`);
-      for (const [kind, entries] of sections) for (const [alias, raw] of Object.entries(entries)) {
-        let spec = typeof raw === 'string' ? {version: raw} : raw;
-        if (!spec || typeof spec !== 'object' || Array.isArray(spec)) { this.errors.push({message: `Invalid dependency ${alias}`}); continue; }
-        let base = pkg.directory;
-        if (spec.workspace) { spec = {...(this.workspace.dependencies?.[alias] ?? {}), ...spec}; base = ''; }
-        if (spec.optional && !state.dependencies.includes(alias) && !state.enabled.includes(alias)) continue;
-        const edge = {from: pkg.id, alias: alias.replaceAll('-', '_'), kind, spec, span: pkg.manifest.spans[`${kind}.${alias}`]};
-        if (typeof spec.path === 'string') {
-          const manifestPath = V.path(spec.path + '/Cargo.toml', base);
-          if (!Object.hasOwn(this.files, manifestPath)) { this.errors.push({message: `Local dependency ${alias} requires ${manifestPath}`, span: edge.span}); continue; }
-          const target = this.package(manifestPath); edge.to = target.id;
-          if (!target.targets.some(t => t.kind === 'lib')) this.errors.push({message: `Dependency ${alias} has no library target`});
-          graph.push(edge); visit(target, spec.features ?? [], spec['default-features'] !== false);
-        } else { external.push(alias); edge.to = spec.git ?? `registry:${alias}@${spec.version ?? '*'}`; graph.push(edge); }
-      }
-      active.delete(pkg.id); order.push(pkg.id);
-    };
-    if (selected) visit(selected);
+    const resolution=selected?new CargoDependencyResolver(this,command,options).resolve(selected):{graph:[],buildOrder:[],features:{},dependencies:[],nativeRequired:[],errors:[]};
+    const {graph,buildOrder:order,dependencies:external,nativeRequired}=resolution;
+    this.errors.push(...resolution.errors);
+    if(chosen?.requiredFeatures?.some(feature=>!resolution.features[selected.id]?.enabled.includes(feature)))
+      this.errors.push({message:`Target ${chosen.name} requires features: ${chosen.requiredFeatures.join(', ')}`});
     for (const item of nativeRequired) this.warnings.push(item);
     if (external.length) this.warnings.push(`External Cargo dependencies need the native toolchain: ${[...new Set(external)].join(', ')}`);
     return {command, backend: 'ferrite-js', manifest: selected?.manifest ?? this.root, entry: chosen?.path ?? null,
       files: Object.keys(this.files), selected: selected?.id, target: chosen, packages: [...this.packages.values()].map(p => ({id: p.id, name: p.name, version: p.version, edition: p.edition, directory: p.directory, targets: p.targets})),
-      dependencies: [...new Set(external)], graph, buildOrder: order, features: Object.fromEntries(featureInfo),
+      dependencies: [...new Set(external)], graph, buildOrder: order, features: resolution.features,
       nativeRequired, warnings: this.warnings, errors: this.errors};
   }
 }

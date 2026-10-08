@@ -12,13 +12,31 @@ export class CargoView {
     try{plan=cargoPlan(this.model.files,'check',this.options);}catch(error){Dom.empty(this.planRoot,error.message);return;}
     const group=Dom.element('div','cargo-target-options');const packages=Dom.element('select');packages.id='cargo-package';packages.setAttribute('aria-label','Cargo package');for(const pkg of plan.packages){const option=Dom.element('option','',pkg.name);option.value=pkg.name;packages.append(option);}packages.value=plan.packages.find(p=>p.id===plan.selected)?.name??'';
     const targets=Dom.element('select');targets.id='cargo-target';targets.setAttribute('aria-label','Cargo target');for(const target of plan.packages.find(p=>p.id===plan.selected)?.targets??[]){const option=Dom.element('option','',`${target.name} · ${target.kind}`);option.value=target.name;targets.append(option);}targets.value=plan.target?.name??'';
-    packages.onchange=()=>{this.options={package:packages.value};this.onOptions(this.options);this.render();};targets.onchange=()=>{this.options={...this.options,target:targets.value};this.onOptions(this.options);};group.append(Dom.element('label','field-label','Package'),packages,Dom.element('label','field-label','Target'),targets);this.planRoot.append(group);
+    packages.onchange=()=>{this.options={package:packages.value};this.onOptions(this.options);this.render();};targets.onchange=()=>{this.options={...this.options,target:targets.value,targetKind:plan.packages.find(p=>p.id===plan.selected)?.targets.find(t=>t.name===targets.value)?.kind};this.onOptions(this.options);};group.append(Dom.element('label','field-label','Package'),packages,Dom.element('label','field-label','Target'),targets);this.planRoot.append(group);this.features(plan);
     const commands=Dom.element('div','cargo-command-list');for(const command of ['check','build','run','test','metadata','tree','fetch','clippy','fmt','doc','clean']){
       const native=!['check','build','run','test'].includes(command);const button=Dom.button(`cargo ${command}`,()=>this.onCommand(command),{icon:command==='run'?'run':command==='test'?'test':'cargo',className:'cargo-command'});if(native&&!this.client.capabilities){button.disabled=true;button.title='Connect Native Cargo for this command';}commands.append(button);
     }this.planRoot.append(commands);
     this.planRoot.append(Dom.element('h3','section-heading','Dependency order'));for(const pkg of plan.buildOrder)this.planRoot.append(Dom.element('div','cargo-package-node',pkg));
     for(const edge of plan.graph){const row=Dom.element('div','cargo-dependency');row.append(Dom.element('strong','',edge.alias),Dom.element('small','',edge.to));this.planRoot.append(row);}for(const reason of [...plan.warnings,...plan.errors.map(e=>e.message)])this.planRoot.append(Dom.element('p','warning-note',reason));
     if(this.client.capabilities)this.planRoot.append(Dom.button('Disconnect',()=>{this.client.disconnect();this.onConnected(false);this.render();},{icon:'close',className:'wide-button'}));
+  }
+  features(plan){
+    const state=plan.features?.[plan.selected];if(!state)return;
+    const panel=Dom.element('fieldset','cargo-features');panel.append(Dom.element('legend','','Feature configuration'));
+    const toggle=(title,checked,action,id)=>{
+      const label=Dom.element('label','feature-toggle'),input=Dom.element('input');input.type='checkbox';input.checked=checked;if(id)input.id=id;
+      input.onchange=()=>{action(input.checked);this.onOptions(this.options);this.render();};label.append(input,document.createTextNode(title));panel.append(label);return input;
+    };
+    toggle('Default features',this.options.defaultFeatures!==false,checked=>this.options={...this.options,defaultFeatures:checked},'cargo-default-features');
+    toggle('All features',!!this.options.allFeatures,checked=>this.options={...this.options,allFeatures:checked},'cargo-all-features');
+    for(const name of state.available??[]){
+      if(name==='default')continue;
+      const input=toggle(name,(this.options.features??[]).includes(name),checked=>{
+        const requested=new Set(this.options.features??[]);checked?requested.add(name):requested.delete(name);
+        this.options={...this.options,features:[...requested].sort()};
+      });input.dataset.feature=name;input.disabled=!!this.options.allFeatures;
+    }
+    panel.append(Dom.element('p','view-note',`Resolved: ${state.enabled.join(', ')||'(none)'}`));this.planRoot.append(panel);
   }
   connect(){
     const dialog=Dom.element('dialog','native-dialog'),form=Dom.element('form');form.method='dialog';form.append(Dom.element('h2','','Connect installed Cargo'),Dom.element('p','dialog-copy','Native Cargo executes build scripts, dependencies, macros and programs as your local user. Only connect for projects you trust. The bearer token stays in memory and is never exported.'));

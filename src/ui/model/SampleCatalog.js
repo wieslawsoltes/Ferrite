@@ -48,6 +48,22 @@ fn rectangle_area() {
     assert_eq!(r.area(), 42);
 }
 `}},
+    {name:'Conditional build · Cargo features & cfg',expected:'baseline false\n',files:{
+      'Cargo.toml':manifest('conditional-build')+'\n[features]\ndefault=[]\nfast=[]\n',
+      'src/main.rs':`// Toggle "fast" in the Cargo tool window, then Run.
+#[cfg(feature = "fast")]
+fn mode() -> &str { "accelerated" }
+
+#[cfg(not(feature = "fast"))]
+fn mode() -> &str { "baseline" }
+
+#[cfg(false)]
+mod unavailable_on_this_target;
+
+fn main() {
+    println!("{} {}", mode(), cfg!(feature = "fast"));
+}
+`}},
     {name:'Pattern control flow · if let / while let',expected:'taking 8\nskipping five\ntaking 3\nqueue drained\n',files:{'Cargo.toml':manifest('pattern-flow'),'src/main.rs':`fn main() {
     let mut queue = vec![3, 5, 8];
     while let Some(value) = queue.pop() {

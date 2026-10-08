@@ -21,6 +21,6 @@ assert.equal(files[original.path].slice(original.offset,original.offset+7),"util
 });
 test("Module resolution rejects missing files",()=>assert.throws(()=>mergeCrateSources({"src/main.rs":"mod missing;"}),/Missing Rust module/));
 test("Cargo metadata with no external dependencies compiles",()=>{
-const result=compileProject({"Cargo.toml":'[package]\nname="abc"\nversion="0.1.0"\n[features]\ndefault=["std"]',"src/main.rs":'fn main(){println!("ok");}'});
+const result=compileProject({"Cargo.toml":'[package]\nname="abc"\nversion="0.1.0"\n[features]\ndefault=["std"]\nstd=[]',"src/main.rs":'fn main(){println!("ok");}'});
 assert.equal(result.plan.manifest.package.name,"abc");
 });

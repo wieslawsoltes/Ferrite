@@ -38,12 +38,14 @@ export class InspectorView {
       case 'modules':this.modules(stage.data);break;
       case 'expansions':for(const item of stage.data)this.card(item.name,`Built-in macro → ${item.intrinsic}`,item.span);break;
       case 'optimizations':for(const item of stage.data)this.card(item.kind,`${item.function} / ${item.block}${item.detail?' · '+item.detail:''}`,item.span);break;
+      case 'configuration':for(const item of stage.data)this.card(`${item.kind} → ${item.enabled?'included':'excluded'}`,this.predicate(item.predicate),item.span,item.enabled?'success':'warning');break;
       case 'queries':this.queries(stage.data);break;
       case 'verification':this.card('MIR verified',`${stage.data.functions} functions · ${stage.data.blocks} blocks · register initialization and control-flow contracts checked`,null,'success');break;
       default:this.tree.render(stage.data);
     }
     if(!this.content.childNodes.length)Dom.empty(this.content,stage.kind==='optimizations'?'No local optimizations changed this program.':'No entries in this stage.');this.registry.highlight(this.selection.value);
   }
+  predicate(node){return node.kind==='word'?node.name:node.kind==='value'?`${node.name} = ${JSON.stringify(node.value)}`:`${node.name}(${node.args.map(n=>this.predicate(n)).join(', ')})`;}
   queries(data){
     if(!data){Dom.empty(this.content,'No query data for this compilation.');return;}
     this.caption.textContent=data.projectCacheHit?'Exact project cache hit — showing the dependency graph from the original build.':`${data.hits} reused queries · ${data.misses} evaluated queries · exact-content dependency keys`;

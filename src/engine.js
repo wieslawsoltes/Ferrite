@@ -1,3 +1,4 @@
+import {Configuration} from './compiler/Configuration.js';
 import {Lexer} from './compiler/Lexer.js';
 import {Parser} from './compiler/Parser.js';
 import {MacroExpander} from './compiler/MacroExpander.js';
@@ -21,7 +22,8 @@ export function compile(source, options = {}) {
   const pass = (name, action) => { const start = now(); const result = action(); timings.push({name, ms: now() - start}); return result; };
   const tokens = options.tokens ?? pass('Lex', () => tokenize(source, {file}));
   const ast = options.ast ?? pass('Parse', () => parse(tokens));
-  const expansion = pass('Expand macros', () => MacroExpander.expand(ast));
+  const configured = pass('Conditional compilation', () => Configuration.apply(ast, options.configuration));
+  const expansion = pass('Expand macros', () => MacroExpander.expand(configured.ast));
   const semantic = pass('Types and instances', () => SemanticAnalyzer.analyze(expansion.ast, options));
   const perInstance = (stage, action) => semantic.instances.map(instance => {
     const run = () => action({...semantic, instances: [instance]})[0];
@@ -35,7 +37,7 @@ export function compile(source, options = {}) {
   const sem = {instances: semantic.instances.map(({key, name, fn, typeArguments, returnType, calls, locals}) => ({key, name, typeArguments, returnType, calls, locals, span: fn.span, loc: fn.loc})),
     symbols: semantic.symbols, structures: semantic.structures, enums: semantic.enums,
     obligations: semantic.obligations.map(o => `${o.type}: ${o.trait}`), traitObligations: semantic.obligations, warnings: semantic.warnings};
-  return {version: '0.5.0', tokens, ast, expanded: expansion.ast, expansions: expansion.expansions,
+  return {version: '0.7.0', configuration:configured.decisions, tokens, ast, expanded: expansion.ast, expansions: expansion.expansions,
     hir: semantic.instances.map(({key, fn}) => ({instance: key, body: fn.body, span: fn.span})), sem, ownership, mir,
     optimizedMir: optimized.functions, optimizations: optimized.changes, verification, js: emitted.code,
     generatedMap: emitted.sourceMap, entry: semantic.entry, queries: options.queryCache?.snapshot() ?? null, timings, diagnostics: semantic.warnings};

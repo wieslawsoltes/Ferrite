@@ -112,12 +112,12 @@ def run():
 
             def stages():
                 names = page.locator('#stage-select option').all_text_contents()
-                assert len(names) == 17, names
+                assert len(names) == 18, names
                 for name in names:
                     page.locator('#stage-select').select_option(label=name)
                     expect(page.locator('#inspector-content')).not_to_be_empty()
                 assert page.locator('#inspector-content .generated-line').count() > 100
-            case('all 17 compiler stage adapters render', stages)
+            case('all 18 compiler stage adapters render', stages)
 
             def source_navigation():
                 page.locator('#stage-select').select_option(label='Tokens')
@@ -268,6 +268,22 @@ def run():
                 select_sample('Geometry lab · traits & modules')
                 run_program('rectangle area = 42\ntriangle area = 20\n')
             case('cancel and recover without obsolete worker output', cancellation)
+
+            def cargo_configuration():
+                select_sample('Conditional build · Cargo features & cfg')
+                run_program('baseline false\n')
+                show_tool('Cargo')
+                page.locator('input[data-feature="fast"]').check()
+                page.wait_for_function('window.ferrite.getBuild()?.plan.features["Cargo.toml"].enabled.includes("fast")')
+                run_program('accelerated true\n')
+                page.locator('#stage-select').select_option(label='Configuration')
+                expect(page.locator('#inspector-content')).to_contain_text('feature = "fast"')
+                assert page.locator('#inspector-content .source-link').count() > 0
+                page.locator('input[data-feature="fast"]').uncheck()
+                page.wait_for_function('window.ferrite.getBuild() && !window.ferrite.getBuild().plan.features["Cargo.toml"].enabled.includes("fast")')
+                run_program('baseline false\n')
+                select_sample('Geometry lab · traits & modules')
+            case('Cargo feature toggles update actual cfg lowering and source-linked decisions', cargo_configuration)
 
             if os.environ.get('FERRITE_NATIVE_TEST') == '1' and not MEMORY:
                 native_process = subprocess.Popen(['node', 'tools/cargo-bridge.mjs', '--trust-projects', '--origin', base.rstrip('/'), '--port', '0'], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

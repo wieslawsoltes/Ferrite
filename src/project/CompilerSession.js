@@ -33,7 +33,7 @@ export class CompilerSession {
       this.misses++; const resolver = new ModuleResolver(files, this.syntax);
       const packageAst = (id, target, root = '', stack = []) => {
         if (stack.includes(id)) throw new Diagnostic('C0004', 'Local dependency cycle');
-        const ast = resolver.resolve(target.path, {crateRoot: root, dependency: !!root});
+        const ast = resolver.resolve(target.path, {crateRoot: root, dependency: !!root, configuration: {features:plan.features[id]?.enabled??[],test:command==='test'&&!root,debugAssertions:options.debugAssertions!==false}});
         for (const edge of plan.graph.filter(e => e.from === id && !e.to.startsWith('registry:') && e.spec.path)) {
           const dependency = plan.packages.find(p => p.id === edge.to), library = dependency.targets.find(t => t.kind === 'lib');
           const name = [root, edge.alias].filter(Boolean).join('::');
@@ -75,6 +75,7 @@ export class CompilerSession {
       {name: 'Modules', kind: 'modules', data: {files: units, edges: moduleInfo.edges}},
       {name: 'Tokens', kind: 'tokens', data: compilation.tokens},
       {name: 'AST', kind: 'tree', data: compilation.ast},
+      {name: 'Configuration', kind:'configuration',data:[...(moduleInfo.configuration??[]),...(compilation.configuration??[])]},
       {name: 'Macro expansion', kind: 'expansions', data: compilation.expansions},
       {name: 'Typed HIR', kind: 'tree', data: compilation.hir},
       {name: 'HIR / Symbols', kind: 'symbols', data: compilation.sem.symbols},

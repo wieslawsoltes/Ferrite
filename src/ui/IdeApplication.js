@@ -1,3 +1,4 @@
+import {CargoOptions} from '../cargo/CargoOptions.js';
 import {WorkspaceModel} from './model/WorkspaceModel.js';
 import {SelectionModel} from './model/SelectionModel.js';
 import {SampleCatalog} from './model/SampleCatalog.js';
@@ -124,7 +125,7 @@ export class IdeApplication {
     if(command==='debug'){this.error(Error('The browser debugger operates on Ferrite MIR. Native debugger integration is not implemented.'));return;}
     if(!this.native.capabilities){this.status('Connect the trusted native Cargo bridge to run this command.','error');this.dock.open('cargo');return;}
     this.compiler.cancel();this.execution.stop(false);this.runLabel.textContent=`Native Cargo · ${command}`;this.writeOutput('');this.dock.open('run');this.status(`Native cargo ${command}…`,'busy');
-    const args=[...this.nativeArgs];if(this.options.package)args.push('--package',this.options.package);if(this.options.target&&['run','build','check','test','clippy'].includes(command))args.push('--bin',this.options.target);
+    const args=[...this.nativeArgs,...CargoOptions.arguments(command,this.options)];
     try{
       const result=await this.native.run(this.model.files,command,{args,json:true},event=>{if(event.type==='log'){this.runOutput.textContent+=(event.text??event.data??'');this.runOutput.scrollTop=this.runOutput.scrollHeight;}});
       if(serial!==this.requestSerial||revision!==this.model.revision)return;

@@ -52,7 +52,14 @@ export class AgentBridgeServer {
     if (get && route === '/v1/providers') return runtime.providers.list();
     if (post && route === '/v1/providers/connect') return runtime.providers.connect(input.provider, input.key, signal);
     if (post && route === '/v1/providers/models') return {models: await runtime.providers.models(input.provider, signal)};
-    if (post && route === '/v1/providers/disconnect') { runtime.providers.disconnect(input.provider); return {disconnected: true}; }
+    if (post && route === '/v1/providers/disconnect') {
+      runtime.providers.disconnect(input.provider);
+      for (const id of [...runtime.harness.active.keys()]) {
+        const session = await runtime.harness.get(id);
+        if (session.config.provider === input.provider) await runtime.harness.cancel(id);
+      }
+      return {disconnected: true};
+    }
     if (get && route === '/v1/workspace') return runtime.workspace.snapshot();
     if (post && route === '/v1/workspace/apply') { JsonSchema.validate(input.changes, changeSchema); return runtime.workspace.apply(input.changes, {label: 'IDE synchronization'}); }
     if (get && route === '/v1/tools') return runtime.tools.list();

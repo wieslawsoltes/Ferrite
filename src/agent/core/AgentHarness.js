@@ -18,7 +18,7 @@ Return a useful final summary of changes, validation and remaining limitations.`
 export class AgentHarness {
   constructor({providers, tools, store, events, instructions = async () => '', onCancel = async () => {}, retryDelay = sleep, maxConcurrent = 4} = {}) {
     this.providers = providers; this.tools = tools; this.store = store; this.events = events; this.instructions = instructions;
-    this.onCancel = onCancel; this.retryDelay = retryDelay; this.maxConcurrent = maxConcurrent; this.sessions = new Map(); this.active = new Map(); this.journal = new SessionEventJournal(events, this.sessions);
+    this.onCancel = onCancel; this.retryDelay = retryDelay; this.maxConcurrent = maxConcurrent; this.sessions = new Map(); this.loading = new Map(); this.active = new Map(); this.journal = new SessionEventJournal(events, this.sessions);
   }
   static config(input = {}) {
     const config = {provider: input.provider ?? 'openai', model: input.model ?? '', mode: input.mode ?? 'ask', contextTokens: input.contextTokens ?? 32768,
@@ -42,6 +42,11 @@ export class AgentHarness {
   }
   async get(id) {
     if (this.sessions.has(id)) return this.sessions.get(id);
+    if (this.loading.has(id)) return this.loading.get(id);
+    const operation = this.load(id).finally(() => { if (this.loading.get(id) === operation) this.loading.delete(id); });
+    this.loading.set(id, operation); return operation;
+  }
+  async load(id) {
     const session = await this.store.read('sessions', id);
     if (session.version !== 1) throw Error('Unsupported agent session version');
     if (['running', 'compacting', 'waiting'].includes(session.status)) {
@@ -81,11 +86,24 @@ export class AgentHarness {
     }
     session.config = config; await this.save(session);
   }
+  idleOperation(id, operation) {
+    if (this.active.has(id)) throw new AgentError('SESSION_BUSY', 'Stop the session before changing its context', {status: 409});
+    if (this.active.size >= this.maxConcurrent) throw new AgentError('AGENT_CAPACITY', 'Concurrent agent limit reached', {status: 429});
+    const active = {controller: new AbortController(), operation: null};
+    // Reserve synchronously, including time spent reading state from disk.
+    this.active.set(id, active);
+    active.operation = Promise.resolve().then(async () => {
+      const session = await this.get(id); AgentError.abort(active.controller.signal);
+      return operation(session, active.controller.signal);
+    }).finally(() => { if (this.active.get(id) === active) this.active.delete(id); });
+    active.operation.catch(() => {}); return active.operation;
+  }
   async fork(id) {
-    const source = await this.get(id); if (this.active.has(id)) throw new AgentError('SESSION_BUSY', 'Pause the session before forking');
-    const session = await this.create(source.config, {parentId: source.id, objective: source.objective});
-    session.latestUser = source.latestUser; session.summary = ContextManager.fallback(source.summary, ContextManager.groups(source.messages)); session.plan = structuredClone(source.plan);
-    await this.save(session); return session;
+    return this.idleOperation(id, async source => {
+      const session = await this.create(source.config, {parentId: source.id, objective: source.objective});
+      session.latestUser = source.latestUser; session.summary = ContextManager.fallback(source.summary, ContextManager.groups(source.messages)); session.plan = structuredClone(source.plan);
+      await this.save(session); return session;
+    });
   }
   async start(id, prompt, {config, signal: parentSignal, interactive = true, depth = 0} = {}) {
     if (this.active.has(id)) throw new AgentError('SESSION_BUSY', 'This session is already running', {status: 409});
@@ -148,7 +166,20 @@ export class AgentHarness {
     if (result) { this.emit(session, 'context.compacted', result); await this.save(session); }
     return result;
   }
-  async compactIdle(id) { if (this.active.has(id)) throw new AgentError('SESSION_BUSY', 'Stop the agent before manual compaction'); return this.compact(await this.get(id), {force: true}); }
+  async compactIdle(id) {
+    return this.idleOperation(id, async (session, signal) => {
+      const previousStatus = session.status;
+      session.status = 'compacting';
+      try {
+        this.emit(session, 'context.compaction-started'); await this.save(session);
+        return await this.compact(session, {force: true, signal});
+      } finally {
+        session.status = previousStatus;
+        this.emit(session, 'context.compaction-finished', {cancelled: signal.aborted});
+        await this.save(session);
+      }
+    });
+  }
   async toolResult(session, call, context) {
     const previous = session.ledger[call.id];
     if (previous) throw new AgentError('DUPLICATE_TOOL_CALL', `A provider reused the tool call id ${call.id}`);
@@ -175,6 +206,7 @@ export class AgentHarness {
         ContextManager.groups(session.messages); await this.compact(session, {signal}); session.turn++;
         this.emit(session, 'context.measured', {estimatedTokens: manager.measure(session, instruction, this.tools.list()), capacity: session.config.contextTokens, messages: session.messages.length});
         const response = await this.complete(provider, {model: session.config.model, system: manager.system(session, instruction), messages: session.messages, tools: this.tools.list(), maxOutputTokens: session.config.outputTokens}, session, signal);
+        AgentError.abort(signal);
         if (!Array.isArray(response.calls) || response.calls.length > 32 || response.calls.some(call => typeof call.id !== 'string' || !/^[A-Za-z0-9_.:-]{1,200}$/.test(call.id) || ['__proto__', 'constructor', 'prototype'].includes(call.id) || !call.name || !call.arguments || typeof call.arguments !== 'object')) throw new AgentError('INVALID_TOOL_CALL', 'Provider returned invalid tool calls');
         if (new Set(response.calls.map(call => call.id)).size !== response.calls.length || response.calls.some(call => session.ledger[call.id])) throw new AgentError('DUPLICATE_TOOL_CALL', 'Provider reused a tool call identifier; no tools were executed');
         this.usage(session, response.usage); response.text = this.providers.redact(response.text ?? '');

@@ -60,6 +60,7 @@ export class ContextManager {
         if (typeof candidate === 'string' && candidate.trim()) { summary = candidate.slice(0, 12000); method = 'model'; }
       } catch (error) { AgentError.abort(signal); method = 'deterministic-fallback'; }
     }
+    AgentError.abort(signal); // Summarizers may finish after a stop request.
     const prior = {summary: session.summary, messages: session.messages}; session.summary = summary; session.messages = retained;
     const after = this.measure(session, instruction, tools);
     if (after >= this.contextTokens) {

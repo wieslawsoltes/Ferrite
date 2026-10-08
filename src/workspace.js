@@ -1,0 +1,78 @@
+import {compileProject} from "./project.js";
+import {sampleProjects} from "./samples.js";
+import {createProject,parseManifest} from "./cargo.js";
+import {createVisualizer,renderCfg,renderInstances} from "./visualizers.js";
+const $=id=>document.getElementById(id);
+const storageKey="ferrite-workspace-v2";
+let files=createProject(),file="src/main.rs",compilation=null,stage="AST",auto=true,timer=null,worker=null,diagnostic=null;
+const tree=createVisualizer($("inspector-content"),loc=>jump(loc));
+function save(){try{localStorage.setItem(storageKey,JSON.stringify({files,file,auto}));}catch{}}
+function restore(){try{const v=JSON.parse(localStorage.getItem(storageKey)||"null");if(v&&v.files&&typeof v.files==="object"){files=v.files;file=v.file in files?v.file:Object.keys(files)[0];auto=v.auto!==false;}}catch{}}
+function extension(path){return path.endsWith(".rs")?"rs":path.endsWith(".toml")?"toml":"text";}
+function jump(loc,path){const p=path||"src/main.rs";if(p in files&&p!==file)open(p);const text=$("source"),lines=text.value.split("\n");let index=0;for(let i=0;i<Math.max(0,loc.line-1)&&i<lines.length;i++)index+=lines[i].length+1;index+=Math.max(0,loc.column-1);text.focus();text.setSelectionRange(index,index+1);text.scrollTop=Math.max(0,(loc.line-8)*21);}
+function open(path){if(!(path in files))return;files[file]=$("source").value;file=path;$("source").value=files[path];$("editor-file").textContent=path;$("dirty").textContent="";renderProject();save();}
+function renderProject(){
+ $("project-tree").replaceChildren();$("open-files").replaceChildren();
+ for(const path of Object.keys(files).sort()){const b=document.createElement("button");b.className="tree-item"+(file===path?" selected":"");b.textContent=(path.endsWith(".rs")?"🦀 ":"▤ ")+path;b.onclick=()=>{open(path);schedule();};$("project-tree").append(b);}
+ for(const path of Object.keys(files).filter(x=>x.endsWith(".rs")||x==="Cargo.toml")){const b=document.createElement("button");b.className="tab"+(path===file?" active":"");b.textContent=path.split("/").at(-1);b.onclick=()=>{open(path);schedule();};$("open-files").append(b);}
+ $("editor-file").textContent=file;$("auto").checked=auto;
+}
+function lineForMergedOffset(offset){
+ const map=compilation?.unit?.sourceMap||[];
+ const item=[...map].reverse().find(x=>x.start<=offset&&offset<x.start+x.length);
+ if(!item)return {path:"src/main.rs",line:1,column:1};
+ const original=(files[item.path]||"").slice(0,item.originalOffset+offset-item.start);
+ const lines=original.split("\n");return {path:item.path,line:lines.length,column:lines.at(-1).length+1};
+}
+function fromMerged(loc){if(!loc)return null;const lines=compilation.unit.source.split("\n");let offset=0;for(let i=0;i<loc.line-1;i++)offset+=(lines[i]?.length||0)+1;offset+=loc.column-1;return lineForMergedOffset(offset);}
+function visitSelection(loc){const actual=fromMerged(loc);if(actual)jump(actual,actual.path);}
+function renderStage(){
+ if(!compilation)return;
+ $("inspector-tabs").replaceChildren();
+ for(const s of compilation.stages){const b=document.createElement("button");b.className="tab"+(s.name===stage?" active":"");b.textContent=s.name;b.onclick=()=>{stage=s.name;renderStage();};$("inspector-tabs").append(b);}
+ const data=compilation.stages.find(s=>s.name===stage)?.data;
+ const root=$("inspector-content");
+ if(stage==="MIR / CFG")renderCfg(root,data,visitSelection);
+ else if(stage==="Generic Instances")renderInstances(root,data,visitSelection);
+ else if(stage==="JavaScript"){const pre=document.createElement("pre");pre.className="code-view";pre.textContent=data;root.replaceChildren(pre);}
+ else tree.render(data);
+ $("passes").replaceChildren();const total=compilation.timings.reduce((s,x)=>s+x.ms,0)||1;
+ for(const p of compilation.timings){const row=document.createElement("div");row.className="pass";const name=document.createElement("span");name.textContent=p.name;const track=document.createElement("div");track.className="meter";const fill=document.createElement("div");fill.style.width=Math.max(2,p.ms/total*100)+"%";track.append(fill);const ms=document.createElement("span");ms.textContent=p.ms.toFixed(3)+" ms";row.append(name,track,ms);$("passes").append(row);}
+}
+function diagnostics(message){$("terminal").textContent=message;$("status").textContent=message.startsWith("error")?"Compilation failed":message;}
+function compile(run=false){
+ worker?.terminate();worker=null;files[file]=$("source").value;save();
+ try {
+  compilation=compileProject(files);
+  renderStage();diagnostics("✓ Cargo check · "+compilation.sem.instances.length+" instances · "+compilation.timings.reduce((a,b)=>a+b.ms,0).toFixed(2)+" ms");
+  if(run)execute();
+ }catch(e){compilation=null;diagnostics("error: "+e.message);$("inspector-content").textContent=e.message;}
+}
+function execute(){
+ if(!compilation)return;
+ const blob=new Blob(["onmessage=()=>{\n"+compilation.js+"\n}"],{type:"text/javascript"});
+ const url=URL.createObjectURL(blob);const current=new Worker(url);worker=current;URL.revokeObjectURL(url);
+ const timeout=setTimeout(()=>{current.terminate();if(worker===current){worker=null;diagnostics("Execution timed out (1500 ms)");}},1500);
+ current.onmessage=e=>{clearTimeout(timeout);diagnostics("cargo run\n"+String(e.data));current.terminate();if(worker===current)worker=null;};
+ current.onerror=e=>{clearTimeout(timeout);diagnostics("error: "+e.message);current.terminate();if(worker===current)worker=null;};
+ current.postMessage(null);
+}
+function schedule(){if(!auto)return;clearTimeout(timer);timer=setTimeout(()=>compile(false),280);}
+function chooseSample(name){files=createProject(sampleProjects[name]);file="src/main.rs";$("source").value=files[file];renderProject();compile(true);}
+function createFile(){const path=prompt("New file path (e.g. src/utils.rs):");if(!path)return;if(!/^(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_.-]+$/.test(path)||path.includes("..")){alert("Invalid file path");return;}if(path in files){open(path);return;}files[path]=path.endsWith(".rs")?"// New Rust module\n":"";renderProject();open(path);save();}
+function removeFile(){if(file==="Cargo.toml"||file==="src/main.rs"){alert("Cannot delete the manifest or entry point");return;}if(!confirm("Delete "+file+"?"))return;delete files[file];file="src/main.rs";$("source").value=files[file];renderProject();compile(false);}
+$("run").onclick=()=>compile(true);$("check").onclick=()=>compile(false);$("new-file").onclick=createFile;$("delete-file").onclick=removeFile;
+$("auto").onchange=e=>{auto=e.target.checked;save();if(auto)schedule();};
+$("source").addEventListener("input",()=>{files[file]=$("source").value;$("dirty").textContent="●";save();schedule();});
+$("source").addEventListener("click",()=>{if(compilation)tree.select({line:$("source").value.slice(0,$("source").selectionStart).split("\n").length});});
+$("source").addEventListener("keyup",()=>{if(compilation){const before=$("source").value.slice(0,$("source").selectionStart),line=before.split("\n").length;tree.select({line});}});
+$("source").addEventListener("keydown",e=>{if((e.ctrlKey||e.metaKey)&&e.key==="Enter"){e.preventDefault();compile(true);}if(e.key==="Tab"){e.preventDefault();const t=e.target;t.setRangeText("    ",t.selectionStart,t.selectionEnd,"end");files[file]=t.value;schedule();}});
+for(const name of Object.keys(sampleProjects)){const option=document.createElement("option");option.value=name;option.textContent=name;$("examples").append(option);}
+$("examples").onchange=e=>chooseSample(e.target.value);
+for(const button of document.querySelectorAll("[data-pane]"))button.onclick=()=>{const target=$(button.dataset.pane);target.classList.toggle("hidden");button.classList.toggle("active",!target.classList.contains("hidden"));};
+const layoutKey="ferrite-ide-layout-v1";
+for(const splitter of document.querySelectorAll("[data-split]")){let down=null;splitter.onpointerdown=e=>{down={x:e.clientX,y:e.clientY,left:parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--project-width"))||255,right:parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--inspector-width"))||420,bottom:parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--bottom-height"))||230};splitter.setPointerCapture(e.pointerId);};splitter.onpointermove=e=>{if(!down)return;const prop=splitter.dataset.split;if(prop==="left")document.documentElement.style.setProperty("--project-width",Math.max(150,Math.min(500,down.left+e.clientX-down.x))+"px");if(prop==="right")document.documentElement.style.setProperty("--inspector-width",Math.max(220,Math.min(800,down.right+down.x-e.clientX))+"px");if(prop==="bottom")document.documentElement.style.setProperty("--bottom-height",Math.max(100,Math.min(520,down.bottom+down.y-e.clientY))+"px");};splitter.onpointerup=()=>{down=null;try{localStorage.setItem(layoutKey,JSON.stringify(["--project-width","--inspector-width","--bottom-height"].map(k=>document.documentElement.style.getPropertyValue(k))));}catch{}};}
+try{const values=JSON.parse(localStorage.getItem(layoutKey)||"null");if(Array.isArray(values))["--project-width","--inspector-width","--bottom-height"].forEach((k,i)=>{if(/^\d+px$/.test(values[i]||""))document.documentElement.style.setProperty(k,values[i]);});}catch{}
+$("reset-layout").onclick=()=>{for(const k of ["--project-width","--inspector-width","--bottom-height"])document.documentElement.style.removeProperty(k);for(const name of ["project","inspector","bottom"])$(name).classList.remove("hidden");try{localStorage.removeItem(layoutKey);}catch{}};
+$("cargo").onclick=()=>{stage="Cargo";compile(false);};
+restore();$("source").value=files[file]??"";renderProject();compile(false);

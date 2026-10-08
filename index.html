@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ferrite — Rust Compiler IDE</title>
+<title>Ferrite — Rust Development Environment</title>
 <style>
 :root{color-scheme:dark;--project-width:255px;--inspector-width:420px;--bottom-height:230px;--bg:#191a20;--panel:#222329;--edge:#393a43;--accent:#609de4;--text:#d1d3df;--muted:#91949e;background:var(--bg);color:var(--text);font:13px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}
 *{box-sizing:border-box}body{margin:0}button,select{font:inherit;color:inherit}button{cursor:pointer;border:0;background:transparent}button:hover{background:#383b46}
@@ -33,8 +33,11 @@ textarea{width:100%;height:100%;resize:none;border:0;outline:0;background:#1d1e2
 .hidden{display:none!important}#inspector-tabs{flex-wrap:wrap;height:auto;min-height:38px}
 @media(max-width:950px){#project{display:none}#inspector{width:35vw}.crumb{display:none}}
 @media(max-width:700px){#inspector{display:none}.workspace{height:calc(100vh - 76px)}header{gap:6px}select{max-width:130px}}
+
+/* JetBrains New UI inspired restrained colors and density */
+:root{--bg:#17191d;--panel:#22252c;--edge:#343943;--accent:#75a7ff;--text:#d5d9e1;--muted:#8995a7}header{background:#24272e;box-shadow:0 1px 3px #101216}#run{background:#356c54}#run:hover{background:#418467}.rail{background:#1e2126}.pane{background:#22252c}.tabbar{background:#252932}.tab.active{background:#303745;border-bottom-color:#80aaff}.editor-header{background:#20242a}.editor,textarea{background:#1b1f25}#inspector-content{background:#1b1f25}.statusbar{background:#2b527d}.cfg-block:hover,.instance-card:hover{border-color:#82b1ff}.tree-item.selected{background:#33435a}button:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #6eacff;outline-offset:-2px}
 </style></head><body>
-<header><div class="brand">◈ Ferrite <span>IDE</span></div><div class="crumb">ferrite / src / main.rs</div>
+<header><div class="brand">◈ Ferrite <span>Rust IDE</span></div><div class="crumb">File　 Edit　 View　 Navigate　 Code　 Refactor　 Run　 Tools　 VCS</div>
 <select id="examples" aria-label="Select Rust example"></select>
 <button title="Reset dock layout" id="reset-layout">Reset Layout</button><button id="check" title="Cargo check">✓ Check</button><button id="cargo" title="Inspect Cargo metadata">Cargo</button><label style="white-space:nowrap"><input id="auto" type="checkbox" checked> Auto-compile</label><button id="run" title="Compile and Run (Ctrl/⌘+Enter)">▶ Run</button></header>
 <div class="workspace">
@@ -45,7 +48,7 @@ textarea{width:100%;height:100%;resize:none;border:0;outline:0;background:#1d1e2
 <main class="center"><div class="tabbar" id="open-files"></div><div class="editor-header">Ferrite › <span id="editor-file">src/main.rs</span> <span id="dirty"></span></div><div class="editor"><textarea id="source" spellcheck="false" aria-label="Rust source editor"></textarea></div>
 <div class="split horizontal" data-split="bottom"></div><section id="bottom"><div class="tabbar"><button class="tab active">▣ Run</button><button class="tab" onclick="document.getElementById('terminal').textContent='Use the Compiler pane to inspect intermediate representations.'">Build</button></div><pre class="console" id="terminal"></pre></section></main>
 <div class="split vertical" data-split="right"></div>
-<aside class="pane" id="inspector"><div class="pane-title">COMPILER EXPLORER <span style="margin-left:auto;color:#9295a3">Rust subset</span></div><div class="tabbar" id="inspector-tabs"></div><div id="inspector-content" class="visualizer"></div>
+<aside class="pane" id="inspector"><div class="pane-title">RUST COMPILER EXPLORER <span style="margin-left:auto;color:#9295a3">Rust subset</span></div><div class="tabbar" id="inspector-tabs"></div><div id="inspector-content" class="visualizer"></div>
 <div class="pane-title">COMPILER PASSES / WALL TIME</div><div id="passes" style="padding:8px 0 13px"></div></aside>
-</div><div class="statusbar"><span id="status">Ready</span><span>Ferrite · JS backend · Educational Rust subset</span></div>
+</div><div class="statusbar"><span id="status">Ready</span><span>UTF-8　 ·　 Rust　 ·　 Ferrite JS backend　 ·　 Educational subset</span></div>
 <script type="module" src="./src/workspace.js"></script></body></html>

@@ -94,8 +94,9 @@ test('repository manager requires trust, supports plain Cargo roots, keeps sessi
   const root=await directory(t),manager=new RepositoryManager({allowedRoots:[root],jobs:2,processRunner:metadataProcess,runnerFactory:fakeFactory});t.after(()=>manager.dispose());
   await assert.rejects(()=>manager.open({kind:'local',path:root}),/trust/);
   const session=await manager.open({kind:'local',path:root,trust:true});assert.equal(session.owned,false);
-  assert.equal((await manager.open({kind:'local',path:root,trust:true})).id,session.id);
-  const result=await manager.run({...session,command:'run',jobs:2});assert.equal(result.stdout,'hello\n');assert.equal(result.repository.files['Cargo.lock'],'version = 4\n');assert.equal(result.buildSummary.jobs,2);
+  const reopened=await manager.open({kind:'local',path:root,trust:true});assert.equal(reopened.id,session.id);assert(reopened.version>session.version);
+  await assert.rejects(()=>manager.run({...session,command:'run',jobs:2}),/Stale/);
+  const result=await manager.run({...reopened,command:'run',jobs:2});assert.equal(result.stdout,'hello\n');assert.equal(result.repository.files['Cargo.lock'],'version = 4\n');assert.equal(result.buildSummary.jobs,2);
   await assert.rejects(()=>manager.run({...session,command:'check'}),/Stale/);
   await manager.close(session.id);await access(root);
 });
@@ -212,4 +213,36 @@ test('application JSON after build-finished cannot fabricate Cargo artifacts or 
   const {CargoOutputParser}=await import('../src/native/CargoOutputParser.js');
   const raw=JSON.stringify({reason:'build-finished',success:true})+'\n'+JSON.stringify({reason:'compiler-message',message:{message:'user JSON',spans:[]}})+'\n'+JSON.stringify({reason:'compiler-artifact',executable:'/not-a-build-artifact'});
   const result=CargoOutputParser.parse(raw);assert.deepEqual(result.artifacts,[]);assert.deepEqual(result.diagnostics,[]);
+});
+
+test('nested manifests build from their directory, honoring nested Cargo configuration and toolchains',async t=>{
+  const {NativeCargoRunner}=await import('../src/native/NativeCargoRunner.js');
+  const root=await directory(t,{'nested/Cargo.toml':'[package]\nname="nested"\nversion="0.1.0"\n','nested/src/main.rs':'fn main(){}'});
+  const session=new RepositorySession({root,source:root,manifest:'nested/Cargo.toml'});const snapshot=await session.refresh();
+  const runner=new NativeCargoRunner({project:session});let call;
+  runner.process={async run(executable,args,options){call={executable,args,options};return {exitCode:0,stdout:'',stderr:''};}};
+  const result=await runner.run({files:snapshot.files},'run',{manifest:session.manifest,jobs:2,args:['--','--jobs','7']});
+  assert.equal(call.options.cwd,join(root,'nested'));assert.equal(call.args[call.args.indexOf('--manifest-path')+1],join(root,'nested/Cargo.toml'));
+  assert.equal(result.workingDirectory,join(root,'nested'));assert.equal(result.sourceRoot,root);
+  assert.deepEqual(call.args.slice(-3),['--','--jobs','7']);
+  await assert.rejects(()=>runner.run({files:snapshot.files},'build',{manifest:session.manifest,args:['--manifest-path','other.toml']}),/manifest control/);
+  await runner.dispose();await access(root);
+});
+test('nested manifest diagnostics resolve relative locations against cwd but stay inside the selected repository',async()=>{
+  const {NativeDiagnosticMapper:M}=await import('../src/ui/services/NativeDiagnosticMapper.js');
+  const files={'app/src/main.rs':'🦀hello','lib/src/lib.rs':'abc'};
+  const map=file=>M.map({spans:[{primary:true,file,byteStart:4,byteEnd:5}]},files,{root:'/repo',cwd:'/repo/app'});
+  assert.equal(map('src/main.rs').span.file,'app/src/main.rs');assert.equal(map('./src/main.rs').span.start,2);
+  assert.equal(map('../lib/src/lib.rs').span.file,'lib/src/lib.rs');assert(map('../../outside/src/main.rs').external);
+  assert(map('/different/app/src/main.rs').external);
+});
+
+test('failed process startup after source synchronization invalidates stale client revisions until reload',async t=>{
+  const root=await directory(t);const manager=new RepositoryManager({allowedRoots:[root],processRunner:metadataProcess,runnerFactory:({project})=>({async run(snapshot){await project.update(snapshot);throw Error('spawn failed');},async dispose(){}})});
+  t.after(()=>manager.dispose());const opened=await manager.open({kind:'local',path:root,trust:true});
+  await assert.rejects(()=>manager.run({...opened,command:'build',files:{...opened.files,'src/main.rs':'fn main(){println!("saved before failure");}'}}),/spawn failed/);
+  assert(manager.get(opened.id).needsRefresh);assert(manager.get(opened.id).version>opened.version);
+  await assert.rejects(()=>manager.run({...opened,command:'build'}),/Stale/);
+  await assert.rejects(()=>manager.run({...opened,version:manager.get(opened.id).version,command:'build'}),/Reload/);
+  const reopened=await manager.open({kind:'local',path:root,trust:true});assert(reopened.files['src/main.rs'].includes('saved before failure'));assert(!reopened.needsRefresh);
 });

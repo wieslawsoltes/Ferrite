@@ -13,12 +13,12 @@ export class RepositorySession {
   }
   async refresh(signal) {
     this.snapshot = await RepositorySnapshot.read(this.root, {manifest: this.manifest, signal});
-    this.previous = new Map(Object.entries(this.snapshot.files)); this.version++;
+    this.previous = new Map(Object.entries(this.snapshot.files)); this.version++; this.needsRefresh=false;
     return this.describe();
   }
   describe() { return {id: this.id, version: this.version, root: this.root, source: this.source,
     manifest: this.manifest, owned: this.owned, head: this.head ?? null, ...this.snapshot, metadata: this.metadata ?? null,
-    metadataError: this.metadataError ?? null}; }
+    metadataError: this.metadataError ?? null, needsRefresh: !!this.needsRefresh}; }
   async update(snapshot) {
     const files = V.validate(snapshot.files), changes = [];
     if (!Object.hasOwn(files, this.manifest)) throw Error('Keep the selected Cargo manifest in the editor');

@@ -1,3 +1,4 @@
+import {ProjectExporter} from "./ide/ProjectExporter.js";
 import {EditorGutter} from "./ide/EditorGutter.js";
 import {ProjectTree} from "./ide/ProjectTree.js";
 import {CommandPalette} from "./ide/CommandPalette.js";
@@ -23,6 +24,7 @@ const cargoWindow=new CargoToolWindow($("cargo-toolwindow"),()=>files,command=>{
 });
 const palette=new CommandPalette(document.body,()=>[
  {label:"Run current crate",execute:()=>compile(true)},
+ {label:"Export project for native Cargo",execute:()=>ProjectExporter.download(files)},
  {label:"Check current crate",execute:()=>compile(false)},
  {label:"Cargo tool window",execute:()=>showCargo()},
  {label:"Reset window layout",execute:()=> $("reset-layout").click()},
@@ -78,6 +80,7 @@ function schedule(){if(!auto)return;clearTimeout(timer);timer=setTimeout(()=>com
 function chooseSample(name){files=createProject(sampleProjects[name]);file="src/main.rs";$("source").value=files[file];renderProject();compile(true);}
 function createFile(){const path=prompt("New file path (e.g. src/utils.rs):");if(!path)return;if(!/^(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_.-]+$/.test(path)||path.includes("..")){alert("Invalid file path");return;}if(path in files){open(path);return;}files[path]=path.endsWith(".rs")?"// New Rust module\n":"";renderProject();open(path);save();}
 function removeFile(){if(file==="Cargo.toml"||file==="src/main.rs"){alert("Cannot delete the manifest or entry point");return;}if(!confirm("Delete "+file+"?"))return;delete files[file];file="src/main.rs";$("source").value=files[file];renderProject();compile(false);}
+$("export-project").onclick=()=>{files[file]=$("source").value;ProjectExporter.download(files);};
 $("run").onclick=()=>compile(true);$("check").onclick=()=>compile(false);$("new-file").onclick=createFile;$("delete-file").onclick=removeFile;
 $("auto").onchange=e=>{auto=e.target.checked;save();if(auto)schedule();};
 $("source").addEventListener("input",()=>{files[file]=$("source").value;$("dirty").textContent="●";save();schedule();});

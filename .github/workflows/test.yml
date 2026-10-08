@@ -14,6 +14,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Retain the exact validation source for reproducible failures
+        run: |
+          mkdir -p artifacts/source
+          git archive --format=zip HEAD -o artifacts/source/checkout.zip
+          git rev-parse HEAD > artifacts/source/commit.txt
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

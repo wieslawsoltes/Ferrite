@@ -1,6 +1,13 @@
 /** Browser-side loopback client. Tokens and API credentials are never written to web storage. */
 export class AgentClient {
-  constructor({fetcher = fetch} = {}) { this.fetcher = fetcher; this.url = null; this.token = null; this.clientId = null; this.capabilities = null; }
+  constructor({fetcher = globalThis.fetch} = {}) {
+    if (typeof fetcher !== 'function') throw new TypeError('A fetch implementation is required');
+    // Window.fetch is a Web IDL operation: calling it as this.fetcher() supplies
+    // an AgentClient receiver, which Chromium rejects before any HTTP request.
+    // Bind both native and explicitly injected transports to the global realm.
+    this.fetcher = fetcher.bind(globalThis);
+    this.url = null; this.token = null; this.clientId = null; this.capabilities = null;
+  }
   async connect(url, token) {
     const target = new URL(url);
     if (target.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(target.hostname) || target.username || target.password || target.search || target.hash || !['', '/'].includes(target.pathname)) throw Error('Use the loopback bridge URL, e.g. http://127.0.0.1:8790');

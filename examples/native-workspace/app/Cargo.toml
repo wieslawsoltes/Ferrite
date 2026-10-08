@@ -1,0 +1,9 @@
+[package]
+name = "native-lab"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[dependencies]
+lab-math.workspace = true
+answer-macro.workspace = true

@@ -1,0 +1,2 @@
+[env]
+FERRITE_DEMO_CONFIG = { value = "nested Cargo configuration loaded", force = true }

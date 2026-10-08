@@ -1,3 +1,4 @@
+import {randomUUID} from '../../agent/core/Platform.js';
 import {VirtualFileSystem as V} from '../../project/VirtualFileSystem.js';
 
 /** Text project state. UI widgets do not own files or compilation revisions. */
@@ -10,7 +11,8 @@ export class WorkspaceModel {
   subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   emit(kind, detail = {}) { for (const listener of this.listeners) listener({kind, revision: this.revision, ...detail}); }
   replace(files, notify = true) {
-    this.transactions=[];this.files = V.validate(files); this.active = Object.hasOwn(this.files, 'src/main.rs') ? 'src/main.rs' : Object.keys(this.files).find(f => f.endsWith('.rs')) ?? Object.keys(this.files)[0];
+    const candidate = V.validate(files); this.workspaceId = randomUUID(); this.workspaceEpoch = (this.workspaceEpoch ?? 0) + 1;
+    this.transactions=[];this.files = candidate; this.active = Object.hasOwn(this.files, 'src/main.rs') ? 'src/main.rs' : Object.keys(this.files).find(f => f.endsWith('.rs')) ?? Object.keys(this.files)[0];
     this.tabs = [this.active]; this.positions.clear(); this.breakpoints.clear(); this.saved = new Map(Object.entries(this.files));
     this.revision++; if (notify) this.emit('replace');
   }
@@ -70,16 +72,30 @@ export class WorkspaceModel {
     const before=Object.fromEntries(Object.keys(changes).map(path=>[path,this.read(path)]));
     const paths=this.applyFiles(changes);if(paths.length){this.transactions.push({before,after:{...changes}});if(this.transactions.length>20)this.transactions.shift();}return paths;
   }
+  applyWorkspaceTransaction(changes) {
+    if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw Error('Expected a file change map');
+    const files = {...this.files}, before = {}, after = {};
+    for (const [input, value] of Object.entries(changes)) {
+      const path = V.path(input); if (path !== input) throw Error('Transaction paths must be normalized');
+      if (value !== null && typeof value !== 'string') throw Error('Expected text or null');
+      before[path] = this.files[path] ?? null; after[path] = value;
+      if (value === null) delete files[path]; else files[path] = value;
+    }
+    V.validate(files);
+    if (Object.keys(after).every(path => before[path] === after[path])) return [];
+    this.reconcileFiles(files); this.transactions.push({kind: 'workspace', before, after});
+    if (this.transactions.length > 20) this.transactions.shift(); return Object.keys(after);
+  }
   undoTransaction() {
     const transaction=this.transactions.at(-1);if(!transaction)return false;
-    if(Object.entries(transaction.after).some(([path,text])=>this.files[path]!==text))throw Error('Files changed after the refactoring; undo would overwrite newer edits');
-    this.transactions.pop();this.applyFiles(transaction.before);return true;
+    if(Object.entries(transaction.after).some(([path,text])=>(this.files[path]??null)!==text))throw Error('Files changed after the refactoring; undo would overwrite newer edits');
+    this.transactions.pop(); if (transaction.kind === 'workspace') { const files = {...this.files}; for (const [path,text] of Object.entries(transaction.before)) { if (text === null) delete files[path]; else files[path] = text; } this.reconcileFiles(files); } else this.applyFiles(transaction.before); return true;
   }
   dirty(path) { return this.saved.get(path) !== this.files[path]; }
   snapshot() { return {format: 'ferrite-project-v1', files: {...this.files}}; }
   save() {
     try {
-      this.storage?.setItem(this.key, JSON.stringify({...this.snapshot(), active: this.active, tabs: this.tabs}));
+      this.storage?.setItem(this.key, JSON.stringify({...this.snapshot(), workspaceId: this.workspaceId, active: this.active, tabs: this.tabs}));
       this.saved = new Map(Object.entries(this.files)); this.emit('saved'); return true;
     } catch (error) { this.emit('storage-error', {message: error.message}); return false; }
   }
@@ -87,6 +103,7 @@ export class WorkspaceModel {
     try {
       const data = JSON.parse(this.storage?.getItem(this.key) ?? 'null'); if (!data) return false;
       this.replace(data.files, false);
+      if (typeof data.workspaceId === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(data.workspaceId)) this.workspaceId = data.workspaceId;
       this.tabs = [...new Set((Array.isArray(data.tabs) ? data.tabs : []).filter(path => Object.hasOwn(this.files, path)))];
       this.active = Object.hasOwn(this.files, data.active) ? data.active : this.active;
       if (!this.tabs.includes(this.active)) this.tabs.push(this.active); return true;

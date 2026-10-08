@@ -21,7 +21,10 @@ export class AgentHarness {
   }
   static config(input = {}) {
     const config = {provider: input.provider ?? 'openai', model: input.model ?? '', mode: input.mode ?? 'ask', contextTokens: input.contextTokens ?? 32768,
-      outputTokens: input.outputTokens ?? 4096, maxSteps: input.maxSteps ?? 40, maxTotalTokens: input.maxTotalTokens ?? 500000, modelCompaction: input.modelCompaction !== false, pinnedContext: input.pinnedContext ?? ''};
+      outputTokens: input.outputTokens ?? 4096, maxSteps: input.maxSteps ?? 40, maxTotalTokens: input.maxTotalTokens ?? 500000, modelCompaction: input.modelCompaction !== false, pinnedContext: input.pinnedContext ?? '', toolRules: input.toolRules ?? {}, permissionMinutes: input.permissionMinutes ?? 10};
+    if (!config.toolRules || Array.isArray(config.toolRules) || typeof config.toolRules !== 'object' || Object.keys(config.toolRules).length > 100 || Object.entries(config.toolRules).some(([name, rule]) => !/^[a-z][a-z0-9_]{0,99}$/.test(name) || ['constructor','prototype','__proto__'].includes(name) || !['allow','ask','deny'].includes(rule))) throw Error('Invalid per-tool permission rules');
+    config.toolRules = {...config.toolRules};
+    if (!Number.isSafeInteger(config.permissionMinutes) || config.permissionMinutes < 1 || config.permissionMinutes > 60) throw Error('Permission lease must be 1–60 minutes');
     if (typeof config.pinnedContext !== 'string' || config.pinnedContext.length > 16000) throw Error('Pinned context must be text up to 16000 characters');
     if (!['openai', 'anthropic', 'gemini'].includes(config.provider) || typeof config.model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/.test(config.model)) throw new AgentError('INVALID_MODEL', 'Select a provider and a model returned by its API');
     if (!['ask', 'auto-edit', 'read-only', 'trusted'].includes(config.mode)) throw Error('Invalid approval mode');

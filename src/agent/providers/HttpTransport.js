@@ -21,6 +21,8 @@ export class HttpTransport {
     }
     if (!response.body) throw new AgentError('PROVIDER_PROTOCOL', 'Provider response has no body');
     const reader = response.body.getReader(), decoder = new TextDecoder('utf-8', {fatal: true});
+    const abortReader = () => { void reader.cancel().catch(() => {}); };
+    combined.addEventListener('abort', abortReader, {once: true});
     let bytes = 0, buffer = '', data = [], eventName = '', json = '', streamed = String(response.headers.get('content-type')).includes('text/event-stream');
     const deliver = () => {
       if (data.length) {
@@ -35,7 +37,7 @@ export class HttpTransport {
     const line = text => { if (!text) deliver(); else if (text.startsWith('data:')) data.push(text.slice(5).replace(/^ /, '')); else if (text.startsWith('event:')) eventName = text.slice(6).trim(); };
     try {
       for (;;) {
-        AgentError.abort(signal); const {done, value} = await reader.read(); if (done) break;
+        AgentError.abort(combined); const {done, value} = await reader.read(); AgentError.abort(combined); if (done) break;
         bytes += value.byteLength; if (bytes > this.maxBytes) throw new AgentError('PROVIDER_LIMIT', 'Provider response exceeded 16 MiB');
         const text = decoder.decode(value, {stream: true});
         if (!streamed) { json += text; continue; }
@@ -49,6 +51,6 @@ export class HttpTransport {
       await reader.cancel().catch(() => {}); AgentError.abort(signal);
       if (error instanceof AgentError) throw error;
       throw new AgentError('PROVIDER_STREAM', 'Provider stream was interrupted', {retryable: true, status: 502, cause: error});
-    } finally { reader.releaseLock(); }
+    } finally { combined.removeEventListener('abort', abortReader); reader.releaseLock(); }
   }
 }

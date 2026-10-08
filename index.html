@@ -51,6 +51,13 @@ textarea{width:100%;height:100%;resize:none;border:0;outline:0;background:#1d1e2
 .callgraph-card{border:1px solid #495369;background:#292f3b;margin:10px 0;border-radius:8px;padding:9px}
 .callgraph-edge{display:block;padding:6px 14px;color:#98b5e5;text-align:left;width:100%}.graph-summary{padding:10px;color:#9db7d2}
 #source{font-variant-ligatures:normal}
+
+.token-stream{display:flex;flex-wrap:wrap;align-content:flex-start;gap:6px}.token-chip{font:12px/1.4 ui-monospace,monospace;padding:5px 8px;border-radius:5px;border:1px solid #454c5b;background:#292d39;color:#d8dfea}
+.token-chip:hover{background:#40557b;border-color:#85b4ed}.token-chip[data-kind="keyword"]{color:#e7a7c8}.token-chip[data-kind="number"]{color:#b5cc8d}.token-chip[data-kind="string"]{color:#dcb886}.token-chip[data-kind="identifier"]{color:#9dc9e8}.token-chip[data-kind="eof"]{opacity:.5}
+.symbol-table{width:100%;border-collapse:collapse;color:#c5d5ec;font:12px/1.5 ui-monospace,monospace}
+.symbol-table th{text-align:left;position:sticky;top:0;background:#252a34;padding:9px 6px;border-bottom:1px solid #586072}
+.symbol-table td{padding:8px 6px;border-bottom:1px solid #343b48}
+.symbol-table tr:hover td{background:#334358;cursor:pointer}
 </style></head><body>
 <header><div class="brand">◈ Ferrite <span>Rust IDE</span></div><div class="crumb">File　 Edit　 View　 Navigate　 Code　 Refactor　 Run　 Tools　 VCS</div>
 <select id="examples" aria-label="Select Rust example"></select>

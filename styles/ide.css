@@ -29,3 +29,8 @@
 .search-match small{width:50px;flex-shrink:0}.search-match mark{color:#ffe5b6;background:#64472b;border-radius:2px}.search-match.source-selected{background:#294568}
 .search-results .refactor-preview{margin:6px 0}.search-results .refactor-preview summary{font:11px ui-monospace,monospace;cursor:pointer}.search-results .refactor-preview pre{padding:7px;margin:5px 0;font-size:11px}
 @container(max-width:460px){.workspace-search{grid-template-columns:minmax(0,1fr)}.search-field{grid-template-columns:90px minmax(0,1fr)}}
+
+/* Persistent native repository and dependency workflows. */
+.repository-form,.dependency-form,.repository-info{display:grid;gap:8px;padding:10px;min-width:0}.repository-form .field-label,.dependency-form .field-label{display:grid;gap:4px}.repository-location{overflow-wrap:anywhere;white-space:pre-wrap;font-size:11px}.native-stdin{display:flex;gap:6px;padding:6px;border-top:1px solid var(--border);flex-shrink:0}.native-stdin input{flex:1;min-width:0}.cargo-features .text-field{width:100%;box-sizing:border-box}.cargo-features .field-label{display:grid;gap:4px}
+
+.cargo-timing-frame{width:100%;min-height:480px;border:0;background:white}.parallel-profile{padding-top:8px}

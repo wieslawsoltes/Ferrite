@@ -58,6 +58,14 @@ export class WorkspaceModel {
     this.emit('files', {path: this.active, changed: paths});
     return paths;
   }
+  reconcileFiles(files, {native = false} = {}) {
+    const candidate = V.validate(files);
+    if (JSON.stringify(candidate) === JSON.stringify(this.files)) return;
+    this.files = candidate; this.tabs = this.tabs.filter(path => Object.hasOwn(candidate, path));
+    if (!Object.hasOwn(candidate, this.active)) this.active = this.tabs[0] ?? Object.keys(candidate)[0];
+    if (!this.tabs.includes(this.active)) this.tabs.push(this.active);
+    this.revision++; this.emit('files', {path: this.active, changed: Object.keys(candidate), native});
+  }
   applyTransaction(changes) {
     const before=Object.fromEntries(Object.keys(changes).map(path=>[path,this.read(path)]));
     const paths=this.applyFiles(changes);if(paths.length){this.transactions.push({before,after:{...changes}});if(this.transactions.length>20)this.transactions.shift();}return paths;

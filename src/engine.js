@@ -25,8 +25,8 @@ export function compile(source, {now = () => performance.now()} = {}) {
   const mir = pass("Lower MIR", () => lowerMir(semantic));
   const js = pass("Emit JS", () => emitJS(semantic));
   const sem = {
-    instances: semantic.instances.map(({key,name,typeArguments,returnType,fn}) => ({
-      key,name,typeArguments,returnType,loc:fn.loc
+    instances: semantic.instances.map(({key,name,typeArguments,returnType,fn,calls}) => ({
+      key,name,typeArguments,returnType,calls,loc:fn.loc
     })),
     symbols: semantic.symbols,
     obligations: semantic.obligations,

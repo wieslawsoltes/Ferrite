@@ -1,33 +1,51 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ferrite — Rust Compiler Playground</title>
+<title>Ferrite — Rust Compiler IDE</title>
 <style>
-:root{color-scheme:dark;font:14px system-ui,sans-serif;background:#0c1220;color:#e5edf9}
-*{box-sizing:border-box}body{margin:0}header{padding:22px 3%;border-bottom:1px solid #34445f;background:#131e32}
-h1{margin:0;font-size:26px}header p{color:#9aafca;margin:7px 0 0}
-main{display:grid;grid-template-columns:1fr 1fr;gap:15px;padding:18px 3%;max-width:1750px;margin:auto}
-section{min-width:0;border:1px solid #33445f;border-radius:12px;background:#152136;overflow:hidden}
-h2{font-size:15px;margin:0;padding:14px;border-bottom:1px solid #33445f}
-textarea{display:block;width:100%;height:430px;resize:vertical;background:#0b1425;color:#e4f1ff;padding:16px;border:0;outline:0;font:13px/1.7 ui-monospace,monospace}
-pre{white-space:pre-wrap;overflow:auto;max-height:360px;min-height:90px;padding:14px;margin:10px;background:#0b1425;border-radius:8px;font:12px/1.6 ui-monospace,monospace}
-button{cursor:pointer;border:1px solid #446280;background:#243e60;color:white;border-radius:7px;padding:9px;margin:5px}
-button.active,#run{background:#0c8b81}.full{grid-column:1/-1}
-#tabs{padding:7px}.timing{display:grid;grid-template-columns:145px 1fr 85px;align-items:center;gap:12px;padding:5px 15px}
-.timing>div{height:14px;background:#14b8a6;border-radius:4px;min-width:2px}
-small{color:#9db1ce}footer{padding:15px;color:#9db1ce}
-@media(max-width:850px){main{grid-template-columns:1fr}.full{grid-column:1}}
+:root{color-scheme:dark;--project-width:255px;--inspector-width:420px;--bottom-height:230px;--bg:#191a20;--panel:#222329;--edge:#393a43;--accent:#609de4;--text:#d1d3df;--muted:#91949e;background:var(--bg);color:var(--text);font:13px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}
+*{box-sizing:border-box}body{margin:0}button,select{font:inherit;color:inherit}button{cursor:pointer;border:0;background:transparent}button:hover{background:#383b46}
+header{height:50px;display:flex;align-items:center;gap:13px;padding:0 15px;background:#24252d;border-bottom:1px solid var(--edge)}
+.brand{font-size:17px;font-weight:800;letter-spacing:.2px;color:#e6a66a}.brand span{color:#d4d8e3}.crumb{color:#8e91a0}
+#run{margin-left:auto;background:#36634e;border-radius:7px;padding:7px 15px;color:#d7ffe6;font-weight:700}#run:hover{background:#437a61}
+select{background:#30323d;border:1px solid #4c4e60;padding:6px 9px;border-radius:6px;max-width:265px}
+.workspace{display:flex;height:calc(100vh - 76px);min-height:400px}
+.rail{width:43px;flex-shrink:0;background:#202127;border-right:1px solid var(--edge);display:flex;flex-direction:column;align-items:center;padding-top:8px}
+.rail button{width:36px;height:36px;color:#a3a5b1;border-radius:7px;font-size:18px}.rail button.active{color:var(--accent);background:#313540}
+.pane{overflow:hidden;display:flex;flex-direction:column;background:#202127}
+#project{width:var(--project-width);flex-shrink:0}#inspector{width:var(--inspector-width);flex-shrink:0}
+.pane-title{height:36px;display:flex;align-items:center;gap:10px;padding:0 13px;border-bottom:1px solid var(--edge);font-size:12px;font-weight:650}
+.tree-item{padding:6px 14px;color:#b4b6c4;cursor:pointer}.tree-item:hover{background:#32343e}.tree-group{padding:11px 12px 5px;color:#a3a6b3}
+#symbols{margin-top:12px;border-top:1px solid var(--edge)}
+.split{flex-shrink:0;background:#353741;transition:background .12s}.split:hover{background:#609de4}
+.split.vertical{width:5px;cursor:col-resize}.split.horizontal{height:5px;cursor:row-resize}
+.center{flex:1;min-width:180px;display:flex;flex-direction:column}
+.tabbar{height:38px;display:flex;align-items:center;background:#26272e;border-bottom:1px solid var(--edge);overflow-x:auto;white-space:nowrap}
+.tab{padding:9px 14px;border-bottom:2px solid transparent;color:#979aa7;white-space:nowrap}.tab.active{border-bottom-color:#75abef;color:#e2e4ef;background:#2b2d37}
+.editor-header{height:28px;padding:6px 13px;color:#8d90a0;font-size:11px;background:#202129}
+.editor{flex:1;min-height:100px;display:flex;overflow:hidden}
+.line-numbers{width:45px;background:#1d1e24;color:#606572;overflow:hidden;padding:14px 8px;text-align:right;user-select:none;font:13px/1.65 ui-monospace,monospace}
+textarea{width:100%;height:100%;resize:none;border:0;outline:0;background:#1d1e24;color:#d9cda9;padding:14px 15px;font:13px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:4}
+#inspector-content{margin:0;padding:15px;overflow:auto;flex:1;background:#1d1e24;color:#b7cce3;font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap}
+#bottom{height:var(--bottom-height);flex-shrink:0;background:#1c1d23;display:flex;flex-direction:column}
+.console{flex:1;overflow:auto;color:#b8deb8;white-space:pre-wrap;margin:0;padding:11px 16px;font:12px/1.6 ui-monospace,monospace}
+.pass{display:grid;grid-template-columns:100px 1fr 75px;gap:12px;align-items:center;padding:6px 14px;font-size:11px}.meter{height:8px;background:#2e303b;border-radius:9px;overflow:hidden}.meter div{background:#7d9ed6;height:100%;border-radius:9px}
+.statusbar{height:26px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:#2c485e;color:#ecf4fd;font-size:11px}
+.hidden{display:none!important}#inspector-tabs{flex-wrap:wrap;height:auto;min-height:38px}
+@media(max-width:950px){#project{display:none}#inspector{width:35vw}.crumb{display:none}}
+@media(max-width:700px){#inspector{display:none}.workspace{height:calc(100vh - 76px)}header{gap:6px}select{max-width:130px}}
 </style></head><body>
-<header><h1>⚙ Ferrite — Rust Compiler Playground</h1><p>Explore lexing, parsing, generic specialization, simplified MIR, and JavaScript code generation.</p></header>
-<main><section><h2>Rust-like source <button id="run">▶ Compile &amp; Run</button></h2><textarea id="source" spellcheck="false">fn greet&lt;T: Display&gt;(value: T) {
-    println!("Hello, {}!", value);
-}
-
-fn main() {
-    greet("World");
-    greet(42u32);
-    let answer = 6u32 * 7u32;
-    println!("Answer: {}", answer);
-}</textarea></section>
-<section><h2>Compiler Explorer</h2><nav id="tabs"></nav><pre id="representation"></pre><h2>Program output</h2><pre id="output"></pre></section>
-<section class="full"><h2>Measured pass times (browser)</h2><div id="profile"></div><footer>Educational Rust subset only. The MIR view is illustrative, not Rust's actual MIR. JavaScript compilation happens locally in your browser; generated programs run in a time-limited Web Worker. This is not a security sandbox for adversarial code.</footer></section></main>
-<script type="module" src="./compiler.js"></script><script type="module" src="./examples.js"></script></body></html>
+<header><div class="brand">◈ Ferrite <span>IDE</span></div><div class="crumb">ferrite / src / main.rs</div>
+<select id="examples" aria-label="Select Rust example"></select>
+<button title="Reset dock layout" id="reset-layout">Reset Layout</button><button id="run" title="Compile and Run (Ctrl/⌘+Enter)">▶ Run</button></header>
+<div class="workspace">
+<nav class="rail" aria-label="Tool windows"><button data-pane="project" class="active" title="Project">▤</button><button data-pane="inspector" class="active" title="Compiler">⌘</button><button data-pane="bottom" class="active" title="Terminal">▣</button></nav>
+<aside class="pane" id="project"><div class="pane-title">PROJECT <span style="margin-left:auto">⌄</span></div>
+<div class="tree-group">⌄ ferrite</div><div class="tree-group">　⌄ src</div><div class="tree-item">　　🦀 main.rs</div><div class="tree-group">STRUCTURE</div><div id="symbols"></div></aside>
+<div class="split vertical" data-split="left"></div>
+<main class="center"><div class="tabbar"><button class="tab active">🦀 <span id="editor-file">main.rs</span> <span id="dirty"></span></button></div><div class="editor-header">Ferrite › src › main.rs</div><div class="editor"><textarea id="source" spellcheck="false" aria-label="Rust source editor"></textarea></div>
+<div class="split horizontal" data-split="bottom"></div><section id="bottom"><div class="tabbar"><button class="tab active">▣ Run</button><button class="tab" onclick="document.getElementById('terminal').textContent='Use the Compiler pane to inspect intermediate representations.'">Build</button></div><pre class="console" id="terminal"></pre></section></main>
+<div class="split vertical" data-split="right"></div>
+<aside class="pane" id="inspector"><div class="pane-title">COMPILER EXPLORER <span style="margin-left:auto;color:#9295a3">Rust subset</span></div><div class="tabbar" id="inspector-tabs"></div><pre id="inspector-content"></pre>
+<div class="pane-title">COMPILER PASSES / WALL TIME</div><div id="passes" style="padding:8px 0 13px"></div></aside>
+</div><div class="statusbar"><span id="status">Ready</span><span>Ferrite · JS backend · Educational Rust subset</span></div>
+<script type="module" src="./src/ide.js"></script></body></html>

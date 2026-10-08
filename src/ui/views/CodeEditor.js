@@ -22,7 +22,7 @@ export class CodeEditor {
     this.capture(); this.path=path; this.textarea.value=path ? this.model.read(path) : ''; this.textarea.disabled=!path;
     const position=this.model.positions.get(path)??{start:0,end:0,top:0,left:0}; this.render();
     this.textarea.setSelectionRange(position.start,position.end);this.textarea.scrollTop=position.top;this.textarea.scrollLeft=position.left;this.scroll();
-    if(path&&!this.histories.has(path))this.histories.set(path,{entries:[{text:this.textarea.value,start:position.start,end:position.end}],index:0});
+    if(path&&(!this.histories.has(path)||this.histories.get(path).entries[this.histories.get(path).index]?.text!==this.textarea.value))this.histories.set(path,{entries:[{text:this.textarea.value,start:position.start,end:position.end}],index:0});
   }
   changed({history=true}={}) {
     if(!this.path)return;

@@ -16,3 +16,16 @@
 .native-artifact-content{overflow:auto;flex:1;min-height:0}.native-output-line{display:flex;gap:14px;min-width:max-content;font:12px/1.65 ui-monospace,monospace;white-space:pre;padding:0 9px}.native-line-number{color:#738194;min-width:45px;text-align:right;user-select:none}.native-output-line:hover{background:#2e3c50}.native-hex{font:12px/1.7 ui-monospace,monospace;padding:12px}.native-cfg{height:calc(100% - 35px);min-height:250px}.native-function-select{margin:5px;max-width:95%}
 
 .language-toolbar{display:flex;flex-wrap:wrap;gap:5px;padding:8px}.language-results{overflow:auto;min-height:0;flex:1;padding:10px}.completion-item,.language-location{display:block;width:100%;text-align:left;padding:8px;border-bottom:1px solid var(--border);font-size:12px}.completion-item small,.language-location small{display:block;color:var(--muted);margin-top:4px}.completion-item:hover,.language-location:hover{background:#31415b}.language-documentation{white-space:pre-wrap;font:12px/1.65 ui-monospace,monospace}.refactor-preview{margin-bottom:12px}.refactor-preview pre{font:12px/1.6 ui-monospace,monospace;white-space:pre-wrap;word-break:break-word;padding:10px}.refactor-before{background:#482c35}.refactor-after{background:#233e32}
+
+/* Compact Find in Files fits a bottom dock; the results and form scroll independently. */
+.search-tool{container-type:inline-size;overflow:hidden}
+.workspace-search{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 10px;padding:8px 10px;border-bottom:1px solid #3c414b;flex:none;max-height:65%;overflow:auto;background:var(--panel)}
+.search-field{display:grid;grid-template-columns:80px minmax(0,1fr);align-items:center;gap:6px;font-size:11px}
+.search-field input{min-width:0;width:100%;padding:4px 7px;border:1px solid #485060;border-radius:4px;background:#24272e;color:#dfe3ee}
+.search-options,.search-actions{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.search-options label{display:flex;gap:3px;align-items:center;font-size:11px}.search-options input{margin:0}.search-actions button{padding:4px 7px;font-size:11px;border:1px solid #464c57;border-radius:3px}.search-actions .primary-button{background:#365d99;color:#eef5ff}
+.search-tool>.view-note{flex:none;padding:5px 10px;font-size:10px;line-height:1.4}
+.search-results{overflow:auto;min-height:20px;flex:1;padding:0 10px 10px}.search-results .section-heading{padding:6px 4px}.search-match{display:flex;align-items:baseline;width:100%;justify-content:flex-start;text-align:left;padding:3px 6px;white-space:pre;overflow:hidden;font:12px/1.6 ui-monospace,monospace;gap:0}
+.search-match small{width:50px;flex-shrink:0}.search-match mark{color:#ffe5b6;background:#64472b;border-radius:2px}.search-match.source-selected{background:#294568}
+.search-results .refactor-preview{margin:6px 0}.search-results .refactor-preview summary{font:11px ui-monospace,monospace;cursor:pointer}.search-results .refactor-preview pre{padding:7px;margin:5px 0;font-size:11px}
+@container(max-width:460px){.workspace-search{grid-template-columns:minmax(0,1fr)}.search-field{grid-template-columns:90px minmax(0,1fr)}}

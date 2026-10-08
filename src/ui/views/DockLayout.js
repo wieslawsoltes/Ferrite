@@ -4,7 +4,7 @@ import {Dom} from './Dom.js';
 export class DockLayout {
   constructor(root, definitions, {storage = null} = {}) {
     this.root = root; this.storage = storage; this.definitions = definitions; this.panels = new Map(definitions.map(p => [p.id, p]));
-    this.initial = {left: ['project','structure','cargo'], right: ['compiler','profile','native-artifacts','language'], bottom: ['run','problems','debugger','tests']};
+    this.initial = {left: ['project','structure','cargo'], right: ['compiler','profile','native-artifacts','language'], bottom: ['run','search','problems','debugger','tests']};
     this.layout = structuredClone(this.initial); this.active = {left:'project',right:'compiler',bottom:'run'};
     this.sizes = {left:245,right:560,bottom:235}; this.hidden = new Set(); this.floating = new Set(); this.homes = new Map(); this.floatBoxes = new Map();
     this.restore(); this.regions = new Map();
@@ -25,7 +25,11 @@ export class DockLayout {
         if(!Array.isArray(value.layout?.[side]))return;
         for(const id of value.layout[side]){if(!this.panels.has(id)||seen.has(id))return;seen.add(id);}
       }
-      if(seen.size!==this.panels.size)return;
+      // Keep existing placements while adding newly registered tool windows.
+      for (const panel of this.definitions) if (!seen.has(panel.id)) {
+        const side = Object.keys(this.initial).find(side => this.initial[side].includes(panel.id)) ?? 'right';
+        value.layout[side].push(panel.id);
+      }
       this.layout=value.layout;
       for(const side of ['left','right','bottom']){if(this.layout[side].includes(value.active?.[side]))this.active[side]=value.active[side];const n=value.sizes?.[side];if(Number.isFinite(n))this.sizes[side]=Math.max(side==='bottom'?130:180,Math.min(side==='bottom'?600:850,n));}
       this.hidden=new Set((value.hidden??[]).filter(id=>this.panels.has(id)));

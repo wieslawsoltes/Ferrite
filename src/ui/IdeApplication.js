@@ -1,3 +1,4 @@
+import {SearchView} from './views/SearchView.js';
 import {LanguageToolsView} from './views/LanguageToolsView.js';
 import {NativeArtifactsView} from './views/NativeArtifactsView.js';
 import {CargoOptions} from '../cargo/CargoOptions.js';
@@ -34,7 +35,7 @@ export class IdeApplication {
     this.build=null;this.buildRevision=-1;this.requestSerial=0;this.options={};this.backend='browser';this.runMode=null;this.nativeArgs=[];
     this.settings={auto:true,optimize:true};try{Object.assign(this.settings,JSON.parse(storage?.getItem('ferrite.settings.v3')??'{}'));}catch{}
     this.settings.auto=this.settings.auto!==false;this.settings.optimize=this.settings.optimize!==false;
-    const definitions=[['project','Project','folder'],['structure','Structure','tree'],['cargo','Cargo','cargo'],['compiler','Compiler','code'],['profile','Profile','chart'],['language','Rust tooling','search'],['native-artifacts','Native artifacts','code'],['run','Run','console'],['problems','Problems','warning'],['debugger','Debugger','debug'],['tests','Tests','test']].map(([id,title,icon])=>({id,title,icon,element:Dom.element('div','tool-panel')}));
+    const definitions=[['project','Project','folder'],['structure','Structure','tree'],['search','Find in Files','search'],['cargo','Cargo','cargo'],['compiler','Compiler','code'],['profile','Profile','chart'],['language','Rust tooling','search'],['native-artifacts','Native artifacts','code'],['run','Run','console'],['problems','Problems','warning'],['debugger','Debugger','debug'],['tests','Tests','test']].map(([id,title,icon])=>({id,title,icon,element:Dom.element('div','tool-panel')}));
     this.panels=new Map(definitions.map(d=>[d.id,d.element]));
     this.dock=new DockLayout(this.$('dock-layout'),definitions,{storage});
     this.editor=new CodeEditor(this.$('editor-root'),this.model,this.selection);this.tabs=new TabStrip(this.$('document-tabs'),this.model);
@@ -42,6 +43,7 @@ export class IdeApplication {
     this.projectFooter=Dom.element('div','project-footer');this.panels.get('project').append(projectHeading,filter,projectTree,this.projectFooter);
     this.inspector=new InspectorView(this.panels.get('compiler'),this.selection);this.profile=new ProfileView(this.panels.get('profile'));
     this.languageTools=new LanguageToolsView(this.panels.get('language'),this.model,this.selection,command=>this.languageCommand(command));
+    this.search=new SearchView(this.panels.get('search'),this.model,this.selection);
     this.nativeArtifacts=new NativeArtifactsView(this.panels.get('native-artifacts'),this.selection);
     this.problems=new DiagnosticsView(this.panels.get('problems'),this.selection);this.problems.render([]);
     this.debugger=new DebuggerView(this.panels.get('debugger'),this.selection,command=>this.execution.command(command,this.model.breakpointList));
@@ -67,13 +69,14 @@ export class IdeApplication {
     for(const [id,key] of [['auto-check','auto'],['optimize','optimize']])this.$(id).onchange=()=>{this.settings[key]=this.$(id).checked;try{this.storage?.setItem('ferrite.settings.v3',JSON.stringify(this.settings));}catch{}if(key==='optimize')this.invalidate();if(this.settings.auto)this.schedule();};
     this.$('backend-select').onchange=()=>{this.backend=this.$('backend-select').value;if(this.backend==='native'&&!this.native.capabilities)this.cargo.connect();};
     this.$('search-everywhere').onclick=()=>this.palette.open();this.$('project-menu').onclick=()=>this.palette.open();this.$('native-connect').onclick=()=>this.cargo.connect();
-    for(const id of ['project','structure','cargo','problems','debugger','tests','run','compiler','profile','native-artifacts','language']){const definition=definitions.find(d=>d.id===id);const button=Dom.button('',()=>this.dock.toggle(id),{icon:definition.icon,className:'rail-button',title:`${definition.title} tool window`});button.dataset.tool=id;this.$(['compiler','profile','native-artifacts','language'].includes(id)?'right-rail':'left-rail').append(button);}
+    for(const id of ['project','structure','search','cargo','problems','debugger','tests','run','compiler','profile','native-artifacts','language']){const definition=definitions.find(d=>d.id===id);const button=Dom.button('',()=>this.dock.toggle(id),{icon:definition.icon,className:'rail-button',title:`${definition.title} tool window`});button.dataset.tool=id;this.$(['compiler','profile','native-artifacts','language'].includes(id)?'right-rail':'left-rail').append(button);}
   }
   events(){
     document.addEventListener('keydown',event=>{
       if(event.target.closest('dialog'))return;
       const modifier=event.ctrlKey||event.metaKey,key=event.key.toLowerCase();
-      if(modifier&&event.code==='Space'){event.preventDefault();this.languageCommand('completion');}
+      if(modifier&&['f','h'].includes(key)){event.preventDefault();this.openSearch(!event.shiftKey);}
+      else if(modifier&&event.code==='Space'){event.preventDefault();this.languageCommand('completion');}
       else if(event.key==='F12'||modifier&&key==='b'){event.preventDefault();this.languageCommand('definition');}
       else if(event.shiftKey&&event.key==='F6'){event.preventDefault();this.languageCommand('rename');}
       else if(event.altKey&&event.key==='F7'){event.preventDefault();this.languageCommand('references');}
@@ -92,6 +95,8 @@ export class IdeApplication {
   }
   commands(){return [
     ...['check','build','run','debug','test'].map(command=>({label:`${command[0].toUpperCase()+command.slice(1)} current project`,icon:command==='run'?'run':'code',execute:()=>this.compile(command)})),
+    {label:'Find in Files',icon:'search',execute:()=>this.openSearch(false)},
+    {label:'Replace in Files',icon:'search',execute:()=>this.openSearch(false)},
     {label:'New project file',icon:'plus',execute:()=>this.createFile()},{label:'Rename current file',icon:'file',execute:()=>this.renameFile()},
     {label:'Reset docking layout',icon:'reset',execute:()=>this.dock.reset()},{label:'Connect native Cargo',icon:'connect',execute:()=>this.cargo.connect()},
     ...['completion','definition','references','hover','rename','documentSymbol','signatureHelp'].map(command=>({label:'Rust semantic '+command,icon:'search',execute:()=>this.languageCommand(command)})),
@@ -176,6 +181,7 @@ export class IdeApplication {
   error(error){const diagnostic=error.toJSON?.()??{code:error.code??'ERROR',message:error.message??String(error),span:error.span??null,notes:error.notes??[]};this.status(`${diagnostic.code} · ${diagnostic.message}`,'error');this.problems.render([diagnostic]);this.dock.open('problems');this.runOutput.textContent=`${diagnostic.code}: ${diagnostic.message}\n${Dom.sourceLabel(diagnostic.span)}`;this.runOutput.classList.add('error');}
   stop(notify=true){clearTimeout(this.compileTimer);this.requestSerial++;this.compiler.cancel();this.execution.stop(false);this.native.cancel().catch(()=>{});if(notify)this.status('Stopped','');}
   status(message,kind=''){const node=this.$('status');node.textContent=message;node.dataset.kind=kind;}
+  openSearch(currentFile=false){const input=this.editor.textarea,text=input.value.slice(input.selectionStart,input.selectionEnd);this.dock.open('search');this.search.open(text.length<=1024?text:'',currentFile);}
   async createFile(){const path=await DialogService.ask({title:'New project file',label:'Project-relative path',value:'src/new_module.rs',confirm:'Create file'});if(path===null)return;try{this.model.create(path,path.endsWith('.rs')?'// New Rust module\n':'');}catch(error){this.error(error);}}
   async renameFile(){if(!this.model.active)return;const original=this.model.active,target=await DialogService.ask({title:'Rename file',label:'Project-relative path',value:original,message:'Renaming a file does not rewrite Rust module declarations or Cargo target paths.',confirm:'Rename'});if(target===null)return;try{this.editor.capture();this.model.rename(original,target);this.editor.clearHistory();this.editor.open(this.model.active);}catch(error){this.error(error);}}
   async removeFile(){if(!this.model.active)return;const path=this.model.active;const confirmed=await DialogService.ask({title:'Delete project file?',message:`Delete ${path} from this workspace? Export a snapshot first to keep a copy.`,input:false,confirm:'Delete file',danger:true});if(confirmed)try{this.model.remove(path);}catch(error){this.error(error);}}

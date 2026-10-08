@@ -334,6 +334,47 @@ def run():
                 select_sample('Geometry lab · traits & modules')
             case('transparent aliases, where obligations and declaration navigation', aliases)
 
+            def project_search():
+                select_sample('Generics & modules')
+                original = page.evaluate('window.ferrite.getSnapshot().files')
+                show_tool('Find in Files')
+                page.locator('#search-query').fill('helpers_print')
+                page.locator('#search-include').fill('**/*.rs')
+                page.locator('#search-find').click()
+                expect(page.locator('.search-match')).to_have_count(3)
+                declaration = page.locator('.search-match[data-source-file="src/helpers.rs"]')
+                declaration.click()
+                expect(page.locator('#active-path')).to_have_text('src/helpers.rs')
+                assert page.locator('#source').evaluate('e=>e.value.slice(e.selectionStart,e.selectionEnd)') == 'helpers_print'
+                page.locator('#search-replacement').fill('render_value')
+                page.locator('#search-preview').click()
+                expect(page.locator('#search-apply')).to_be_enabled()
+                assert page.evaluate('window.ferrite.getSnapshot().files') == original
+                expect(page.locator('.refactor-preview')).to_have_count(2)
+                splitter = page.locator('[data-resize="bottom"]')
+                splitter.focus()
+                for _ in range(10):
+                    splitter.press('ArrowUp')
+                page.screenshot(path=str(OUTPUT / 'find-replace.png'))
+                page.locator('#search-apply').click()
+                page.wait_for_function('window.ferrite.getBuild()?.unit.files.some(f => f.source.includes("render_value"))')
+                status_success()
+                run_program('Value 21\nValue Ferrite\n')
+                show_tool('Find in Files')
+                page.locator('#search-undo').click()
+                assert page.evaluate('window.ferrite.getSnapshot().files') == original
+                status_success()
+                page.locator('#search-find').click()
+                expect(page.locator('.search-match')).to_have_count(3)
+                page.locator('#search-preview').click()
+                page.locator('#source').fill(page.locator('#source').input_value() + '\n// intervening edit\n')
+                expect(page.locator('#search-apply')).to_be_disabled()
+                expect(page.locator('.search-results')).to_contain_text('Source changed')
+                select_sample('Geometry lab · traits & modules')
+                show_tool('Run')
+            case('project search navigates source, previews replacements, applies and undoes atomically', project_search)
+            page.locator('#layout-reset').click()
+
             if os.environ.get('FERRITE_NATIVE_TEST') == '1' and not MEMORY:
                 native_process = subprocess.Popen(['node', 'tools/cargo-bridge.mjs', '--trust-projects', '--origin', base.rstrip('/'), '--port', '0'], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 address_line = native_process.stdout.readline().strip()

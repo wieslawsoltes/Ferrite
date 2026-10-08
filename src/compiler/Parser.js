@@ -37,6 +37,17 @@ export class Parser {
   function expr(min=0) {
     const start=tokens[i];let left;
     if(peek()==="if"){left=conditional();}
+    else if(peek()==="match"){
+      take();const value=expr();eat("{");const arms=[];
+      while(peek()!=="}"){
+        const patternToken=tokens[i];let pattern;
+        if(peek()==="_"){take();pattern={kind:"wildcard",loc:{line:patternToken.line,column:patternToken.column,offset:patternToken.offset}};}
+        else{pattern=expr(7);if(pattern.kind!=="literal")throw Error("Only literal and wildcard match patterns are supported");}
+        eat("=>");const body=peek()==="{"?block():expr();arms.push({pattern,body,loc:{line:patternToken.line,column:patternToken.column,offset:patternToken.offset}});
+        if(peek()===",")take();else if(peek()!=="}")throw Error("Expected ',' after match arm");
+      }
+      eat("}");left=node("match",{value,arms},start);
+    }
     else if(peek()==="("){take();if(peek()===")"){take();left=node("literal",{value:null,type:"()"},start);}else{left=expr();eat(")");}}
     else if(peek()==="- "||peek()==="-"||peek()==="!"||peek()==="&"||peek()==="*"){const op=take().value;let mutable=false;if(op==="&"&&peek()==="mut"){take();mutable=true;}left=node("unary",{op,mutable,value:expr(7)},start);}
     else if(peek()==="["){take();const items=[];while(peek()!=="]"){items.push(expr());if(peek()!==",")break;take();}eat("]");left=node("array",{items},start);}

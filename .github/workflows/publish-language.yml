@@ -36,6 +36,8 @@ jobs:
               with tempfile.NamedTemporaryFile(suffix='.patch') as patch:
                   patch.write(change['patch'].encode()); patch.flush()
                   git('apply', '--index', '--whitespace=error', patch.name)
+              subprocess.run(['npm', 'run', 'build:workers'], check=True)
+              git('add', 'src/ui/workers')
               tree = git('write-tree')
               if tree != change['tree']:
                   raise SystemExit('Source tree mismatch: ' + tree)

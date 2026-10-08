@@ -1,3 +1,4 @@
+import {ModuleAssembler} from "./cargo/ModuleAssembler.js";
 // Browser-side Cargo workspace model. Cargo.toml parsing is intentionally a supported subset.
 export const starterFiles = {
 "Cargo.toml": '[package]\nname = "ferrite-demo"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\n',
@@ -32,22 +33,5 @@ export function cargoPlan(files,command="check"){
   warnings:unsupported.length?[ "Browser subset cannot resolve or download external Cargo dependencies: "+unsupported.join(", ") ]:[],
   errors};
 }
-export function mergeCrateSources(files,entry="src/main.rs"){
- const seen=new Set(),segments=[],map=[];
- function visit(path) {
-  if(seen.has(path))return;seen.add(path);
-  const source=files[path];if(typeof source!=="string")throw Error("Missing module "+path);
-  let cursor=0;
-  const pattern=/\b(?:pub\s+)?mod\s+([A-Za-z_]\w*)\s*;/g;
-  let match;while((match=pattern.exec(source))){
-   const before=source.slice(cursor,match.index);if(before.trim()){map.push({path,start:segments.reduce((n,segment)=>n+segment.length+1,0),originalOffset:cursor,length:before.length});segments.push(before);}
-   const dir=path.slice(0,path.lastIndexOf("/")+1);
-   let target=dir+match[1]+".rs";
-   if(!(target in files))target=dir+match[1]+"/mod.rs";
-   visit(target);cursor=pattern.lastIndex;
-  }
-  const tail=source.slice(cursor);if(tail.trim()){map.push({path,start:segments.join("\n").length,originalOffset:cursor,length:tail.length});segments.push(tail);}
- }
- visit(entry);return {source:segments.join("\n"),modules:[...seen],sourceMap:map};
-}
+export function mergeCrateSources(files,entry="src/main.rs"){return new ModuleAssembler(files).assemble(entry);}
 export function createProject(files=starterFiles){return structuredClone(files);}

@@ -36,6 +36,8 @@ jobs:
         env:
           FERRITE_NATIVE_TEST: '1'
         run: npm run test:browser
+      - name: Exercise agent API login, approvals, MCP commands and native PTY in Chromium
+        run: npm run test:agent:browser
       - name: Record environment-dependent compiler timings
         run: |
           mkdir -p artifacts/performance

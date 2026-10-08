@@ -6,6 +6,13 @@ export class JavaScriptEmitter {
       case "literal":return JSON.stringify(n.value);
       case "variable":return n.name;
       case "array":return "["+n.items.map(expr).join(",")+"]";
+      case "match":{
+        const arms=n.arms.map(arm=>({
+          condition:arm.pattern.kind==="wildcard"?"true":"__ferrite_match_value === "+expr(arm.pattern),
+          value:arm.body.kind==="block"?blockExpr(arm.body):expr(arm.body)
+        }));
+        return "((__ferrite_match_value)=>{"+arms.map(arm=>"if("+arm.condition+")return "+arm.value+";").join("")+"throw new Error('Non-exhaustive match');})("+expr(n.value)+")";
+      }
       case "structLiteral":return "({"+n.fields.map(f=>JSON.stringify(f.name)+":"+expr(f.value)).join(",")+"})";
       case "index":return "("+expr(n.object)+")["+expr(n.index)+"]";
       case "field":return "("+expr(n.object)+")["+JSON.stringify(n.field)+"]";

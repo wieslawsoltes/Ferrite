@@ -5,7 +5,7 @@ export class SymbolIndex {
   constructor(ast) {
     this.functions = new Map(); this.structs = new Map(); this.enums = new Map();
     this.constants = new Map(); this.traits = new Map(); this.imports = new Map(); this.impls = [];
-    this.symbols = [];
+    this.symbols = []; this.moduleRoots = new Map(); this.moduleVisibility = new Map();
     this.enums.set('Option', {kind: 'enum', name: 'Option', generics: [{name: 'T', bounds: []}],
       variants: [{name: 'Some', fields: ['T']}, {name: 'None', fields: []}], attributes: []});
     this.enums.set('Result', {kind: 'enum', name: 'Result', generics: [{name: 'T', bounds: []}, {name: 'E', bounds: []}],
@@ -16,8 +16,10 @@ export class SymbolIndex {
     for (const original of items) {
       const item = {...original, module: original.module ?? module};
       const prefix = item.module ? item.module + '::' : '';
+      this.moduleRoots.set(item.module, item.crateRoot ?? this.moduleRoots.get(item.module) ?? '');
       if (item.kind === 'mod') {
         if (item.external) throw new Diagnostic('E0583', `Module '${item.name}' needs a project file`, item.span);
+        this.moduleVisibility.set(prefix + item.name, {module: item.module, visibility: item.visibility, span: item.span});
         this.addItems(item.items, prefix + item.name); continue;
       }
       if (item.kind === 'use') {
@@ -28,7 +30,7 @@ export class SymbolIndex {
       if (item.kind === 'impl') {
         this.impls.push(item);
         this.addItems(item.methods.map(method => ({...method, owner: prefix + item.target,
-          name: `${item.target}::${method.localName}`})), item.module);
+          crateRoot: item.crateRoot, dependency: item.dependency, name: `${item.target}::${method.localName}`})), item.module);
         continue;
       }
       item.name = prefix + item.name;
@@ -40,18 +42,33 @@ export class SymbolIndex {
     }
   }
   candidates(name, module = '') {
-    if (name.startsWith('crate::')) return [name.slice(7)];
+    const root = this.moduleRoots.get(module) ?? '';
+    if (name.startsWith('crate::')) return [[root, name.slice(7)].filter(Boolean).join('::')];
     if (name.startsWith('self::')) return [module ? module + '::' + name.slice(6) : name.slice(6)];
     if (name.startsWith('super::')) return this.candidates(name.slice(7), module.split('::').slice(0, -1).join('::'));
     const parts = name.split('::'), imported = this.imports.get(module)?.get(parts[0]);
     const names = [];
-    if (imported) names.push(...this.candidates([imported, ...parts.slice(1)].join('::'), ''));
+    if (imported) {
+      const path = [imported, ...parts.slice(1)].join('::');
+      if (path.startsWith('crate::')) names.push([root, path.slice(7)].filter(Boolean).join('::'));
+      else if (path.startsWith('self::')) names.push([module, path.slice(6)].filter(Boolean).join('::'));
+      else if (path.startsWith('super::')) names.push(...this.candidates(path, module));
+      else names.push([root, path].filter(Boolean).join('::'));
+    }
     if (module) names.push(module + '::' + name);
+    if (root) names.push(root + '::' + name);
     names.push(name);
     return names;
   }
   resolve(map, name, module, node, required = true) {
-    for (const candidate of this.candidates(name, module)) if (map.has(candidate)) return map.get(candidate);
+    for (const candidate of this.candidates(name, module)) if (map.has(candidate)) {
+      const item = map.get(candidate);
+      if (item.visibility === 'private' && item.module && module !== item.module && !module.startsWith(item.module + '::')) {
+        if (required) throw new Diagnostic('E0603', `Item '${candidate}' is private`, node?.span);
+        continue;
+      }
+      return item;
+    }
     if (required) throw new Diagnostic('E0425', `Unresolved name '${name}'`, node?.span);
     return null;
   }

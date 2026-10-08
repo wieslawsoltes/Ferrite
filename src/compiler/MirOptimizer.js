@@ -24,7 +24,7 @@ export class MirOptimizer {
                 value: typeof value === 'bigint' ? value.toString() : value, span: i.span, sourceId: i.sourceId};
               constants.set(i.dest, value);
               changes.push({kind: 'constant fold', function: fn.instance, block: block.id, span: i.span, detail: `${i.op} → ${String(value)}`});
-            } else if (i.op === 'copy' && constants.has(i.value)) constants.set(i.target, constants.get(i.value));
+            } else if (i.op === 'copy') { if (constants.has(i.value)) constants.set(i.target, constants.get(i.value)); else constants.delete(i.target); }
             else if (['write', 'call', 'builtin'].includes(i.op)) constants.clear();
             else if (i.dest != null) constants.delete(i.dest);
           }

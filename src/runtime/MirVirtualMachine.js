@@ -42,7 +42,7 @@ export class MirVirtualMachine {
       default: return r.fail(`Unknown MIR operation ${instruction.op}`);
     }
   }
-  step() {
+  step({capture = true} = {}) {
     if (this.done) return this.snapshot();
     const frame = this.frames.at(-1), block = frame.blocks.get(frame.block);
     const instruction = block.instructions[frame.ip++];
@@ -69,21 +69,36 @@ export class MirVirtualMachine {
       }
     }
     if (this.trace.length < this.maxTrace) this.trace.push(this.last);
-    return this.snapshot();
+    return capture ? this.snapshot() : null;
   }
   run({breakpoints = [], skipFirst = false} = {}) {
     let first = true;
+    const initial = this.nextSpan();
+    let leavingInitialLine = skipFirst;
     while (!this.done) {
       const frame = this.frames.at(-1), block = frame.blocks.get(frame.block);
       const span = (block.instructions[frame.ip] ?? block.terminator).span;
-      if ((!first || !skipFirst) && span && breakpoints.some(b => b.file === span.file && b.line === span.line)) break;
-      first = false; this.step();
+      if (leavingInitialLine && (!span || span.file !== initial?.file || span.line !== initial?.line)) leavingInitialLine = false;
+      if (!leavingInitialLine && (!first || !skipFirst) && span && breakpoints.some(b => b.file === span.file && b.line === span.line)) break;
+      first = false; this.step({capture: false});
     }
+    return this.snapshot();
+  }
+  nextSpan() {
+    const frame = this.frames.at(-1);
+    if (!frame) return null;
+    const block = frame.blocks.get(frame.block);
+    return (block.instructions[frame.ip] ?? block.terminator).span;
+  }
+  stepLine() {
+    const initial = this.nextSpan(), depth = this.frames.length;
+    do { this.step({capture: false}); }
+    while (!this.done && this.frames.length >= depth && this.nextSpan()?.file === initial?.file && this.nextSpan()?.line === initial?.line);
     return this.snapshot();
   }
   snapshot() {
     const r = this.runtime;
-    return {done: this.done, steps: r.steps, output: r.output, last: this.last,
+    return {done: this.done, steps: r.steps, output: r.output, last: this.last, next: this.nextSpan(),
       result: this.done ? r.debug(this.result) : null,
       frames: this.frames.map(frame => ({function: frame.fn.instance, block: frame.block,
         locals: frame.fn.registers.map((register, slot) => ({slot, name: register.name, type: register.type,

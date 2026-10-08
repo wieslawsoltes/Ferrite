@@ -2,7 +2,7 @@
 export const sampleProjects={
 "Generics & modules":{
 "Cargo.toml":'[package]\nname = "generic-modules"\nversion = "0.1.0"\nedition = "2021"\n',
-"src/main.rs":'mod helpers;\nfn main() {\n    helpers_print(21u32);\n    helpers_print("Ferrite");\n}',
+"src/main.rs":'mod helpers;\nfn main() {\n    helpers::helpers_print(21u32);\n    helpers::helpers_print("Ferrite");\n}',
 "src/helpers.rs":'pub fn helpers_print<T: Display>(value: T) {\n    println!("Value {}", value);\n}'},
 "Control-flow and Fibonacci":{
 "Cargo.toml":'[package]\nname = "fibonacci"\nversion = "0.1.0"\nedition = "2021"\n',

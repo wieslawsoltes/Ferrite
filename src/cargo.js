@@ -1,22 +1,13 @@
-import {TomlParser} from "./cargo/TomlParser.js";
-import {ModuleAssembler} from "./cargo/ModuleAssembler.js";
-// Browser-side Cargo workspace model. Cargo.toml parsing is intentionally a supported subset.
+import {TomlParser} from './cargo/TomlParser.js';
+import {ModuleAssembler} from './cargo/ModuleAssembler.js';
+import {CargoWorkspace} from './cargo/CargoWorkspace.js';
+import {VirtualFileSystem} from './project/VirtualFileSystem.js';
 export const starterFiles = {
-"Cargo.toml": '[package]\nname = "ferrite-demo"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\n',
-"src/main.rs": 'fn greet<T: Display>(value: T) { println!("Hello, {}!", value); }\nfn main() { greet("Ferrite"); greet(42u32); }\n',
-"src/math.rs": 'pub fn square(x: u32) -> u32 { x * x }\n'
+  'Cargo.toml': '[package]\nname = "ferrite-demo"\nversion = "0.1.0"\nedition = "2021"\n',
+  'src/main.rs': 'mod math;\nfn main() {\n    println!("Hello, Ferrite! {}", math::square(7));\n}\n',
+  'src/math.rs': 'pub fn square(value: i32) -> i32 { value * value }\n'
 };
-export function parseManifest(source){return new TomlParser().parse(source);}
-export function cargoPlan(files,command="check"){
- const manifest=parseManifest(files["Cargo.toml"]??"");
- const errors=[...manifest.errors];
- if(!manifest.package.name)errors.push({message:"Cargo.toml requires [package].name"});
- const main=files["src/main.rs"],lib=files["src/lib.rs"];
- if(!main&&!lib)errors.push({message:"Expected src/main.rs or src/lib.rs"});
- const unsupported=Object.keys(manifest.dependencies);
- return {command,manifest,entry:main?"src/main.rs":"src/lib.rs",files:Object.keys(files),dependencies:unsupported,
-  warnings:unsupported.length?[ "Browser subset cannot resolve or download external Cargo dependencies: "+unsupported.join(", ") ]:[],
-  errors};
-}
-export function mergeCrateSources(files,entry="src/main.rs"){return new ModuleAssembler(files).assemble(entry);}
-export function createProject(files=starterFiles){return structuredClone(files);}
+export function parseManifest(source, options) { return new TomlParser().parse(source, options); }
+export function cargoPlan(files, command = 'check', options) { return new CargoWorkspace(VirtualFileSystem.validate(files)).plan(command, options); }
+export function mergeCrateSources(files, entry = 'src/main.rs') { return new ModuleAssembler(files).assemble(entry); }
+export function createProject(files = starterFiles) { return VirtualFileSystem.validate(files); }

@@ -42,7 +42,7 @@ export class SemanticAnalyzer {
     if (type.startsWith('(')) return T.split(type.slice(1, -1)).every(t => this.hasTrait(t, bound, depth + 1));
     const {name, args} = T.application(type);
     if (name === 'Vec') return bound !== 'Copy' && ['Clone', 'Debug', 'PartialEq', 'Eq'].includes(bound) && this.hasTrait(args[0], bound, depth + 1);
-    if (['Option', 'Result'].includes(name)) return args.every(t => t === '_' || this.hasTrait(t, bound, depth + 1));
+    if (['Option', 'Result'].includes(name)) return ['Copy', 'Clone', 'Debug', 'PartialEq', 'Eq'].includes(bound) && args.every(t => t !== '_' && this.hasTrait(t, bound, depth + 1));
     const shape = this.index.structs.get(name) ?? this.index.enums.get(name);
     if (shape?.attributes?.some(a => a.name === 'derive' && a.args.includes(bound))) {
       const substitution = new Map(shape.generics.map((g, i) => [g.name, args[i]]));

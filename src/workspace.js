@@ -1,3 +1,5 @@
+import {WorkspaceStore} from "./ide/WorkspaceStore.js";
+import {WorkerRunner} from "./ide/WorkerRunner.js";
 import {TokenStreamView} from "./visualizers/TokenStreamView.js";
 import {SymbolTableView} from "./visualizers/SymbolTableView.js";
 import {ProjectExporter} from "./ide/ProjectExporter.js";
@@ -13,7 +15,9 @@ import {createProject,parseManifest} from "./cargo.js";
 import {createVisualizer,renderCfg,renderInstances} from "./visualizers.js";
 const $=id=>document.getElementById(id);
 const storageKey="ferrite-workspace-v2";
-let files=createProject(),file="src/main.rs",compilation=null,stage="AST",auto=true,timer=null,worker=null,diagnostic=null;
+let files=createProject(),file="src/main.rs",compilation=null,stage="AST",auto=true,timer=null;
+const store=new WorkspaceStore(storageKey);
+const runner=new WorkerRunner(1500);
 const tree=createVisualizer($("inspector-content"),loc=>navigator.jump(loc));
 const navigator=new SourceNavigator(()=>compilation,()=>files,open,()=> $("source"));
 const callGraph=new CallGraphView($("inspector-content"),loc=>navigator.jump(loc));
@@ -36,8 +40,8 @@ const palette=new CommandPalette(document.body,()=>[
  ...Object.keys(sampleProjects).map(name=>({label:"Sample: "+name,execute:()=>chooseSample(name)})),
  ...(compilation?.stages||[]).map(s=>({label:"Compiler stage: "+s.name,execute:()=>{stage=s.name;renderStage();}}))
 ]);
-function save(){try{localStorage.setItem(storageKey,JSON.stringify({files,file,auto}));}catch{}}
-function restore(){try{const v=JSON.parse(localStorage.getItem(storageKey)||"null");if(v&&v.files&&typeof v.files==="object"){files=v.files;file=v.file in files?v.file:Object.keys(files)[0];auto=v.auto!==false;}}catch{}}
+function save(){store.write({files,file,auto});}
+function restore(){const v=store.read();if(v&&v.files&&typeof v.files==="object"){files=v.files;file=v.file in files?v.file:Object.keys(files)[0];auto=v.auto!==false;}}
 function extension(path){return path.endsWith(".rs")?"rs":path.endsWith(".toml")?"toml":"text";}
 function jump(loc,path){const p=path||"src/main.rs";if(p in files&&p!==file)open(p);const text=$("source"),lines=text.value.split("\n");let index=0;for(let i=0;i<Math.max(0,loc.line-1)&&i<lines.length;i++)index+=lines[i].length+1;index+=Math.max(0,loc.column-1);text.focus();text.setSelectionRange(index,index+1);text.scrollTop=Math.max(0,(loc.line-8)*21);}
 function open(path){if(!(path in files))return;files[file]=$("source").value;file=path;$("source").value=files[path];$("editor-file").textContent=path;$("dirty").textContent="";renderProject();save();}
@@ -66,21 +70,21 @@ function renderStage(){
 }
 function diagnostics(message){$("terminal").textContent=message;$("status").textContent=message.startsWith("error")?"Compilation failed":message;}
 function compile(run=false){
- worker?.terminate();worker=null;files[file]=$("source").value;save();
+ runner.cancel();files[file]=$("source").value;save();
  try {
   compilation=compileProject(files);
-  renderStage();diagnostics("✓ Cargo check · "+compilation.sem.instances.length+" instances · "+compilation.timings.reduce((a,b)=>a+b.ms,0).toFixed(2)+" ms");
+  renderStage();
+  const elapsed=compilation.timings.reduce((a,b)=>a+b.ms,0).toFixed(2);
+  diagnostics("✓ Cargo check · "+compilation.sem.instances.length+" instances · "+(compilation.cacheHit?"cache hit":elapsed+" ms"));
   if(run)execute();
  }catch(e){compilation=null;diagnostics("error: "+e.message);$("inspector-content").textContent=e.message;}
 }
 function execute(){
  if(!compilation)return;
- const blob=new Blob(["onmessage=()=>{\n"+compilation.js+"\n}"],{type:"text/javascript"});
- const url=URL.createObjectURL(blob);const current=new Worker(url);worker=current;URL.revokeObjectURL(url);
- const timeout=setTimeout(()=>{current.terminate();if(worker===current){worker=null;diagnostics("Execution timed out (1500 ms)");}},1500);
- current.onmessage=e=>{clearTimeout(timeout);diagnostics("cargo run\n"+String(e.data));current.terminate();if(worker===current)worker=null;};
- current.onerror=e=>{clearTimeout(timeout);diagnostics("error: "+e.message);current.terminate();if(worker===current)worker=null;};
- current.postMessage(null);
+ runner.run(compilation.js,{
+   onOutput:value=>diagnostics("cargo run\n"+value),
+   onError:message=>diagnostics("error: "+message)
+ });
 }
 function schedule(){if(!auto)return;clearTimeout(timer);timer=setTimeout(()=>compile(false),280);}
 function chooseSample(name){files=createProject(sampleProjects[name]);file="src/main.rs";$("source").value=files[file];renderProject();compile(true);}

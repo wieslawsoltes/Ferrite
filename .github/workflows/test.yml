@@ -1,20 +1,53 @@
-name: Compiler Tests
+name: Compiler and IDE Validation
+
 on:
-  push:
-    branches: [main]
   pull_request:
-concurrency:
-  group: compiler-ci-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_call:
+  workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
-  test:
+  validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node tools/check-syntax.mjs
-      - run: npm test
+      - name: Verify syntax and deterministic worker bundles
+        run: npm run check
+      - name: Run compiler, runtime, project, service and sample tests
+        run: npm test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare Chromium and the native Rust toolchain
+        run: |
+          python -m pip install playwright==1.57.0
+          python -m playwright install --with-deps chromium
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
+      - name: Exercise installed Cargo over an offline local workspace
+        run: npm run test:native
+      - name: Exercise the HTTP IDE and authenticated Cargo bridge in Chromium
+        env:
+          FERRITE_NATIVE_TEST: '1'
+        run: npm run test:browser
+      - name: Record environment-dependent compiler timings
+        run: |
+          mkdir -p artifacts/performance
+          node tools/benchmark.mjs 25 > artifacts/performance/benchmark.txt
+          node --version > artifacts/performance/environment.txt
+          cargo --version >> artifacts/performance/environment.txt
+          rustc --version >> artifacts/performance/environment.txt
+      - name: Retain screenshots and validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ferrite-validation-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

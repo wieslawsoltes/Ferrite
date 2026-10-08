@@ -2,7 +2,7 @@ name: Publish reviewed repository and parallel-build commits
 on:
   push:
     branches: ['publish/repositories-parallel-20261008']
-    paths: ['.ferrite-publish/ready.json']
+    paths: ['.ferrite-publish/ready*.json']
 permissions:
   contents: write
 concurrency:
@@ -36,19 +36,27 @@ jobs:
         run: |
           npm run check
           npm test
-      - name: Push only the real feature commits without forcing an existing branch
+      - name: Publish source objects only; workflow updates require the separate authorized connector
         shell: bash
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code --heads origin refs/heads/feat/repositories-parallel-builds; then
-            echo 'Feature branch already exists; refusing to overwrite it.' >&2
+          cp .github/workflows/test.yml "$RUNNER_TEMP/reviewed-test.yml"
+          git restore --source=3306b9db4f34c6d57a578190b85e136ff1055384 -- .github/workflows/test.yml
+          git add .github/workflows/test.yml
+          git commit --amend --no-edit
+          if git ls-remote --exit-code --heads origin refs/heads/publish/repositories-source-objects; then
+            echo 'Source-object branch already exists; refusing to overwrite it.' >&2
             exit 1
           fi
-          git push origin HEAD:refs/heads/feat/repositories-parallel-builds
+          git push origin HEAD:refs/heads/publish/repositories-source-objects
           mkdir -p artifacts/publication
           git log --format='%H %s' 3306b9db4f34c6d57a578190b85e136ff1055384..HEAD > artifacts/publication/commits.txt
-          git rev-parse HEAD^{tree} > artifacts/publication/tree.txt
-          echo "Published $(git rev-parse HEAD) with exact reviewed source tree." >> "$GITHUB_STEP_SUMMARY"
+          git rev-parse HEAD^{tree} > artifacts/publication/source-only-tree.txt
+          cp "$RUNNER_TEMP/reviewed-test.yml" .github/workflows/test.yml
+          git add .github/workflows/test.yml
+          test "$(git write-tree)" = 289bc9de730fa0fa90b27d8df69268a0e159a969
+          git write-tree > artifacts/publication/reviewed-tree.txt
+          echo "Published source objects at $(git rev-parse HEAD); final workflow change is reserved for the authorized connector." >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

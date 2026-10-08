@@ -9,7 +9,8 @@ export function compileProject(files,command="check"){
  const unit=mergeCrateSources(files,plan.entry);
  const cached=cache.get(unit.source);
  const compilation=cached??cache.set(unit.source,compile(unit.source));
- return {...compilation,cache:cache.stats,plan,unit,stages:[
+ const cacheHit=cached!==undefined;
+ return {...compilation,timings:cacheHit?[]:compilation.timings,cacheHit,cache:cache.stats,plan,unit,stages:[
  {name:"Cargo",data:plan},{name:"Modules",data:unit.modules},{name:"Tokens",data:compilation.tokens},
  {name:"AST",data:compilation.ast},{name:"HIR / Symbols",data:compilation.sem.symbols},
  {name:"Types / Traits",data:compilation.sem},{name:"MIR / CFG",data:compilation.mir},

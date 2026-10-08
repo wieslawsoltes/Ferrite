@@ -1,0 +1,38 @@
+name: Validate and commit reviewed source
+on:
+  push:
+    branches: [main]
+    paths: ['.github/rewrite/*.b64']
+permissions:
+  contents: write
+concurrency:
+  group: reviewed-source-publish
+  cancel-in-progress: false
+jobs:
+  validate-and-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Materialize hash-verified source changes
+        id: apply
+        run: node tools/apply-reviewed-bundle.mjs
+      - name: Validate all JavaScript modules
+        run: node tools/check-syntax.mjs
+      - name: Test the complete source batch
+        run: npm test
+      - name: Commit validated source atomically
+        env:
+          MESSAGE: ${{ steps.apply.outputs.message }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m "$MESSAGE"
+          git push origin HEAD:main
+          echo "Published source commit $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"

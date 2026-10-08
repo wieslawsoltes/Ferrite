@@ -1,7 +1,7 @@
-// Temporary rewrite transport. Source files are committed only after CI passes.
+// Temporary rewrite transport. Removed after the reviewed source batches are committed.
 import {readFile, writeFile, mkdir, readdir, rm, lstat} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
-import {gunzipSync} from 'node:zlib';
+import {gunzipSync, brotliDecompressSync} from 'node:zlib';
 import {dirname, resolve} from 'node:path';
 const root=process.cwd(), directory='.github/rewrite';
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -10,9 +10,17 @@ if(!bundles.length)throw Error('No source bundle found');
 const messages=[];
 for(const name of bundles){
  const path=`${directory}/${name}`;
- const encoded=await readFile(path,'utf8');
+ let encoded=await readFile(path,'utf8'), parts=[], codec='gzip', digest=null;
+ if(encoded.startsWith('{')){
+  const manifest=JSON.parse(encoded);parts=manifest.parts;codec=manifest.codec;digest=manifest.sha256;
+  if(!Array.isArray(parts)||parts.length>100||parts.some(p=>!/^\d+-\d+\.part$/.test(p)))throw Error('Invalid source parts');
+  encoded=(await Promise.all(parts.map(p=>readFile(`${directory}/${p}`,'utf8')))).join('');
+ }
  if(encoded.length>10000000)throw Error('Oversized source bundle');
- const patch=JSON.parse(gunzipSync(Buffer.from(encoded,'base64'),{maxOutputLength:25000000}));
+ const bytes=Buffer.from(encoded,'base64');
+ if(digest&&hash(bytes)!==digest)throw Error('Source transport checksum mismatch');
+ const decode=codec==='brotli'?brotliDecompressSync:gunzipSync;
+ const patch=JSON.parse(decode(bytes,{maxOutputLength:25000000}));
  if(patch.format!=='ferrite-reviewed-patch-v1'||!Array.isArray(patch.files)||patch.files.length>500)throw Error('Invalid source bundle');
  if(typeof patch.message!=='string'||/[\r\n]/.test(patch.message))throw Error('Invalid commit message');
  const seen=new Set();
@@ -31,7 +39,7 @@ for(const name of bundles){
   if(file.content===null)await rm(target);
   else{await mkdir(dirname(target),{recursive:true});await writeFile(target,file.content,'utf8');}
  }
- await rm(path);messages.push(patch.message);
+ await rm(path);for(const part of parts)await rm(`${directory}/${part}`);messages.push(patch.message);
  console.log(`Applied ${patch.files.length} hash-verified source changes from ${name}`);
 }
 if(process.env.GITHUB_OUTPUT)await writeFile(process.env.GITHUB_OUTPUT,`message=${messages.join('; ')}\n`,{flag:'a'});

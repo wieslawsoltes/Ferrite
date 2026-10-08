@@ -1,0 +1,92 @@
+import {Diagnostic} from './Diagnostic.js';
+import {TypeSystem as T} from './TypeSystem.js';
+
+/** Transparent aliases are expanded structurally in their declaration namespace.
+ * The cache belongs to one declaration index; no type result crosses revisions. */
+export class TypeResolver {
+  constructor(index, {limit = 4096, maxDepth = 64} = {}) {
+    this.index = index; this.limit = limit; this.maxDepth = maxDepth; this.cache = new Map();
+    this.expansions = new Map(); this.hits = 0; this.misses = 0; this.characters = 0; this.maxCharacters = 4000000;
+  }
+  resolve(type, module = '', self = null, parameters = new Set(), stack = [], node = null) {
+    if (typeof type !== 'string') throw new Diagnostic('F_TYPE', 'A type must have a structural name', node?.span);
+    const key = JSON.stringify([module, self, [...parameters].sort(), type]);
+    if (this.cache.has(key)) { this.hits++; return this.cache.get(key); }
+    if (stack.length > this.maxDepth) throw new Diagnostic('E0391', 'Type alias expansion exceeded the recursion budget', node?.span);
+    this.misses++;
+    const next = value => this.resolve(value, module, self, parameters, stack, node);
+    let result;
+    if (type.startsWith('impl ')) result = 'impl ' + next(type.slice(5));
+    else if (T.reference(type)) result = (type.startsWith('&mut ') ? '&mut ' : '&') + next(T.target(type));
+    else if (T.tuple(type)) result = T.tupleName(T.tuple(type).map(next));
+    else if (T.array(type)) { const {element, length} = T.array(type); result = `[${next(element)};${length}]`; }
+    else {
+      const callable = /^(Fn|FnMut|FnOnce)\((.*)\)->(.+)$/.exec(type);
+      if (callable) result = `${callable[1]}(${T.split(callable[2]).map(next).join(',')})->${next(callable[3])}`;
+      else {
+        const {name, args} = T.application(type), arguments_ = args.map(next);
+        const alias = parameters.has(name) ? null : this.find(this.index.aliases, name, module, node);
+        if (alias) {
+          if (alias.generics.length !== args.length) throw new Diagnostic('E0107', `Alias ${alias.name} expects ${alias.generics.length} type argument(s), got ${args.length}`, node?.span ?? alias.span);
+          if (stack.includes(alias.name)) throw new Diagnostic('E0391', `Recursive type alias: ${[...stack, alias.name].join(' → ')}`, node?.span ?? alias.span);
+          const declared = new Set(alias.generics.map(g => g.name));
+          const target = this.resolve(alias.target, alias.module, self, declared, [...stack, alias.name], alias);
+          result = this.substitute(target, new Map(alias.generics.map((g, i) => [g.name, arguments_[i]])), alias);
+          const usage = {alias: alias.name, arguments: arguments_, expanded: result, span: alias.span};
+          if (this.expansions.size < 512 && result.length < 8192) this.expansions.set(JSON.stringify([alias.name, arguments_]), usage);
+        } else {
+          const canonical = parameters.has(name) ? name : name === 'Self' && self ? self :
+            this.find(this.index.structs, name, module, node)?.name ?? this.find(this.index.enums, name, module, node)?.name ?? name;
+          result = canonical + (args.length ? `<${arguments_.join(',')}>` : '');
+        }
+      }
+    }
+    if (result.length > 1000000) throw new Diagnostic('F_TYPE_SIZE', 'Expanded type exceeds the size budget', node?.span);
+    const cost = key.length + result.length;
+    if (cost <= this.maxCharacters) {
+      while (this.cache.size && (this.cache.size >= this.limit || this.characters + cost > this.maxCharacters)) {
+        const first = this.cache.keys().next().value; this.characters -= first.length + this.cache.get(first).length; this.cache.delete(first);
+      }
+      this.cache.set(key, result); this.characters += cost;
+    }
+    return result;
+  }
+  substitute(type, arguments_, node) {
+    const parts = []; let offset = 0, size = 0;
+    const append = text => { size += text.length; if (size > 1000000) throw new Diagnostic('F_TYPE_SIZE', 'Expanded alias exceeds the size budget', node.span); parts.push(text); };
+    for (const match of type.matchAll(/(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*/g)) {
+      append(type.slice(offset, match.index)); append(arguments_.get(match[0]) ?? match[0]); offset = match.index + match[0].length;
+    }
+    append(type.slice(offset)); return parts.join('');
+  }
+  find(map, name, module, node) {
+    for (const candidate of this.index.candidates(name, module)) if (map.has(candidate))
+      return this.index.resolve(map, name, module, node, true);
+    return null;
+  }
+  validateKnown(type, parameters, node) {
+    const next = value => this.validateKnown(value, parameters, node);
+    if (type.startsWith('impl ')) return next(type.slice(5));
+    if (T.reference(type)) return next(T.target(type));
+    const tuple = T.tuple(type); if (tuple) { tuple.forEach(next); return; }
+    const array = T.array(type); if (array) return next(array.element);
+    const callable = /^(Fn|FnMut|FnOnce)\((.*)\)->(.+)$/.exec(type);
+    if (callable) { T.split(callable[2]).forEach(next); next(callable[3]); return; }
+    const {name, args} = T.application(type);
+    if (!parameters.has(name) && !T.numeric(name) && !['bool', 'char', 'str', 'String', 'Vec', '!', '_'].includes(name) && !this.index.structs.has(name) && !this.index.enums.has(name))
+      throw new Diagnostic('E0412', `Unknown type '${name}' in alias ${node.name}`, node.span);
+    const shape = this.index.structs.get(name) ?? this.index.enums.get(name);
+    const arity = shape?.generics?.length ?? (name === 'Vec' ? 1 : 0);
+    if (!parameters.has(name) && args.length !== arity) throw new Diagnostic('E0107', `${name} expects ${arity} type argument(s)`, node.span);
+    args.forEach(next);
+  }
+  validate() {
+    for (const alias of this.index.aliases.values()) {
+      const parameters = new Set(alias.generics.map(g => g.name));
+      if (parameters.size !== alias.generics.length) throw new Diagnostic('E0403', `Duplicate generic parameter in ${alias.name}`, alias.span);
+      const result = this.resolve(alias.target, alias.module, null, parameters, [alias.name], alias);
+      this.validateKnown(result, parameters, alias);
+    }
+  }
+  snapshot() { return {hits: this.hits, misses: this.misses, entries: this.cache.size, characters: this.characters, aliases: [...this.expansions.values()]}; }
+}

@@ -78,7 +78,7 @@ export class PatternAnalyzer {
         return;
       }
       case 'structPattern': {
-        const shape = this.analyzer.index.resolve(this.analyzer.index.structs, pattern.name, context.instance.fn.module, pattern);
+        const shape = this.analyzer.index.resolve(this.analyzer.index.structs, T.application(this.analyzer.index.type(pattern.name, context.instance.fn.module)).name, context.instance.fn.module, pattern);
         const app = T.application(type);
         if (app.name !== shape.name) throw new Diagnostic('E0308', `Pattern ${shape.name} does not match ${type}`, pattern.span);
         const substitution = new Map(shape.generics.map((g, i) => [g.name, app.args[i]]));

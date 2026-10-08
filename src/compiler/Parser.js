@@ -9,7 +9,7 @@ const BLOCK_EXPRESSIONS = new Set(['ifExpr', 'ifLet', 'match', 'block', 'loopExp
 
 /** Recursive-descent items/statements and Pratt expressions with complete source spans. */
 export class Parser {
-  constructor(tokens) { this.c = new TokenCursor(tokens); this.depth = 0; }
+  constructor(tokens) { this.c = new TokenCursor(tokens); this.depth = 0; this.typeDepth = 0; }
   static parse(tokens) { return new Parser(tokens).parse(); }
   parse() {
     const attributes = AttributeParser.read(this.c, {inner:true}), items = [];
@@ -37,6 +37,17 @@ export class Parser {
       return {name, bounds};
     });
   }
+  whereClause() {
+    const predicates = [];
+    if (!this.c.match('where')) return predicates;
+    do {
+      if (['{', '=', ';'].includes(this.c.peek().value)) break;
+      const start = this.c.peek(), type = this.type(), bounds = []; this.c.eat(':');
+      do { bounds.push(this.bound()); } while (this.c.match('+'));
+      predicates.push(this.c.node('wherePredicate', start, {type, bounds}));
+    } while (this.c.match(','));
+    return predicates;
+  }
   bound() {
     const name=this.path();
     if(['Fn','FnMut','FnOnce'].includes(name)&&this.c.match('(')) {
@@ -53,13 +64,23 @@ export class Parser {
     return path;
   }
   type() {
+    if (++this.typeDepth > 128) throw new Diagnostic('F_TYPE_DEPTH', 'Type nesting limit exceeded', this.c.peek().span);
+    try { return this.parseType(); } finally { this.typeDepth--; }
+  }
+  parseType() {
     if(this.c.match('impl'))return 'impl '+this.bound();
     if (this.c.match('&')) {
       if (this.c.peek().kind === 'lifetime') this.c.take();
       const mutable = !!this.c.match('mut');
       return '&' + (mutable ? 'mut ' : '') + this.type();
     }
-    if (this.c.match('(')) return '(' + this.list(')', () => this.type()).join(',') + ')';
+    if (this.c.match('(')) {
+      if (this.c.match(')')) return '()';
+      const first = this.type();
+      if (!this.c.match(',')) { this.c.eat(')'); return first; }
+      const rest = this.list(')', () => this.type());
+      return '(' + [first, ...rest].join(',') + (rest.length ? '' : ',') + ')';
+    }
     if (this.c.match('[')) {
       const type = this.type();
       this.c.eat(';');
@@ -75,6 +96,11 @@ export class Parser {
     const start = this.c.peek(), attributes = this.attributes();
     const visibility = this.c.match('pub') ? 'pub' : 'private';
     if (this.c.match('fn')) return [this.fn(start, {owner, trait, attributes, visibility})];
+    if (this.c.match('type')) {
+      const name = this.c.identifier(), generics = this.generics(), predicates = this.whereClause();
+      this.c.eat('='); const target = this.type(); this.c.eat(';');
+      return [this.c.node('typeAlias', start, {name, generics, target, predicates, attributes, visibility})];
+    }
     if (this.c.match('struct')) {
       const name = this.c.identifier(), generics = this.generics();
       this.c.eat('{');
@@ -146,9 +172,10 @@ export class Parser {
       return this.c.node('param', start, {name, type, mutable});
     });
     const returnType = this.c.match('->') ? this.type() : '()';
+    const predicates = this.whereClause();
     const body = this.c.match(';') ? null : this.block();
     return this.c.node('fn', start, {name: details.owner ? `${details.owner}::${localName}` : localName,
-      localName, generics, params, returnType, body, ...details});
+      localName, generics, predicates, params, returnType, body, ...details});
   }
   block() {
     const start = this.c.eat('{');
@@ -252,7 +279,7 @@ export class Parser {
             const value = this.c.match(':') ? this.expr() : this.c.node('variable', start, {name});
             return {name, value};
           });
-          left = this.c.node('structLiteral', start, {name: left.name, fields}); continue;
+          left = this.c.node('structLiteral', start, {name: left.name, fields, typeArguments: left.typeArguments}); continue;
         }
         if (this.c.match('::')) {
           this.c.eat('<'); const typeArguments = this.list('>', () => this.type());

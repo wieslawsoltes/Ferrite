@@ -1,16 +1,19 @@
+import {TypeSystem as T} from './TypeSystem.js';
+import {TypeResolver} from './TypeResolver.js';
 import {Diagnostic} from './Diagnostic.js';
 
 /** Declaration indexing and namespace resolution are independent of expression typing. */
 export class SymbolIndex {
   constructor(ast) {
     this.functions = new Map(); this.structs = new Map(); this.enums = new Map();
-    this.constants = new Map(); this.traits = new Map(); this.imports = new Map(); this.impls = [];
+    this.aliases = new Map(); this.constants = new Map(); this.traits = new Map(); this.imports = new Map(); this.impls = [];
     this.symbols = []; this.moduleRoots = new Map(); this.moduleVisibility = new Map();
     this.enums.set('Option', {kind: 'enum', name: 'Option', generics: [{name: 'T', bounds: []}],
       variants: [{name: 'Some', fields: ['T']}, {name: 'None', fields: []}], attributes: []});
     this.enums.set('Result', {kind: 'enum', name: 'Result', generics: [{name: 'T', bounds: []}, {name: 'E', bounds: []}],
       variants: [{name: 'Ok', fields: ['T']}, {name: 'Err', fields: ['E']}], attributes: []});
     this.addItems(ast.items, '');
+    this.typeResolver = new TypeResolver(this); this.typeResolver.validate();
     // Trait methods inherit the trait's visibility, not an absent `pub` on impl methods.
     for (const method of this.functions.values()) if (method.implementedTrait) {
       const trait = this.resolve(this.traits, method.implementedTrait, method.module, method, false);
@@ -39,8 +42,9 @@ export class SymbolIndex {
         continue;
       }
       item.name = prefix + item.name;
-      const target = {fn: this.functions, struct: this.structs, enum: this.enums, trait: this.traits, const: this.constants}[item.kind];
+      const target = {fn: this.functions, struct: this.structs, enum: this.enums, trait: this.traits, const: this.constants, typeAlias: this.aliases}[item.kind];
       if (!target) throw new Diagnostic('F0200', `Unindexed declaration ${item.kind}`, item.span);
+      if (['struct', 'enum', 'typeAlias', 'trait'].includes(item.kind) && [this.structs, this.enums, this.aliases, this.traits].some(map => map.has(item.name))) throw new Diagnostic('E0428', `Duplicate type declaration ${item.name}`, item.span);
       if (target.has(item.name)) throw new Diagnostic('E0428', `Duplicate declaration ${item.name}`, item.span);
       target.set(item.name, item);
       this.symbols.push({id: item.id, name: item.name, kind: item.kind, span: item.span, loc: item.loc, line: item.span?.line});
@@ -80,17 +84,16 @@ export class SymbolIndex {
   constructorFor(name, module) {
     const aliases = {Some: 'Option::Some', None: 'Option::None', Ok: 'Result::Ok', Err: 'Result::Err'};
     for (const candidate of this.candidates(aliases[name] ?? name, module)) {
-      const parts = candidate.split('::'), variantName = parts.pop(), owner = this.enums.get(parts.join('::'));
+      const parts = candidate.split('::'), variantName = parts.pop(), typeName = parts.join('::');
+      const alias = this.aliases.has(typeName) ? this.type(typeName, module) : null;
+      const application = alias ? T.application(alias) : null;
+      const owner = this.enums.get(application?.name ?? typeName);
       const variant = owner?.variants.find(v => v.name === variantName);
-      if (variant) return {owner, variant, tag: `${owner.name}::${variant.name}`};
+      if (variant) return {owner, variant, typeArguments: application?.args, tag: `${owner.name}::${variant.name}`};
     }
     return null;
   }
-  type(type, module, self = null) {
-    return type.replace(/(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*/g, token => {
-      if (token === 'Self' && self) return self;
-      return this.resolve(this.structs, token, module, null, false)?.name ??
-        this.resolve(this.enums, token, module, null, false)?.name ?? token;
-    });
+  type(type, module, self = null, parameters = new Set(), node = null) {
+    return this.typeResolver.resolve(type, module, self, parameters, [], node);
   }
 }

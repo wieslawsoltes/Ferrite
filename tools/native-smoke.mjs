@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import {compile} from '../src/engine.js';
+import {MirVirtualMachine} from '../src/runtime/MirVirtualMachine.js';
+import {WebAssemblyRuntime} from '../src/runtime/WebAssemblyRuntime.js';
 import {WorkspaceEditPlan} from '../src/ui/model/WorkspaceEditPlan.js';
 import {SourceFile} from '../src/project/SourceFile.js';
 /** Real installed Cargo integration; no fake process and no registry dependencies. */
@@ -43,6 +46,21 @@ try{
     ['fn main(){let mut n=1;let mut f=||{n+=1;n};println!("{} {}",f(),f());}', '2 3']
   ];
   for(const [source,expected] of browserLanguageCases){files['app/src/main.rs']=source;const actual=await run('run',{args:['--package','smoke-app']});assert.equal(actual.exitCode,0);assert(actual.stdout.includes(expected));}
+  const conformanceCases = [
+    ['enum Event{Left(i32),Right(i32),Idle} fn f(e:Event)->i32{let (Event::Left(v)|Event::Right(v))=e else{return 0;};v}fn main(){println!("{} {} {}",f(Event::Left(3)),f(Event::Right(5)),f(Event::Idle));}', '3 5 0\n'],
+    ['fn main(){for value in [Some(4),None,Some(8)]{let Some(n)=value else{continue;};println!("accepted {}",n);}}', 'accepted 4\naccepted 8\n'],
+    ['fn classify(n:u8)->i32{match n{0..=127=>1,128..=255=>2}}fn main(){println!("{} {}",classify(4),classify(200));}', '1 2\n'],
+    ['type Pair<T>=(T,T);fn first<T>(v:Pair<T>)->T where T:Copy{v.0}fn main(){let p:Pair<u32>=(7,8);println!("{}",first(p));}', '7\n'],
+    ['struct Point{x:i32}type P=Point;type R=Result<u32,i32>;fn main(){let P{x}=P{x:4};let n=R::Ok(9);println!("{} {}",x,match n{R::Ok(v)=>v,R::Err(_)=>0});}', '4 9\n']
+  ];
+  for(const [source,expected] of conformanceCases){
+    const browser=compile(source),interpreted=new MirVirtualMachine(browser.optimizedMir,{entry:browser.entry}).run().output;
+    const wasm=new WebAssemblyRuntime(browser.wasm).run().output;
+    // Compare only program stdout. JSON-mode Cargo also writes compiler records to stdout.
+    files['app/src/main.rs']=source;const actual=await run('run',{json:false,args:['--package','smoke-app']});
+    assert.equal(actual.exitCode,0,actual.stderr);assert.equal(actual.stdout,expected);
+    assert.equal(interpreted,actual.stdout);assert.equal(wasm,actual.stdout);
+  }
   files['app/src/main.rs']='pub fn doubled(value:i32)->i32 {value*2}\nfn main(){println!("{}", doubled(21));}\n';
   const lspFile='app/src/main.rs';
   const position=(needle,delta=1)=>{const p=new SourceFile(lspFile,files[lspFile]).position(files[lspFile].lastIndexOf(needle)+delta);return {line:p.line-1,character:p.column-1};};

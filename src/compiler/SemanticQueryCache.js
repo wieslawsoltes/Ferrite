@@ -12,11 +12,11 @@ export class SemanticQueryCache {
   clear() { this.entries.clear(); this.characters = 0; this.beginBuild(); }
   static environment(index) {
     const signature = fn => ({name: fn.name, module: fn.module, owner: fn.owner, visibility: fn.visibility,
-      generics: fn.generics, params: fn.params.map(p => ({name: p.name, type: p.type, mutable: p.mutable})),
+      generics: fn.generics, predicates: fn.predicates, params: fn.params.map(p => ({name: p.name, type: p.type, mutable: p.mutable})),
       returnType: fn.returnType, async: !!fn.async, attributes: fn.attributes, implementedTrait: fn.implementedTrait});
     const map = value => [...value].sort(([a], [b]) => a.localeCompare(b));
     return JSON.stringify({functions: map(index.functions).map(([name, fn]) => [name, signature(fn)]),
-      structs: map(index.structs), enums: map(index.enums), constants: map(index.constants),
+      aliases: map(index.aliases), structs: map(index.structs), enums: map(index.enums), constants: map(index.constants),
       traits: map(index.traits), imports: map(index.imports), moduleRoots: map(index.moduleRoots),
       moduleVisibility: map(index.moduleVisibility),
       impls: index.impls.map(impl => ({...impl, methods: impl.methods?.map(signature)}))});

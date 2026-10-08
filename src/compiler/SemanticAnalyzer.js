@@ -35,7 +35,7 @@ export class SemanticAnalyzer {
       this.instantiate(fn, types, [], fn);
     }
     this.closures.finish();
-    return {patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
+    return {typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
       symbols: this.index.symbols, structures: [...this.index.structs.values()],
       enums: [...this.index.enums.values()], warnings: this.warnings, entry: this.entryKey,
       capabilities: {ownership: 'conservative whole-local analysis', traits: 'concrete impls and built-in bounds'}};
@@ -69,7 +69,7 @@ export class SemanticAnalyzer {
     if (fn.params.length !== argumentTypes.length) throw new Diagnostic('E0061', `${fn.name} expects ${fn.params.length} argument(s), got ${argumentTypes.length}`, node.span);
     const substitution = new Map(fn.generics.map((g, i) => [g.name, explicit[i] ?? null]));
     if (explicit.length > fn.generics.length) throw new Diagnostic('E0107', 'Too many generic arguments', node.span);
-    fn.params.forEach((p, i) => T.unify(this.index.type(p.type, fn.module, fn.owner), argumentTypes[i], substitution, node));
+    fn.params.forEach((p, i) => T.unify(this.index.type(p.type, fn.module, fn.owner, new Set(substitution.keys()), node), argumentTypes[i], substitution, node));
     for (const parameter of fn.generics) {
       const type = substitution.get(parameter.name);
       if (!type || /\b_\b/.test(type)) throw new Diagnostic('E0282', `Cannot infer ${parameter.name} in ${fn.name}`, node.span);
@@ -79,7 +79,15 @@ export class SemanticAnalyzer {
         this.obligations.push({type, trait: bound, status: 'satisfied', span: node.span});
       }
     }
-    const key = fn.name + '<' + fn.generics.map(g => substitution.get(g.name)).join(',') + '>';
+    for (const predicate of fn.predicates ?? []) {
+      const type = this.index.type(T.substitute(predicate.type, substitution), fn.module, fn.owner);
+      for (const rawBound of predicate.bounds) {
+        const bound = this.index.type(T.substitute(rawBound, substitution), fn.module, fn.owner);
+        if (!this.hasTrait(type, bound)) throw new Diagnostic('E0277', `Where-clause obligation failed: ${type}: ${bound}`, node.span, [{message: 'Required by this bound', span: predicate.span}]);
+        this.obligations.push({type, trait: bound, status: 'satisfied', span: node.span, declaration: predicate.span});
+      }
+    }
+    const key = fn.name + '<'  + fn.generics.map(g => substitution.get(g.name)).join(',') + '>';
     const existing = this.instances.get(key);
     if (existing) return existing;
     if (++this.depth > 128 || this.instances.size >= this.maxInstances) throw new Diagnostic('F0201', 'Generic instantiation budget exceeded', node.span);
@@ -157,7 +165,10 @@ export class SemanticAnalyzer {
         if (constructor && !constructor.variant.fields.length) { type = this.construct(node, constructor, [], ctx, expected); break; }
         throw new Diagnostic('E0425', `Unresolved identifier '${node.name}'`, node.span);
       }
-      case 'tuple': type = '(' + node.items.map(n => this.infer(n, ctx)).join(',') + ')'; break;
+      case 'tuple': {
+        const hints = T.tuple(expected ?? '') ?? [];
+        type = T.tupleName(node.items.map((n, i) => this.infer(n, ctx, hints[i]))); break;
+      }
       case 'array': {
         const hint = /^\[(.+);\d+\]$/.exec(expected ?? '')?.[1];
         const itemType = node.items.length ? this.infer(node.items[0], ctx, hint) : hint;
@@ -175,8 +186,11 @@ export class SemanticAnalyzer {
         node.length = count; type = `[${element};${count}]`; break;
       }
       case 'structLiteral': {
-        const shape = this.index.resolve(this.index.structs, node.name, ctx.instance.fn.module, node);
-        const substitution = new Map(shape.generics.map(g => [g.name, null]));
+        const alias = this.index.resolve(this.index.aliases, node.name, ctx.instance.fn.module, node, false);
+        const resolvedAlias = alias ? this.index.type(node.name + (node.typeArguments?.length ? '<' + node.typeArguments.join(',') + '>' : ''), ctx.instance.fn.module, null, new Set(), node) : null;
+        const aliasApplication = resolvedAlias ? T.application(resolvedAlias) : null;
+        const shape = this.index.resolve(this.index.structs, aliasApplication?.name ?? node.name, ctx.instance.fn.module, node);
+        const substitution = new Map(shape.generics.map((g, i) => [g.name, aliasApplication?.args[i] ?? null]));
         if (expected) {
           const application = T.application(expected);
           if (application.name === shape.name) shape.generics.forEach((g, i) => substitution.set(g.name, application.args[i]));
@@ -289,7 +303,7 @@ export class SemanticAnalyzer {
           if (wildcard) this.warnings.push({severity: 'warning', code: 'W_UNREACHABLE', message: 'Unreachable match arm', span: arm.span});
           if (arm.guard) T.unify('bool', this.infer(arm.guard, ctx, 'bool'), new Map(), arm.guard);
           else { patterns.push(arm.pattern); wildcard = this.coverage.analyze(patterns, scrutinee, node).exhaustive; }
-          const value = this.infer(arm.body, ctx, expected);
+          const value = this.infer(arm.body, ctx, expected ?? (result === '!' ? null : result));
           try { result = T.join(result, value, arm.body); }
           catch { throw new Diagnostic('E0308', `Incompatible match arm types ${result} and ${value}`, arm.body.span); }
           ctx.pop();
@@ -316,7 +330,7 @@ export class SemanticAnalyzer {
   construct(node, constructor, args, ctx, expected) {
     const {owner, variant, tag} = constructor;
     if (variant.fields.length !== args.length) throw new Diagnostic('E0061', `${tag} expects ${variant.fields.length} values`, node.span);
-    const hint = T.application(expected ?? ''), substitution = new Map(owner.generics.map((g, i) => [g.name, hint.name === owner.name ? hint.args[i] : null]));
+    const hint = T.application(expected ?? ''), substitution = new Map(owner.generics.map((g, i) => [g.name, constructor.typeArguments?.[i] ?? (hint.name === owner.name ? hint.args[i] : null)]));
     args.forEach((arg, i) => {
       const formal = T.substitute(variant.fields[i], substitution);
       T.unify(formal, this.infer(arg, ctx, substitution.has(formal) ? null : formal), substitution, arg);
@@ -419,7 +433,7 @@ export class SemanticAnalyzer {
     const explicit = (callee.typeArguments ?? []).map(t => this.normalize(t, ctx));
     const mapping = new Map(fn.generics.map((g, i) => [g.name, explicit[i] ?? null]));
     const types = node.args.map((arg, i) => {
-      const formal = fn.params[i] && this.index.type(T.substitute(fn.params[i].type, mapping), fn.module, fn.owner);
+      const formal = fn.params[i] && this.index.type(T.substitute(fn.params[i].type, mapping), fn.module, fn.owner, new Set(mapping.keys()), node);
       return this.infer(arg, ctx, formal && !mapping.has(formal) ? formal : null);
     });
     const instance = this.instantiate(fn, types, explicit, node);

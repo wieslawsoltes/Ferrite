@@ -323,6 +323,17 @@ def run():
                 select_sample('Geometry lab · traits & modules')
             case('pattern matrix witnesses, source links and let-else control flow', pattern_proofs)
 
+            def aliases():
+                select_sample('Type aliases · where clauses & structural inference')
+                run_program('first = 7\npayload = 9\n')
+                page.locator('#stage-select').select_option(label='Types / Traits')
+                expect(page.locator('#inspector-content')).to_contain_text('Transparent type alias')
+                expect(page.locator('#inspector-content')).to_contain_text('types::Pair')
+                page.locator('#inspector-content .source-link').first.click()
+                assert page.locator('#source').evaluate('e => e.selectionEnd > e.selectionStart')
+                select_sample('Geometry lab · traits & modules')
+            case('transparent aliases, where obligations and declaration navigation', aliases)
+
             if os.environ.get('FERRITE_NATIVE_TEST') == '1' and not MEMORY:
                 native_process = subprocess.Popen(['node', 'tools/cargo-bridge.mjs', '--trust-projects', '--origin', base.rstrip('/'), '--port', '0'], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 address_line = native_process.stdout.readline().strip()

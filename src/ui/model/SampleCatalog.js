@@ -48,6 +48,27 @@ fn rectangle_area() {
     assert_eq!(r.area(), 42);
 }
 `}},
+    {name:'Type aliases · where clauses & structural inference',expected:'first = 7\npayload = 9\n',files:{
+      'Cargo.toml':manifest('type-aliases'),
+      'src/main.rs':`mod types;
+use types::Pair;
+use types::Outcome;
+use std::fmt::Display;
+
+fn first<T>(pair: Pair<T>) -> T where T: Copy { pair.0 }
+fn report<T>(value: T) where T: Display + Copy { println!("first = {}", value); }
+
+fn main() {
+    let pair: Pair<u32> = (7, 8);
+    report(first(pair));
+    let outcome = Outcome::Ok(9);
+    let Outcome::Ok(value) = outcome else { return; };
+    println!("payload = {}", value);
+}
+`,
+      'src/types.rs':`pub type Pair<T> = (T, T);
+pub type Outcome = Result<u32, i32>;
+`}},
     {name:'Pattern matrix · destructuring & coverage',expected:'left 7\nright 11\nmiddle 5\n',files:{
       'Cargo.toml':manifest('pattern-matrix'),
       'src/main.rs':`enum Event { Left(i32), Right(i32), Idle }

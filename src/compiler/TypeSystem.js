@@ -17,12 +17,24 @@ export class TypeSystem {
     if (text.slice(start)) parts.push(text.slice(start));
     return parts;
   }
+  static tuple(type) { return type.startsWith('(') && type.endsWith(')') ? this.split(type.slice(1, -1)) : null; }
+  static tupleName(items) { return '(' + items.join(',') + (items.length === 1 ? ',' : '') + ')'; }
+  static array(type) {
+    if (!type.startsWith('[') || !type.endsWith(']')) return null;
+    let depth = 0;
+    for (let i = 1; i < type.length - 1; i++) {
+      if ('<(['.includes(type[i])) depth++;
+      else if ('>)]'.includes(type[i])) depth--;
+      else if (type[i] === ';' && depth === 0) return {element: type.slice(1, i), length: type.slice(i + 1, -1)};
+    }
+    return null;
+  }
   static application(type) {
     const i = type.indexOf('<');
     return i < 0 ? {name: type, args: []} : {name: type.slice(0, i), args: this.split(type.slice(i + 1, -1))};
   }
   static substitute(type, map) {
-    return type.replace(/[A-Za-z_]\w*/g, token => map.get(token) ?? token);
+    return type.replace(/(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*/g, token => map.get(token) ?? token);
   }
   static unify(expected, actual, generics = new Map(), node = null) {
     if (expected === actual || actual === '!' || expected === '_') return actual;
@@ -35,6 +47,17 @@ export class TypeSystem {
       if (expected.startsWith('&mut ') && !actual.startsWith('&mut ')) this.mismatch(expected, actual, node);
       this.unify(this.target(expected), this.target(actual), generics, node);
       return expected;
+    }
+    const et = this.tuple(expected), at = this.tuple(actual);
+    if ((et || at) && (!et || !at || et.length !== at.length)) this.mismatch(expected, actual, node);
+    if (et && at && et.length === at.length) {
+      et.forEach((type, i) => this.unify(type, at[i], generics, node));
+      return this.substitute(expected, generics);
+    }
+    const ea = this.array(expected), aa = this.array(actual);
+    if ((ea || aa) && (!ea || !aa || ea.length !== aa.length)) this.mismatch(expected, actual, node);
+    if (ea && aa && ea.length === aa.length) {
+      this.unify(ea.element, aa.element, generics, node); return this.substitute(expected, generics);
     }
     const e = this.application(expected), a = this.application(actual);
     if (e.name === a.name && e.args.length && e.args.length === a.args.length) {

@@ -1,0 +1,76 @@
+name: Publish reviewed repository and parallel-build commits
+on:
+  push:
+    branches: ['publish/repositories-parallel-20261008']
+    paths: ['.ferrite-publish/ready.json']
+permissions:
+  contents: write
+concurrency:
+  group: ferrite-repositories-publication
+  cancel-in-progress: false
+jobs:
+  publish-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Restore the six reviewed commits without publishing transport files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .ferrite-publish/restore.mjs "$RUNNER_TEMP/restore-ferrite.mjs"
+          : > "$RUNNER_TEMP/ferrite-source.b64"
+          for i in $(seq -w 1 11); do cat ".ferrite-publish/$i.part" >> "$RUNNER_TEMP/ferrite-source.b64"; done
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --detach 3306b9db4f34c6d57a578190b85e136ff1055384
+          node "$RUNNER_TEMP/restore-ferrite.mjs" "$RUNNER_TEMP/ferrite-source.b64" db94d11b7e44c05404cde2accc7b5c1f142409c186ec583d335aa80485f7f989
+          test "$(git rev-list --count 3306b9db4f34c6d57a578190b85e136ff1055384..HEAD)" = 6
+          test "$(git rev-parse HEAD^{tree})" = 289bc9de730fa0fa90b27d8df69268a0e159a969
+      - name: Verify syntax bundles and all compiler tests
+        run: |
+          npm run check
+          npm test
+      - name: Push only the real feature commits without forcing an existing branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin refs/heads/feat/repositories-parallel-builds; then
+            echo 'Feature branch already exists; refusing to overwrite it.' >&2
+            exit 1
+          fi
+          git push origin HEAD:refs/heads/feat/repositories-parallel-builds
+          mkdir -p artifacts/publication
+          git log --format='%H %s' 3306b9db4f34c6d57a578190b85e136ff1055384..HEAD > artifacts/publication/commits.txt
+          git rev-parse HEAD^{tree} > artifacts/publication/tree.txt
+          echo "Published $(git rev-parse HEAD) with exact reviewed source tree." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install browser and real Rust toolchain
+        run: |
+          python -m pip install playwright==1.57.0
+          python -m playwright install --with-deps chromium
+          rustup toolchain install stable --profile minimal --component rustfmt --component rust-analyzer --component rust-src
+          rustup default stable
+      - name: Validate installed Cargo and semantic tooling
+        run: npm run test:native
+      - name: Validate real repositories full applications and Cargo parallelism
+        run: npm run test:repositories
+      - name: Validate HTTP IDE and authenticated native bridge in Chromium
+        env:
+          FERRITE_NATIVE_TEST: '1'
+        run: npm run test:browser
+      - name: Retain publication and acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repositories-parallel-publication
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

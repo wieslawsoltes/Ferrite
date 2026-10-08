@@ -38,10 +38,18 @@ export class InspectorView {
       case 'modules':this.modules(stage.data);break;
       case 'expansions':for(const item of stage.data)this.card(item.name,`Built-in macro → ${item.intrinsic}`,item.span);break;
       case 'optimizations':for(const item of stage.data)this.card(item.kind,`${item.function} / ${item.block}${item.detail?' · '+item.detail:''}`,item.span);break;
+      case 'queries':this.queries(stage.data);break;
       case 'verification':this.card('MIR verified',`${stage.data.functions} functions · ${stage.data.blocks} blocks · register initialization and control-flow contracts checked`,null,'success');break;
       default:this.tree.render(stage.data);
     }
     if(!this.content.childNodes.length)Dom.empty(this.content,stage.kind==='optimizations'?'No local optimizations changed this program.':'No entries in this stage.');this.registry.highlight(this.selection.value);
+  }
+  queries(data){
+    if(!data){Dom.empty(this.content,'No query data for this compilation.');return;}
+    this.caption.textContent=data.projectCacheHit?'Exact project cache hit — showing the dependency graph from the original build.':`${data.hits} reused queries · ${data.misses} evaluated queries · exact-content dependency keys`;
+    const nodes=data.nodes.map(n=>({id:n.id,title:n.id,span:n.span,lines:[],badge:n.cacheHit?'reused':'evaluated'}));
+    const ids=new Set(nodes.map(n=>n.id));const edges=data.nodes.flatMap(n=>n.dependencies.filter(d=>ids.has(d)).map(d=>({from:n.id,to:d,label:'depends on'})));
+    this.graph.render(nodes,edges,nodes.find(n=>n.id.startsWith('mir:main'))?.id??nodes[0]?.id);
   }
   card(title,detail,span,kind=''){const card=Dom.element('section','inspection-card '+kind),header=Dom.element('div','card-heading',title);this.registry.bind(header,span);card.append(header);if(detail)card.append(Dom.element('p','card-detail',detail));this.content.append(card);return card;}
   table(headers,rows){const table=Dom.element('table','data-table'),head=Dom.element('thead'),tr=Dom.element('tr');for(const title of headers)tr.append(Dom.element('th','',title));head.append(tr);const body=Dom.element('tbody');for(const row of rows){const line=Dom.element('tr');for(const value of row.cells)line.append(Dom.element('td','',value));this.registry.bind(line,row.span);body.append(line);}table.append(head,body);this.content.append(table);return table;}

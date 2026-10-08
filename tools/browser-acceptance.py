@@ -112,12 +112,12 @@ def run():
 
             def stages():
                 names = page.locator('#stage-select option').all_text_contents()
-                assert len(names) == 16, names
+                assert len(names) == 17, names
                 for name in names:
                     page.locator('#stage-select').select_option(label=name)
                     expect(page.locator('#inspector-content')).not_to_be_empty()
                 assert page.locator('#inspector-content .generated-line').count() > 100
-            case('all 16 compiler stage adapters render', stages)
+            case('all 17 compiler stage adapters render', stages)
 
             def source_navigation():
                 page.locator('#stage-select').select_option(label='Tokens')

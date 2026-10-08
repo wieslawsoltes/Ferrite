@@ -3,11 +3,13 @@ import {TypeSystem as T} from './TypeSystem.js';
 import {SymbolIndex} from './SymbolIndex.js';
 import {FunctionContext} from './FunctionContext.js';
 import {FormatParser} from './FormatParser.js';
+import {SemanticQueryCache} from './SemanticQueryCache.js';
 
 /** Monomorphized typed HIR. Every local has an identity independent of its spelling. */
 export class SemanticAnalyzer {
-  constructor(ast, {entry = 'main', mode = 'run', maxInstances = 2048} = {}) {
+  constructor(ast, {entry = 'main', mode = 'run', maxInstances = 2048, queryCache = null} = {}) {
     this.index = new SymbolIndex(ast);
+    this.queryCache = queryCache; this.environment = queryCache ? SemanticQueryCache.environment(this.index) : null;
     this.instances = new Map(); this.obligations = []; this.warnings = [];
     this.entry = entry; this.mode = mode; this.maxInstances = maxInstances; this.depth = 0;
     this.constantStack = new Set();
@@ -69,6 +71,18 @@ export class SemanticAnalyzer {
     if (existing) return existing;
     if (++this.depth > 128 || this.instances.size >= this.maxInstances) throw new Diagnostic('F0201', 'Generic instantiation budget exceeded', node.span);
     if (!fn.body) throw new Diagnostic('E0046', `Function ${fn.name} has no implementation`, fn.span);
+    const query = this.queryCache?.lookup('type', JSON.stringify([this.environment, fn, argumentTypes, explicit]), {id: key, span: fn.span});
+    if (query?.value) {
+      const instance = structuredClone(query.value.instance); this.instances.set(key, instance);
+      query.node.dependencies = query.value.dependencies.map(d => `type:${d.key}`);
+      for (const dependency of query.value.dependencies) {
+        const current = this.index.functions.get(dependency.name);
+        if (!current) throw new Diagnostic('F_QUERY', 'A cached callee disappeared from the declaration environment', fn.span);
+        this.instantiate(current, dependency.argumentTypes, dependency.explicit, {span: dependency.span});
+      }
+      this.warnings.push(...structuredClone(query.value.warnings)); this.depth--; return instance;
+    }
+    const warningStart = this.warnings.length;
     const copy = structuredClone(fn);
     const instance = {key, name: fn.name, fn: copy, substitution, typeArguments: Object.fromEntries(substitution),
       returnType: this.index.type(T.substitute(fn.returnType, substitution), fn.module, fn.owner), calls: [], locals: []};
@@ -79,6 +93,16 @@ export class SemanticAnalyzer {
     T.unify(instance.returnType, actual, new Map(), copy.body);
     instance.locals = ctx.locals;
     delete instance.substitution;
+    if (query) {
+      const dependencies = instance.calls.map(call => {
+        const target = this.instances.get(call.to);
+        return {key: target.key, name: target.name, argumentTypes: target.fn.params.map(p => p.type),
+          explicit: target.fn.generics.map(g => target.typeArguments[g.name]), span: call.span};
+      });
+      query.node.dependencies = dependencies.map(d => `type:${d.key}`);
+      const warnings = this.warnings.slice(warningStart).filter(w => w.span?.file === fn.span?.file && w.span.start >= fn.span.start && w.span.end <= fn.span.end);
+      this.queryCache.store(query, {instance, dependencies, warnings});
+    }
     this.depth--;
     return instance;
   }

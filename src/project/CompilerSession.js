@@ -1,3 +1,4 @@
+import {SemanticQueryCache} from '../compiler/SemanticQueryCache.js';
 import {compile} from '../engine.js';
 import {Diagnostic} from '../compiler/Diagnostic.js';
 import {CallGraphBuilder} from '../compiler/CallGraphBuilder.js';
@@ -8,14 +9,15 @@ import {VirtualFileSystem as V} from './VirtualFileSystem.js';
 
 /** Independent project compilation session. Caches syntax by file, semantics by exact project. */
 export class CompilerSession {
-  constructor() { this.syntax = new FileParserCache(); this.results = new Map(); this.hits = 0; this.misses = 0; this.keyCharacters = 0; }
+  constructor() { this.queries = new SemanticQueryCache(); this.syntax = new FileParserCache(); this.results = new Map(); this.hits = 0; this.misses = 0; this.keyCharacters = 0; }
   static freeze(value) {
     if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
     for (const child of Object.values(value)) this.freeze(child);
     return Object.freeze(value);
   }
-  clear() { this.syntax.clear(); this.results.clear(); this.keyCharacters = 0; this.hits = 0; this.misses = 0; }
+  clear() { this.queries.clear(); this.syntax.clear(); this.results.clear(); this.keyCharacters = 0; this.hits = 0; this.misses = 0; }
   compile(input, command = 'check', options = {}) {
+    this.queries.beginBuild();
     const start = performance.now(), files = V.validate(input), cargo = new CargoWorkspace(files), plan = cargo.plan(command, options);
     if (plan.errors.length) throw new Diagnostic('C0001', plan.errors.map(d => d.message).join('; '), plan.errors[0]?.span);
     if (plan.dependencies.length) throw new Diagnostic('C0002', `External Cargo dependencies require the native Cargo backend: ${plan.dependencies.join(', ')}`, plan.graph.find(e => e.to.startsWith('registry:') || e.spec.git)?.span);
@@ -50,7 +52,7 @@ export class CompilerSession {
       moduleInfo = resolver.result;
       const tokens = moduleInfo.files.flatMap(file => file.tokens);
       const source = files[plan.entry];
-      compilation = compile(source, {...options, file: plan.entry, ast, tokens, mode});
+      compilation = compile(source, {...options, file: plan.entry, ast, tokens, mode, queryCache: this.queries});
       syntaxStats = {reusedFiles: moduleInfo.files.filter(f => f.cached).length, parsedFiles: moduleInfo.files.filter(f => !f.cached).length};
       const declarations = new Map();
       const visit = (items, namespace = '') => { for (const item of items) {
@@ -84,6 +86,7 @@ export class CompilerSession {
       {name: 'Optimized MIR', kind: 'cfg', data: compilation.optimizedMir},
       {name: 'Optimizations', kind: 'optimizations', data: compilation.optimizations},
       {name: 'Call Graph', kind: 'callgraph', data: CallGraphBuilder.build(compilation.ast, compilation.sem.instances)},
+      {name: 'Incremental queries', kind: 'queries', data: hit ? {...compilation.queries, projectCacheHit: true} : compilation.queries},
       {name: 'JavaScript', kind: 'code', data: {code: compilation.js, mappings: compilation.generatedMap}}
     ];
     return {...compilation, tests, stages, plan, cacheHit: !!hit, cache: {hits: this.hits, misses: this.misses, entries: this.results.size, ...syntaxStats},

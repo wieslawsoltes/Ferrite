@@ -23,8 +23,12 @@ export function compile(source, options = {}) {
   const ast = options.ast ?? pass('Parse', () => parse(tokens));
   const expansion = pass('Expand macros', () => MacroExpander.expand(ast));
   const semantic = pass('Types and instances', () => SemanticAnalyzer.analyze(expansion.ast, options));
-  const ownership = pass('Ownership', () => OwnershipAnalyzer.analyze(semantic));
-  const mir = pass('Lower MIR', () => MirLowerer.lower(semantic));
+  const perInstance = (stage, action) => semantic.instances.map(instance => {
+    const run = () => action({...semantic, instances: [instance]})[0];
+    return options.queryCache ? options.queryCache.run(stage, JSON.stringify(instance), {id: instance.key, span: instance.fn.span, dependencies: [`type:${instance.key}`]}, run) : run();
+  });
+  const ownership = pass('Ownership', () => perInstance('ownership', s => OwnershipAnalyzer.analyze(s)));
+  const mir = pass('Lower MIR', () => perInstance('mir', s => MirLowerer.lower(s)));
   const verification = pass('Verify MIR', () => MirVerifier.verify(mir));
   const optimized = options.optimize === false ? {functions: mir, changes: []} : pass('Optimize MIR', () => MirOptimizer.optimize(mir));
   const emitted = pass('Emit JavaScript', () => new JavaScriptEmitter(optimized.functions, {entry: semantic.entry ?? null, runtime: options.runtime}).build());
@@ -34,5 +38,5 @@ export function compile(source, options = {}) {
   return {version: '0.5.0', tokens, ast, expanded: expansion.ast, expansions: expansion.expansions,
     hir: semantic.instances.map(({key, fn}) => ({instance: key, body: fn.body, span: fn.span})), sem, ownership, mir,
     optimizedMir: optimized.functions, optimizations: optimized.changes, verification, js: emitted.code,
-    generatedMap: emitted.sourceMap, entry: semantic.entry, timings, diagnostics: semantic.warnings};
+    generatedMap: emitted.sourceMap, entry: semantic.entry, queries: options.queryCache?.snapshot() ?? null, timings, diagnostics: semantic.warnings};
 }

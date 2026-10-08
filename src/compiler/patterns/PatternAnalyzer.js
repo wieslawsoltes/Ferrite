@@ -9,6 +9,18 @@ export class PatternAnalyzer {
     pattern.type = type;
     switch (pattern.kind) {
       case 'wildcard': return;
+      case 'restPattern': throw new Diagnostic('E0797', "'..' is only valid within an array, tuple or tuple-variant pattern", pattern.span);
+      case 'atPattern': {
+        this.analyze(pattern.binder, type, context, mutable, bindings, names, reuse);
+        if (pattern.binder.kind !== 'bindingPattern') throw new Diagnostic('E0530', "Expected a new binding before '@'", pattern.binder.span);
+        this.analyze(pattern.pattern, type, context, mutable, bindings, names, reuse);
+        const copy = this.analyzer.hasTrait(type, 'Copy');
+        if (!copy && this.hasNonCopyBinding(pattern.pattern)) {
+          throw new Diagnostic('E0382', "An '@' pattern cannot move both the whole value and a non-Copy part", pattern.span);
+        }
+        pattern.binder.copy = copy;
+        return;
+      }
       case 'bindingPattern': {
         const index = this.analyzer.index;
         const constant = index.resolve(index.constants, pattern.name, context.instance.fn.module, pattern, false);
@@ -47,6 +59,12 @@ export class PatternAnalyzer {
       }
       case 'rangePattern': {
         if (!T.integer(type) && type !== 'char') throw new Diagnostic('E0029', 'Range patterns require integer or character endpoints', pattern.span);
+        const bits = type.endsWith('size') ? 32 : Number(type.slice(1));
+        const signed = type[0] === 'i';
+        const min = type === 'char' ? '\0' : String(signed ? -(1n << BigInt(bits - 1)) : 0n);
+        const max = type === 'char' ? String.fromCodePoint(0x10ffff) : String((1n << BigInt(bits - (signed ? 1 : 0))) - 1n);
+        if (!pattern.from) pattern.from = {kind: 'literal', value: min, type, span: pattern.span};
+        if (!pattern.to) { pattern.to = {kind: 'literal', value: max, type, span: pattern.span}; pattern.inclusive = true; }
         for (const endpoint of [pattern.from, pattern.to]) {
           T.unify(type, this.analyzer.infer(endpoint, context, type), new Map(), endpoint);
           if (endpoint.kind !== 'literal') throw new Diagnostic('F_PATTERN_CONST', 'Range endpoints currently require literal constants', endpoint.span);
@@ -73,8 +91,18 @@ export class PatternAnalyzer {
       }
       case 'tuplePattern': {
         const parts = type.startsWith('(') ? T.split(type.slice(1, -1)) : [];
-        if (parts.length !== pattern.items.length) throw new Diagnostic('E0527', 'Tuple pattern arity does not match', pattern.span);
+        this.expandRest(pattern, parts.length, 'E0527');
         pattern.items.forEach((p, i) => this.analyze(p, parts[i], context, mutable, bindings, names, reuse));
+        return;
+      }
+      case 'arrayPattern': {
+        const array = T.array(type);
+        if (!array) throw new Diagnostic('E0529', `Array pattern cannot match ${type}`, pattern.span);
+        const length = Number(array.length);
+        if (!Number.isSafeInteger(length) || length < 0 || length > 100000) throw new Diagnostic('F_PATTERN_BUDGET', 'Array pattern exceeds the compiler element budget', pattern.span);
+        this.expandRest(pattern, length, 'E0527', true);
+        for (const item of pattern.items) this.analyze(item, array.element, context, mutable, bindings, names, reuse);
+        if (pattern.restBinding) this.analyze(pattern.restBinding.binder, `[${array.element};${pattern.restBinding.length}]`, context, mutable, bindings, names, reuse);
         return;
       }
       case 'structPattern': {
@@ -98,7 +126,7 @@ export class PatternAnalyzer {
         const constructor = this.analyzer.index.constructorFor(pattern.name, context.instance.fn.module);
         const app = T.application(type);
         if (!constructor || constructor.owner.name !== app.name) throw new Diagnostic('E0532', `Pattern ${pattern.name} does not match ${type}`, pattern.span);
-        if (constructor.variant.fields.length !== pattern.items.length) throw new Diagnostic('E0023', 'Variant pattern arity mismatch', pattern.span);
+        this.expandRest(pattern, constructor.variant.fields.length, 'E0023');
         const substitution = new Map(constructor.owner.generics.map((g, i) => [g.name, app.args[i]]));
         pattern.variant = constructor.tag;
         pattern.items.forEach((p, i) => this.analyze(p, T.substitute(constructor.variant.fields[i], substitution), context, mutable, bindings, names, reuse));
@@ -107,4 +135,31 @@ export class PatternAnalyzer {
       default: throw new Diagnostic('F_PATTERN', `Pattern '${pattern.kind}' has no type rule`, pattern.span);
     }
   }
+
+  /** Rest syntax is normalized once; predicates/coverage operate on typed projections. */
+  expandRest(pattern, arity, code, array = false) {
+    const restIndices = pattern.items.flatMap((p, i) => p.kind === 'restPattern' || p.kind === 'atPattern' && p.pattern.kind === 'restPattern' ? [i] : []);
+    if (restIndices.length > 1) throw new Diagnostic('E0528', "Only one '..' may occur in a sequence pattern", pattern.span);
+    if (!restIndices.length) {
+      if (pattern.items.length !== arity) throw new Diagnostic(code, 'Pattern arity does not match the value', pattern.span);
+      return;
+    }
+    const index = restIndices[0], rest = pattern.items[index], length = arity - pattern.items.length + 1;
+    if (length < 0) throw new Diagnostic(code, 'Pattern has more elements than the value', pattern.span);
+    if (rest.kind === 'atPattern') {
+      if (!array) throw new Diagnostic('E0308', "A binding to '..' is only valid in an array pattern", rest.span);
+      pattern.restBinding = {binder: rest.binder, start: index, length};
+    }
+    pattern.restSpan = rest.span;
+    pattern.items = [...pattern.items.slice(0, index), ...Array.from({length}, (_, i) => ({kind: 'wildcard', id: `${rest.id}:rest:${i}`, span: rest.span})), ...pattern.items.slice(index + 1)];
+  }
+
+  hasNonCopyBinding(pattern) {
+    if (pattern.binding && !this.analyzer.hasTrait(pattern.binding.type, 'Copy')) return true;
+    if (pattern.kind === 'atPattern') return this.hasNonCopyBinding(pattern.binder) || this.hasNonCopyBinding(pattern.pattern);
+    if (pattern.items?.some(p => this.hasNonCopyBinding(p))) return true;
+    if (pattern.fields?.some(f => this.hasNonCopyBinding(f.pattern))) return true;
+    return pattern.restBinding ? this.hasNonCopyBinding(pattern.restBinding.binder) : false;
+  }
+
 }

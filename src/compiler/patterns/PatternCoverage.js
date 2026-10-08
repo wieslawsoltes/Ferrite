@@ -14,17 +14,19 @@ export class PatternCoverage {
   }
 
   analyze(patterns, type, node) {
-    this.states = 0;
+    this.states = 0; this.witnessCache = new Map();
     this.node = node;
     const witness = this.uncovered(patterns.map(pattern => [pattern]), [type]);
     return {exhaustive: witness === null, witness: witness?.[0] ?? null, states: this.states};
   }
 
   wild(pattern) {
+    if (pattern?.kind === 'atPattern') return this.wild(pattern.pattern);
     return !pattern || pattern.kind === 'wildcard' || pattern.kind === 'bindingPattern';
   }
 
   alternatives(pattern) {
+    if (pattern?.kind === 'atPattern') return this.alternatives(pattern.pattern);
     return pattern?.kind === 'orPattern' ? pattern.items.flatMap(p => this.alternatives(p)) : [pattern];
   }
 
@@ -63,6 +65,12 @@ export class PatternCoverage {
       return enumeration.variants.map(variant => ({kind: 'variant', key: `${enumeration.name}::${variant.name}`,
         types: variant.fields.map(t => this.index.type(T.substitute(t, substitution), enumeration.module))}));
     }
+    const array = T.array(type);
+    if (array) {
+      const length = Number(array.length);
+      if (!Number.isSafeInteger(length) || length < 0 || length > 100000) throw new Diagnostic('F_PATTERN_BUDGET', 'Array pattern exceeds the compiler element budget', this.node?.span);
+      return [{kind: 'array', types: Array(length).fill(array.element)}];
+    }
     if (type.startsWith('(')) return [{kind: 'tuple', types: T.split(type.slice(1, -1))}];
     const structure = this.index.structs.get(app.name);
     if (structure) {
@@ -75,6 +83,7 @@ export class PatternCoverage {
   }
 
   specialize(pattern, constructor) {
+    if (pattern?.kind === 'atPattern') return this.specialize(pattern.pattern, constructor);
     if (this.wild(pattern)) return constructor.types.map(() => null);
     if (constructor.kind === 'literal') return pattern.kind === 'literal' && pattern.value === constructor.key ? [] : null;
     if (constructor.kind === 'interval') {
@@ -86,6 +95,7 @@ export class PatternCoverage {
       return null;
     }
     if (constructor.kind === 'variant') return pattern.kind === 'variantPattern' && pattern.variant === constructor.key ? pattern.items : null;
+    if (constructor.kind === 'array') return pattern.kind === 'arrayPattern' ? pattern.items : null;
     if (constructor.kind === 'tuple') return pattern.kind === 'tuplePattern' ? pattern.items : null;
     if (constructor.kind === 'struct' && pattern.kind === 'structPattern' && pattern.name === constructor.key) {
       return constructor.fields.map(name => pattern.fields.find(f => f.name === name)?.pattern ?? null);
@@ -95,6 +105,7 @@ export class PatternCoverage {
 
   describe(constructor, fields) {
     if (constructor.kind === 'variant') return constructor.key + (fields.length ? `(${fields.join(', ')})` : '');
+    if (constructor.kind === 'array') return `[${fields.slice(0, 32).join(', ')}${fields.length > 32 ? ', ..' : ''}]`;
     if (constructor.kind === 'tuple') return `(${fields.join(', ')}${fields.length === 1 ? ',' : ''})`;
     if (constructor.kind === 'struct') return `${constructor.key} { ${constructor.fields.map((name, i) => `${name}: ${fields[i]}`).join(', ')} }`;
     if (constructor.kind === 'interval') return constructor.type === 'char' ? JSON.stringify(String.fromCodePoint(Number(constructor.lo))) : String(constructor.lo);
@@ -102,12 +113,42 @@ export class PatternCoverage {
     return '_';
   }
 
+  defaultWitness(type, active = new Set()) {
+    if (this.witnessCache.has(type)) return this.witnessCache.get(type);
+    // Recursive by-value constructors cannot create their own inhabitants.
+    if (active.has(type)) return null;
+    if (++this.states > this.maxStates || active.size > this.maxDepth) throw new Diagnostic('F_PATTERN_BUDGET', 'Pattern witness exceeds the configured budget', this.node?.span);
+    active.add(type);
+    try {
+      for (const constructor of this.constructors(type, [])) {
+        const fields = constructor.types.map(t => this.defaultWitness(t, active));
+        if (fields.some(f => f === null)) continue;
+        const witness = this.describe(constructor, fields);
+        this.witnessCache.set(type, witness);
+        return witness;
+      }
+      return null;
+    } finally { active.delete(type); }
+  }
+
   uncovered(matrix, types, depth = 0) {
     if (++this.states > this.maxStates || depth > this.maxDepth) {
       throw new Diagnostic('F_PATTERN_BUDGET', 'Pattern coverage proof exceeds the configured budget; simplify the patterns', this.node?.span);
     }
     if (!types.length) return matrix.length ? null : [];
+    if (!matrix.length) {
+      const witness = types.map(type => this.defaultWitness(type));
+      return witness.some(w => w === null) ? null : witness;
+    }
     if (matrix.some(row => row.every(p => this.wild(p)))) return null;
+    // Unconstrained columns cannot distinguish rows. Skip them in a single pass,
+    // rather than branching through every scalar of a large rest pattern.
+    let skipped = 0;
+    while (skipped < types.length && matrix.length && matrix.every(row => this.wild(row[skipped]))) skipped++;
+    if (skipped) {
+      const witness = this.uncovered(matrix.map(row => row.slice(skipped)), types.slice(skipped), depth);
+      return witness === null ? null : [...Array(skipped).fill('_'), ...witness];
+    }
     const rows = matrix.flatMap(row => this.alternatives(row[0]).map(first => [first, ...row.slice(1)]));
     for (const constructor of this.constructors(types[0], rows.map(row => row[0]))) {
       const specialized = [];

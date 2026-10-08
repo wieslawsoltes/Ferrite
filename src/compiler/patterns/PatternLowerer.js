@@ -4,7 +4,16 @@ export class PatternLowerer {
 
   bind(pattern, value, node = pattern) {
     const ir = this.ir;
-    if (pattern.binding) ir.emit('write', {place: {slot: pattern.binding.slot, path: []}, value}, node);
+    if (pattern.binding) {
+      if (pattern.copy) { const cloned = ir.register(pattern.type, pattern); ir.move(cloned, value, pattern, true); value = cloned; }
+      ir.emit('write', {place: {slot: pattern.binding.slot, path: []}, value}, node);
+    }
+    if (pattern.kind === 'atPattern') { this.bind(pattern.binder, value); this.bind(pattern.pattern, value); return; }
+    if (pattern.restBinding) {
+      const {binder, start, length} = pattern.restBinding;
+      const values = Array.from({length}, (_, i) => ir.emit('get', {value, field: String(start + i), index: null, deref: false, copy: false}, binder, pattern.items[start + i].type));
+      this.bind(binder, ir.emit('aggregate', {form: 'array', values}, binder, binder.type));
+    }
     if (pattern.kind === 'orPattern') {
       const choose = index => {
         const alternative = pattern.items[index];
@@ -17,8 +26,8 @@ export class PatternLowerer {
     } else if (pattern.kind === 'structPattern') {
       for (const field of pattern.fields) this.bind(field.pattern,
         ir.emit('get', {value, field: field.name, index: null, deref: false, copy: false}, field.pattern, field.pattern.type));
-    } else if (pattern.kind === 'tuplePattern') {
-      pattern.items.forEach((p, i) => this.bind(p, ir.emit('get', {value, field: String(i), index: null, deref: false, copy: false}, p, p.type)));
+    } else if (['tuplePattern', 'arrayPattern'].includes(pattern.kind)) {
+      pattern.items.forEach((p, i) => { if (p.kind !== 'wildcard') this.bind(p, ir.emit('get', {value, field: String(i), index: null, deref: false, copy: false}, p, p.type)); });
     } else if (pattern.kind === 'variantPattern') {
       pattern.items.forEach((p, i) => this.bind(p, ir.emit('payload', {value, index: i}, p, p.type)));
     }
@@ -26,6 +35,7 @@ export class PatternLowerer {
 
   test(pattern, value) {
     const ir = this.ir;
+    if (pattern.kind === 'atPattern') return this.test(pattern.pattern, value);
     if (['wildcard', 'bindingPattern'].includes(pattern.kind)) return ir.literal(true, 'bool', pattern);
     if (pattern.kind === 'literal') return ir.emit('binary', {operator: '==', left: value,
       right: ir.literal(pattern.value, pattern.type, pattern), operandType: pattern.type}, pattern, 'bool');
@@ -43,14 +53,14 @@ export class PatternLowerer {
     let result = ir.literal(true, 'bool', pattern), projections;
     if (pattern.kind === 'structPattern') projections = pattern.fields.map(field => ({pattern: field.pattern,
       read: () => ir.emit('get', {value, field: field.name, index: null}, field.pattern, field.pattern.type)}));
-    else if (pattern.kind === 'tuplePattern') projections = pattern.items.map((p, i) => ({pattern: p,
+    else if (['tuplePattern', 'arrayPattern'].includes(pattern.kind)) projections = pattern.items.map((p, i) => ({pattern: p,
       read: () => ir.emit('get', {value, field: String(i), index: null}, p, p.type)}));
     else {
       const tag = ir.emit('tag', {value}, pattern, '&str');
       result = ir.emit('binary', {operator: '==', left: tag, right: ir.literal(pattern.variant, '&str', pattern), operandType: '&str'}, pattern, 'bool');
       projections = pattern.items.map((p, i) => ({pattern: p, read: () => ir.emit('payload', {value, index: i}, p, p.type)}));
     }
-    for (const projection of projections) result = ir.conditional(result,
+    for (const projection of projections.filter(p => !['wildcard', 'bindingPattern'].includes(p.pattern.kind))) result = ir.conditional(result,
       () => this.test(projection.pattern, projection.read()), () => ir.literal(false, 'bool', projection.pattern), projection.pattern, 'bool');
     return result;
   }

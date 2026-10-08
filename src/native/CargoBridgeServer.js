@@ -1,3 +1,4 @@
+import {RepositoryBridgeRouter} from './repository/RepositoryBridgeRouter.js';
 import {RustAnalyzerSession} from './lsp/RustAnalyzerSession.js';
 import {createServer} from 'node:http';
 import {randomBytes, timingSafeEqual} from 'node:crypto';
@@ -5,8 +6,9 @@ import {NativeCargoRunner} from './NativeCargoRunner.js';
 
 /** Opt-in, bearer-authenticated loopback bridge. Native projects must be trusted. */
 export class CargoBridgeServer {
-  constructor({origins = ['http://127.0.0.1:8080', 'http://localhost:8080'], runner = new NativeCargoRunner(), language = new RustAnalyzerSession(), token = randomBytes(32).toString('hex')} = {}) {
+  constructor({origins = ['http://127.0.0.1:8080', 'http://localhost:8080'], runner = new NativeCargoRunner(), language = new RustAnalyzerSession(), token = randomBytes(32).toString('hex'), repositories = {}} = {}) {
     this.origins = new Set(origins.map(value => new URL(value).origin)); this.runner = runner;this.language=language;this.languageActive=null; this.token = token;
+    this.repositories = new RepositoryBridgeRouter(this, repositories);
     this.active = null; this.server = createServer((request, response) => this.handle(request, response));
     this.server.requestTimeout = 15000; this.server.headersTimeout = 10000;
   }
@@ -17,7 +19,9 @@ export class CargoBridgeServer {
   async body(request) {
     const chunks = []; let bytes = 0;
     for await (const chunk of request) { bytes += chunk.length; if (bytes > 12 * 1024 * 1024) throw Error('Request exceeds 12 MiB'); chunks.push(chunk); }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('Expected a JSON object');
+    return value;
   }
   reply(response, code, value) { response.writeHead(code, {'Content-Type': 'application/json', 'Cache-Control': 'no-store'}); response.end(JSON.stringify(value)); }
   async handle(request, response) {
@@ -32,9 +36,10 @@ export class CargoBridgeServer {
     if (request.method === 'OPTIONS') { response.writeHead(204); response.end(); return; }
     if (!this.authorized(request)) return this.reply(response, 401, {error: 'A valid bridge bearer token is required'});
     if (request.method === 'GET' && request.url === '/v1/capabilities') return this.reply(response, 200, {
-      backend: 'native-cargo', protocol: 1, commands: [...NativeCargoRunner.commands], busy: !!this.active, languageServer:{backend:'rust-analyzer',methods:[...RustAnalyzerSession.methods],lazy:true},
+      backend: 'native-cargo', protocol: 1, repositories: this.repositories.capabilities(), commands: [...NativeCargoRunner.commands], busy: !!this.active, languageServer:{backend:'rust-analyzer',methods:[...RustAnalyzerSession.methods],lazy:true},
       warning: 'Native Cargo, build scripts and programs execute with the local user permissions. This is not a sandbox.'
     });
+    if (request.url.startsWith('/v1/repository/')) return this.repositories.handle(request, response);
     if(request.method==='POST'&&request.url==='/v1/lsp')return this.languageRequest(request,response);
     if (request.method === 'POST' && request.url === '/v1/cancel') {
       this.active?.controller.abort(); return this.reply(response, 200, {cancelled: !!this.active});
@@ -49,11 +54,14 @@ export class CargoBridgeServer {
     const emit = value => { if (!response.destroyed) response.write(JSON.stringify(value) + '\n'); };
     response.writeHead(200, {'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'});
     const disconnected = () => { if (!response.writableEnded) controller.abort(); }; response.on('close', disconnected);
-    const operation = this.runner.run({files: input.files}, input.command, {
+    const operation = (async () => {
+      const lease = await this.repositories.manager.budget.acquire(input.jobs, controller.signal);
+      try { return await this.runner.run({files: input.files}, input.command, {
+      jobs: lease.jobs, toolchain: input.toolchain ?? '',
       args: input.args ?? [], json: input.json === true, offline: input.offline === true, locked: input.locked === true,
       timeoutMs: Math.min(600000, Math.max(1000, Number(input.timeoutMs) || 120000)), signal: controller.signal,
       onEvent: event => emit({type: 'log', ...event})
-    });
+    }); } finally { lease.release(); } })();
     this.active = {controller, operation};
     try { emit({type: 'result', result: await operation}); }
     catch (error) { emit({type: 'error', message: error.message}); }
@@ -78,6 +86,7 @@ export class CargoBridgeServer {
   async close() {
     if (this.active) { this.active.controller.abort(); try { await this.active.operation; } catch {} }
     if(this.languageActive){this.languageActive.controller.abort();try{await this.languageActive.operation;}catch{}}
+    await this.repositories.dispose();
     await this.language.dispose();
     this.server.closeAllConnections(); await new Promise(resolve => this.server.close(resolve)); await this.runner.dispose();
   }

@@ -4,11 +4,21 @@ import {StringDecoder} from 'node:string_decoder';
 /** Shell-free child-process lifecycle with bounded logs and cancellation before cleanup. */
 export class ProcessRunner {
   constructor({spawnProcess = spawn} = {}) { this.spawnProcess = spawnProcess; }
-  run(executable, args, {cwd, env = process.env, timeoutMs = 120000, maxOutputBytes = 8 * 1024 * 1024, signal, onEvent = () => {}} = {}) {
+  run(executable, args, {cwd, env = process.env, timeoutMs = 120000, maxOutputBytes = 8 * 1024 * 1024, signal, onEvent = () => {}, onInput = null} = {}) {
     if (!Array.isArray(args) || args.some(a => typeof a !== 'string' || a.includes('\0'))) return Promise.reject(Error('Invalid process arguments'));
     if (signal?.aborted) return Promise.resolve({exitCode: 130, stdout: '', stderr: '', signal: null, cancelled: true, timedOut: false});
     return new Promise((resolve, reject) => {
-      const group = process.platform !== 'win32', child = this.spawnProcess(executable, args, {cwd, env, shell: false, detached: group, stdio: ['ignore', 'pipe', 'pipe']});
+      const group = process.platform !== 'win32', child = this.spawnProcess(executable, args, {cwd, env, shell: false, detached: group, stdio: [onInput ? 'pipe' : 'ignore', 'pipe', 'pipe']});
+      if (onInput && child.stdin) {
+        child.stdin.on('error', () => {});
+        onInput(text => {
+          if (text === null) { child.stdin.end(); return; }
+          if (typeof text !== 'string' || Buffer.byteLength(text) > 65536) throw Error('Input must be text up to 64 KiB');
+          if (child.stdin.destroyed || child.stdin.writableEnded) throw Error('Native stdin is closed');
+          if (child.stdin.writableLength > 65536) throw Error('Native stdin backpressure: wait before sending more input');
+          child.stdin.write(text);
+        });
+      }
       const decoders = {stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8')}, output = {stdout: '', stderr: ''};
       let bytes = 0, timedOut = false, cancelled = false, overflow = false, closed = false, forceTimer;
       const send = name => {

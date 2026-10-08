@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, mkdir, writeFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {ProcessRunner} from '../src/native/ProcessRunner.js';
 import {RepositoryManager} from '../src/native/repository/RepositoryManager.js';
 const root=await mkdtemp(join(tmpdir(),'ferrite-native-acceptance-')),processRunner=new ProcessRunner(),manager=new RepositoryManager({allowedRoots:[root],jobs:2});
@@ -36,5 +37,12 @@ try{
   }
   assert.equal(results[0],results[1]);
   await manager.close(session.id);
+  const example=fileURLToPath(new URL('../examples/native-workspace/',import.meta.url));
+  const checkedIn=new RepositoryManager({allowedRoots:[example],jobs:2});
+  try{let repository=await checkedIn.open({kind:'local',path:example,trust:true});const tested=await checkedIn.run({...repository,command:'test',json:true,jobs:2,args:['--workspace']});assert.equal(tested.exitCode,0,tested.stderr);}finally{await checkedIn.dispose();}
+  if(process.env.FERRITE_REGISTRY_TEST==='1'){
+    const registryRoot=fileURLToPath(new URL('../examples/registry-app/',import.meta.url));const online=new RepositoryManager({allowedRoots:[registryRoot],jobs:2});
+    try{const repository=await online.open({kind:'local',path:registryRoot,trust:true});const result=await online.run({...repository,command:'run',json:true,jobs:2});assert.equal(result.exitCode,0,result.stderr);assert.equal(JSON.parse(result.programOutput).answer,42);console.log('PASS optional live registry dependencies');}finally{await online.dispose();}
+  }
   console.log('PASS installed Cargo: Git + external path dependency, procedural macro, build.rs, binary asset, stdin, jobs 1/2 output parity and actual timing report');
 }finally{await manager.dispose();await rm(root,{recursive:true,force:true});}

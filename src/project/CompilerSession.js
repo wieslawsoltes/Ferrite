@@ -62,7 +62,7 @@ export class CompilerSession {
       visit(ast.items);
       tests = compilation.sem.instances.filter(i => declarations.get(i.name)?.attributes?.some(a => a.name === 'test')).map(i => ({name: i.name, instance: i.key, span: i.span,
         ignore: declarations.get(i.name).attributes.some(a => a.name === 'ignore'), shouldPanic: declarations.get(i.name).attributes.some(a => a.name === 'should_panic')}));
-      compilation.timings.unshift({name: 'Lex files', ms: moduleInfo.files.reduce((n, f) => n + f.lexMs, 0)}, {name: 'Parse files', ms: moduleInfo.files.reduce((n, f) => n + f.parseMs, 0)});
+      compilation.timings.unshift({name: 'Lex files', ms: moduleInfo.files.reduce((n, f) => n + (f.cached ? 0 : f.lexMs), 0)}, {name: 'Parse files', ms: moduleInfo.files.reduce((n, f) => n + (f.cached ? 0 : f.parseMs), 0)});
       this.results.set(key, CompilerSession.freeze({compilation, moduleInfo, tests, syntaxStats})); this.keyCharacters += key.length;
       while (this.results.size > 8 || this.keyCharacters > 8_000_000) {
         const oldest = this.results.keys().next().value; this.keyCharacters -= oldest.length; this.results.delete(oldest);

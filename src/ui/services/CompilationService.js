@@ -20,7 +20,7 @@ export class CompilationService {
         worker.onmessageerror = () => { if (this.worker === worker) this.fail(Error('Compiler response could not be decoded')); };
       }
       this.timer = setTimeout(() => this.fail(Error('Compiler time budget exceeded')), this.deadline);
-      this.worker.postMessage({id: task.id, files: task.files, command: task.command, options: task.options, revision: task.revision});
+      this.worker.postMessage({id: task.id, files: task.files, command: task.command, options: task.options, revision: task.revision, parserWorkerUrl: new URL('../workers/parse-worker.bundle.js', import.meta.url).href});
     } catch (error) { this.fail(error); }
   }
 

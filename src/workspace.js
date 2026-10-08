@@ -1,3 +1,5 @@
+import {TokenStreamView} from "./visualizers/TokenStreamView.js";
+import {SymbolTableView} from "./visualizers/SymbolTableView.js";
 import {ProjectExporter} from "./ide/ProjectExporter.js";
 import {EditorGutter} from "./ide/EditorGutter.js";
 import {ProjectTree} from "./ide/ProjectTree.js";
@@ -15,6 +17,8 @@ let files=createProject(),file="src/main.rs",compilation=null,stage="AST",auto=t
 const tree=createVisualizer($("inspector-content"),loc=>navigator.jump(loc));
 const navigator=new SourceNavigator(()=>compilation,()=>files,open,()=> $("source"));
 const callGraph=new CallGraphView($("inspector-content"),loc=>navigator.jump(loc));
+const tokenView=new TokenStreamView($("inspector-content"),loc=>navigator.jump(loc));
+const symbolView=new SymbolTableView($("inspector-content"),loc=>navigator.jump(loc));
 const gutter=new EditorGutter($("gutter"),$("source"),()=>compile(true));
 const projectTree=new ProjectTree($("project-tree"),path=>{open(path);schedule();});
 const cargoWindow=new CargoToolWindow($("cargo-toolwindow"),()=>files,command=>{
@@ -50,7 +54,9 @@ function renderStage(){
  for(const s of compilation.stages){const b=document.createElement("button");b.className="tab"+(s.name===stage?" active":"");b.textContent=s.name;b.onclick=()=>{stage=s.name;renderStage();};$("inspector-tabs").append(b);}
  const data=compilation.stages.find(s=>s.name===stage)?.data;
  const root=$("inspector-content");
- if(stage==="MIR / CFG")renderCfg(root,data,visitSelection);
+ if(stage==="Tokens")tokenView.render(data);
+ else if(stage==="HIR / Symbols")symbolView.render(data);
+ else if(stage==="MIR / CFG")renderCfg(root,data,visitSelection);
  else if(stage==="Call Graph")callGraph.render(data);
  else if(stage==="Generic Instances")renderInstances(root,data,visitSelection);
  else if(stage==="JavaScript"){const pre=document.createElement("pre");pre.className="code-view";pre.textContent=data;root.replaceChildren(pre);}

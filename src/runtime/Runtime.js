@@ -46,6 +46,19 @@ export class Runtime {
       case '||': return a || b;
     }
     if (this.integer(type) && ['/', '%'].includes(op) && b === 0n) this.fail('Division by zero', 'R_DIV_ZERO');
+    if (this.integer(type) && ['/', '%'].includes(op) && b === -1n && a === this.bounds(type).min && this.bounds(type).signed)
+      this.fail(`Integer overflow for ${type}`, 'R_OVERFLOW');
+    if (['<<', '>>'].includes(op)) {
+      const bits = BigInt(this.bounds(type).bits);
+      if (b < 0n || b >= bits) {
+        if (this.overflow !== 'wrapping') this.fail('Shift count exceeds the integer width', 'R_OVERFLOW');
+        b = BigInt.asUintN(this.bounds(type).bits, b) % bits;
+      }
+      // Shift truncation is defined even in checked mode; only the count overflows.
+      return this.normalize(op === '<<' ? a << b : a >> b, type, true);
+    }
+    if (type === 'bool' && ['&', '|', '^'].includes(op))
+      return op === '&' ? a && b : op === '|' ? a || b : a !== b;
     let result;
     switch (op) {
       case '+': result = a + b; break;
@@ -66,6 +79,9 @@ export class Runtime {
     return this.fail(`Invalid unary operator ${op}`);
   }
   cast(value, target) {
+    if (target === 'char') return String.fromCodePoint(Number(value));
+    if (typeof value === 'string') value = BigInt(value.codePointAt(0));
+    if (typeof value === 'boolean') value = value ? 1n : 0n;
     if (!this.integer(target)) return target === 'f32' ? Math.fround(Number(value)) : Number(value);
     if (typeof value === 'bigint') return this.normalize(value, target, true);
     const range = this.bounds(target);

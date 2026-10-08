@@ -4,7 +4,7 @@ import {TokenCursor} from './TokenCursor.js';
 import {AttributeParser} from './AttributeParser.js';
 
 const PRECEDENCE = {'||': 1, '&&': 2, '|': 3, '^': 4, '&': 5, '==': 6, '!=': 6,
-  '<': 7, '>': 7, '<=': 7, '>=': 7, '+': 8, '-': 8, '*': 9, '/': 9, '%': 9};
+  '<': 6, '>': 6, '<=': 6, '>=': 6, '<<': 7, '>>': 7, '+': 8, '-': 8, '*': 9, '/': 9, '%': 9};
 const BLOCK_EXPRESSIONS = new Set(['ifExpr', 'ifLet', 'match', 'block', 'loopExpr']);
 
 /** Recursive-descent items/statements and Pratt expressions with complete source spans. */
@@ -69,6 +69,7 @@ export class Parser {
   }
   parseType() {
     if(this.c.match('impl'))return 'impl '+this.bound();
+    if (this.c.is('&&')) this.c.split('&');
     if (this.c.match('&')) {
       if (this.c.peek().kind === 'lifetime') this.c.take();
       const mutable = !!this.c.match('mut');
@@ -217,7 +218,7 @@ export class Parser {
         body.push(this.c.node('for', start, {name: pattern.name, pattern, from, to, inclusive, then})); continue;
       }
       const value = this.expr();
-      if (['=', '+=', '-=', '*=', '/=', '%='].includes(this.c.peek().value)) {
+      if (['=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '<<=', '>>='].includes(this.c.peek().value)) {
         const op = this.c.take().value, rhs = this.expr(); this.c.eat(';');
         body.push(this.c.node('assign', start, {target: value, op, value: rhs}));
       } else if (this.c.match(';')) body.push(this.c.node('expression', start, {value}));
@@ -360,6 +361,10 @@ export class Parser {
       return this.c.node('array', start, {items});
     }
     if (['true', 'false'].includes(start.value)) { this.c.take(); return this.c.node('literal', start, {value: start.value === 'true', type: 'bool'}); }
+    if (start.kind === 'byte') {
+      this.c.take(); return this.c.node('literal', start, {value: String(Lexer.decode(start.value).charCodeAt(0)), type: 'u8', suffix: 'u8'});
+    }
+    if (start.kind === 'byteString') throw new Diagnostic('F_BYTE_STRING', 'Byte-string references require browser static allocation support; use native Cargo', start.span);
     if (start.kind === 'string' || start.kind === 'char') {
       this.c.take(); const value = Lexer.decode(start.value);
       if (start.kind === 'char' && [...value].length !== 1) throw new Diagnostic('E0762', 'A char must contain one Unicode scalar', start.span);

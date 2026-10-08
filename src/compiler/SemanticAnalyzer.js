@@ -237,8 +237,10 @@ export class SemanticAnalyzer {
       case 'unary': {
         // Negate literal magnitudes before range checking, including i32::MIN.
         if (node.op === '-' && node.value.kind === 'literal' && typeof node.value.value === 'string') {
-          const literal = {...node.value, value: '-' + node.value.value};
+          const magnitude = node.value.value;
+          const literal = {...node.value, value: /^0[xbo]/i.test(magnitude) ? (-BigInt(magnitude)).toString() : '-' + magnitude};
           type = this.infer(literal, ctx, expected);
+          if (type.startsWith('u')) throw new Diagnostic('E0600', 'Cannot negate an unsigned integer', node.span);
           node.kind = 'literal'; node.value = literal.value; node.type = type;
           return type;
         }
@@ -250,30 +252,38 @@ export class SemanticAnalyzer {
         } else if (node.op === '!') {
           if (operand !== 'bool' && !T.integer(operand)) throw new Diagnostic('E0600', `Cannot apply ! to ${operand}`, node.span);
           type = operand;
-        } else { if (!T.numeric(operand)) throw new Diagnostic('E0600', 'Negation requires a number', node.span); type = operand; }
+        } else { if (!T.numeric(operand) || operand.startsWith('u')) throw new Diagnostic('E0600', 'Negation requires a signed integer or floating-point number', node.span); type = operand; }
         break;
       }
       case 'binary': {
-        const logical = ['&&', '||'].includes(node.op);
-        const left = this.infer(node.left, ctx, logical ? 'bool' : expected && T.numeric(expected) ? expected : null);
-        const right = this.infer(node.right, ctx, left);
-        T.unify(left, right, new Map(), node);
+        const logical = ['&&', '||'].includes(node.op), shift = ['<<', '>>'].includes(node.op);
+        const bitwise = ['&', '|', '^'].includes(node.op);
+        const left = this.infer(node.left, ctx, logical ? 'bool' : expected && (T.numeric(expected) || bitwise && expected === 'bool') ? expected : null);
+        // Shift RHS has its own integer type; unlike arithmetic, u64 << u8 is legal.
+        const right = this.infer(node.right, ctx, shift ? null : left);
+        if (!shift) T.unify(left, right, new Map(), node);
         if (logical) { T.unify('bool', left, new Map(), node); type = 'bool'; }
         else if (['==', '!=', '<', '>', '<=', '>='].includes(node.op)) {
           if (!T.numeric(left) && !['bool', 'char', '&str', 'String'].includes(left))
             throw new Diagnostic('F_COMPARE', `Comparison on ${left} is not implemented`, node.span);
           type = 'bool';
+        } else if (shift) {
+          if (!T.integer(left) || !T.integer(right)) throw new Diagnostic('E0369', 'Shifts require integer operands', node.span);
+          type = left;
+        } else if (bitwise) {
+          if (!T.integer(left) && left !== 'bool') throw new Diagnostic('E0369', 'Bitwise operators require integers or booleans', node.span);
+          type = left;
         } else {
           if (!T.numeric(left)) throw new Diagnostic('E0369', `Arithmetic requires numeric operands, got ${left}`, node.span);
           type = left;
         }
-        if (['&', '|', '^'].includes(node.op) && !T.integer(left))
-          throw new Diagnostic('E0369', 'Bitwise operators require integer operands', node.span);
         node.operandType = left; break;
       }
       case 'cast': {
         const source = this.infer(node.value, ctx);
-        if (!T.numeric(source) || !T.numeric(node.target)) throw new Diagnostic('E0605', 'Only numeric casts are supported', node.span);
+        node.target = this.normalize(node.target, ctx);
+        const allowed = T.numeric(source) && T.numeric(node.target) || ['bool', 'char'].includes(source) && T.integer(node.target) || source === 'u8' && node.target === 'char';
+        if (!allowed) throw new Diagnostic('E0605', `Invalid primitive cast from ${source} to ${node.target}`, node.span);
         type = node.target; break;
       }
       case 'block': return this.block(node, ctx, expected);
@@ -507,8 +517,11 @@ export class SemanticAnalyzer {
       }
       case 'assign': {
         const target = this.infer(node.target, ctx); this.place(node.target, ctx, true);
-        T.unify(target, this.infer(node.value, ctx, target), new Map(), node);
-        if (node.op !== '=' && !T.numeric(target)) throw new Diagnostic('E0368', 'Compound assignment requires a number', node.span);
+        const shift = ['<<=', '>>='].includes(node.op), bitwise = ['&=', '|=', '^='].includes(node.op);
+        const actual = this.infer(node.value, ctx, shift ? null : target);
+        if (!shift) T.unify(target, actual, new Map(), node);
+        if (shift && (!T.integer(target) || !T.integer(actual)) || bitwise && !T.integer(target) && target !== 'bool' || !shift && !bitwise && node.op !== '=' && !T.numeric(target))
+          throw new Diagnostic('E0368', `Invalid operands for ${node.op}`, node.span);
         break;
       }
       case 'return': {

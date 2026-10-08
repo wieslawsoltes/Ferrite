@@ -1,68 +1,97 @@
-# Ferrite — browser Rust subset compiler and JetBrains-inspired IDE
+# Ferrite — a Rust compiler laboratory and browser IDE
 
-Ferrite provides an educational **Rust-like subset compiler** written in modular ES2022 JavaScript. Edit multi-file projects, inspect compiler passes, navigate source-linked token/AST/type/MIR/call-graph views, and execute supported programs in a time-limited Web Worker.
+[Open the IDE](https://wieslawsoltes.github.io/Ferrite/) · [Source](https://github.com/wieslawsoltes/Ferrite)
 
-**Playground:** https://wieslawsoltes.github.io/Ferrite/  
-**Source:** https://github.com/wieslawsoltes/Ferrite
+Ferrite has two **explicitly different** execution backends:
 
-## Rust subset implemented
+- **Browser compiler:** a JavaScript implementation of a documented Rust subset, with typed intermediate representations, executable MIR, bounded execution, a debugger and source-linked compiler visualizations.
+- **Native Cargo:** an opt-in authenticated loopback connection to your installed toolchain. Cargo, rustc, dependencies, build scripts and programs run locally with your permissions—not inside the browser and not in a sandbox.
 
-- Function declarations, parameters, return types, primitive generic type parameters and bounds
-- Primitive types `u32`, `i32`, `usize`, `f64`, `bool`, `char`, `&str`; arrays of compatible elements
-- Expressions, precedence, arithmetic, boolean logic, comparisons, unary operators, indexing
-- `let`, `let mut`, assignments, blocks, `if`, `else`, `while`, `loop`, `break`, `continue`
-- `for i in a..b` and inclusive `for i in a..=b`
-- Struct declarations, named-field struct literals and field access
-- Literal/wildcard `match` expressions with basic exhaustiveness and arm type checking
-- Basic `Display`, `Copy`, `Clone` bounds; `println!`, `print!`, `format!` subset
-- Reachable generic specialization with **isolated per-instance call targets**
-- Source locations, tokenization, AST, static analysis, educational CFG/MIR, and JS generation
+The IDE follows RustRover's compact editor and tool-window organization. It is an independent implementation, not JetBrains software or a claim of complete RustRover/Rust compatibility.
 
-**Not rustc:** Complete Rust ownership/borrowing, move semantics, lifetimes, traits/impls, macros, closures, async, enums, unsafe Rust, precise Rust arithmetic and type inference, const generics, and LLVM/native/Wasm code generation are still missing. The MIR view is educational, not rustc MIR.
+## The IDE
 
-## RustRover-inspired IDE
+Edit persistent multi-file Cargo projects using document tabs, a project tree, syntax highlighting, line numbers, breakpoints, undo/redo and a command palette. Create, rename and delete files, import/export complete snapshots, switch targets and examples, or enable debounced automatic checking.
 
-- Tree-based project navigation and multiple editor tabs
-- Rust code editing, line-number gutter, run marker, keyboard shortcuts and draggable tool windows
-- Automatic debounced compilation and manual check/run
-- Navigate between source code and token/AST/symbol/MIR/generic/call-graph visualizations
-- Compiler stage timings and bounded compilation-result cache
-- Search Everywhere-style command palette: **Ctrl/Cmd+Shift+P**
-- Cargo tool window showing the package, targets, workspace members and dependencies
-- Browser local workspace persistence and example projects
+Project, Structure, Cargo, Compiler, Profile, Run, Problems, Debugger and Tests are real tabbed tool windows. Drag a tool tab to another region, double-click to float it, use the splitters to resize, or reset the layout. Tool windows remain accessible at small screen sizes.
 
-The UX takes design cues from the JetBrains New UI and RustRover, but does **not** claim complete visual or functional parity.
+**Ctrl/Cmd+Enter:** run. **Ctrl/Cmd+Shift+P:** Search Everywhere. **F5:** debug/resume. **F10:** step source line. **F11:** step MIR instruction. **Alt+1:** Project. **Ctrl/Cmd+S:** save. **Ctrl/Cmd+Z / Shift+Z:** undo/redo in the active document.
 
-## Cargo support
+Every compiler representation uses original-file UTF-16 spans: selecting a token, AST/HIR node, symbol, obligation, ownership event, generic instance, MIR instruction, call site, diagnostic or mapped generated-JavaScript line navigates to the source. Editor selections highlight matching visible items. Edits invalidate old spans instead of navigating into obsolete source.
 
-The browser provides a constrained `Cargo.toml` parser (tables, arrays, inline tables), source-module assembly and internal check/run over its supported Rust subset. It does **not** download dependencies or implement full Cargo.
+## Compiler pipeline
 
-To use **real Cargo**, export the project snapshot from the IDE toolbar and run the local Node adapter with an installed Rust toolchain:
+`Cargo planning → file parsing → module/name resolution → built-in macro lowering → type/trait analysis → conservative ownership analysis → generic specialization → typed register MIR → verification → optimization → JavaScript/VM execution`
 
-```sh
-node tools/cargo-native.mjs --snapshot ferrite-project.ferrite.json --command check
-node tools/cargo-native.mjs --snapshot ferrite-project.ferrite.json --command build
-node tools/cargo-native.mjs --snapshot ferrite-project.ferrite.json --command run
-node tools/cargo-native.mjs --snapshot ferrite-project.ferrite.json --command test
-node tools/cargo-native.mjs --snapshot ferrite-project.ferrite.json --command metadata
-```
+The 16 stage views include token chips, lazy AST/HIR trees, symbol/type tables, ownership events, generic instances, connected CFGs, call graphs, MIR verification, optimization reports and mapped generated JavaScript. These are outputs of implemented passes, not invented LLVM or rustc dumps.
 
-The local runner materializes a temporary Cargo project, invokes the actual native `cargo` executable, and removes temporary files when complete. **Run only snapshots you trust:** native Cargo dependencies and build scripts can execute arbitrary code, and the runner does not sandbox them.
+The register-MIR VM powers actual stepping, call frames, locals, breakpoints, run/pause/resume, and the browser test harness. Generated JavaScript executes the same verified MIR. Browser Build downloads an executable `.mjs` file; it does not emit a native executable.
 
-## Development
+### Supported subset
+
+Functions, lexical locals/shadowing, numeric inference for supported cases, signed/unsigned integers through 128 bits, floats, arrays, tuples, structs, enums, Option/Result, generic functions, concrete trait implementations, references, selected String/Vec methods, control flow, ranges, match patterns/guards, `if let`, `while let`, `?`, modules/use paths, constants and selected built-in macros. Browser tests recognize `#[test]`, `#[ignore]` and `#[should_panic]`.
+
+Ownership checking is a **conservative whole-local move/loan model**, not rustc's full non-lexical lifetime analysis. General closure capture, async/generators, procedural/declarative user macros, full associated-type/trait coherence, complete lifetime and const-generic semantics, platform ABIs and LLVM/Wasm/native code generation are not implemented in the browser. Unsupported features produce diagnostics; the native example explicitly uses installed Cargo.
+
+The sample catalog has 18 projects, including a multi-file geometry/trait application, Option pattern loops, a Result pipeline, a local Cargo workspace with a path dependency, test-harness behavior, u128 arithmetic and an ownership error. A native-only sample demonstrates closures, async syntax and `macro_rules!` without pretending they are browser-compiled.
+
+## Run locally
+
+Requires Node.js 22+ for development tools. Runtime browser code has no npm dependencies.
 
 ```sh
 npm test
-node tools/check-syntax.mjs
+npm run check
 python3 -m http.server 8080
 ```
 
-Open http://localhost:8080. GitHub Actions runs JavaScript syntax validation and regression tests; GitHub Pages deploys on pushes to `main`.
+Open `http://localhost:8080`. Classic compiler/execution worker bundles are checked in and generated deterministically from granular ES modules:
 
-## Architecture
+```sh
+npm run build:workers
+```
 
-See [modular compiler](docs/modular-compiler.md), [roadmap](docs/roadmap.md), and [architecture overview](docs/architecture.md). Compiler stage classes live in `src/compiler/`; Cargo tools in `src/cargo/`; IDE tools in `src/ide/`; visualizers in `src/visualizers/`.
+The bundles avoid a worker module-import waterfall. The persistent compiler worker owns bounded file-parser and exact-project result caches. Edits reuse unchanged file parses; a changed project is still semantically reanalyzed. This is **not** a rustc-style dependency-tracked semantic query cache. Cache hits are explicitly labeled and do not replay stale pass timings. Timing bars are measured wall-clock pass durations, not CPU profiles or universal speedup claims.
 
-## Security
+## Native Cargo
 
-The browser worker timeout and local-storage persistence are usability mechanisms, **not a hardened security boundary for untrusted code**. The compiler and native adapter are prototypes. There is no license selected yet.
+With Rust/Cargo installed, start the bridge only for trusted projects:
+
+```sh
+node tools/cargo-bridge.mjs --trust-projects --origin http://localhost:8080 --port 8787
+# For the Pages site, use --origin https://wieslawsoltes.github.io instead.
+```
+
+Use **Native bridge** in the IDE, enter the loopback address and printed bearer token, and explicitly confirm project trust. The token stays in memory and is excluded from browser storage and exports. The server checks exact Origin and loopback Host, requires authentication, streams output and structured diagnostics, limits request/output sizes, and supports cancellation.
+
+The native backend delegates check/build/run/test, metadata/tree/fetch, fmt/clippy/doc, lockfile operations and additional supported commands to the actual Cargo executable. Cargo.lock and formatted Rust-file updates synchronize back into the workspace. Credential and publishing commands are intentionally not exposed. Native source debugging is not implemented; the browser debugger operates on Ferrite MIR.
+
+The CLI snapshot adapter remains available:
+
+```sh
+node tools/cargo-native.mjs --snapshot project.ferrite.json --command check
+```
+
+**Security:** workers provide responsiveness and bounded execution, not a hostile-code sandbox. Native Cargo can execute arbitrary project/dependency code and access your machine. Trust the source before connecting. Browser HTTPS-to-loopback access is subject to browser local-network permission policies.
+
+## Validation and architecture
+
+```sh
+npm test                                # compiler, runtime, project, service and sample tests
+npm run check                           # syntax + deterministic worker bundles
+python -m pip install playwright==1.57.0
+python -m playwright install chromium
+npm run test:browser                     # real HTTP document + production workers
+npm run test:native                      # actual installed Cargo, offline local workspace
+FERRITE_NATIVE_TEST=1 npm run test:browser # browser-to-native integration as well
+```
+
+Browser tests exercise all stage renderers, cross-file source synchronization, automatic/manual checking, file lifecycle, docking/floating, actual MIR debugging/tests, errors, persistence, export/import, cancellation and responsive tools. The optional native cases execute full Rust and verify native diagnostics.
+
+Restricted environments can run `FERRITE_MEMORY_TEST=1` to load the same production modules in memory. That mode deliberately does **not** claim HTTP delivery, persistence or native-network validation. The JSON evidence records the mode.
+
+[Architecture and compatibility](docs/architecture.md) · [Remaining scope](docs/roadmap.md)
+
+Compiler classes: `src/compiler/`; project/Cargo services: `src/project/`, `src/cargo/`; VM: `src/runtime/`; native bridge: `src/native/`; IDE models/services/views: `src/ui/`. `IdeApplication` is the composition root. Legacy prototype UI implementations are removed.
+
+No license has been selected by the repository owner.

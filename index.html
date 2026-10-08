@@ -1,77 +1,53 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ferrite — Rust Development Environment</title>
-<style>
-:root{color-scheme:dark;--project-width:255px;--inspector-width:420px;--bottom-height:230px;--bg:#191a20;--panel:#222329;--edge:#393a43;--accent:#609de4;--text:#d1d3df;--muted:#91949e;background:var(--bg);color:var(--text);font:13px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}
-*{box-sizing:border-box}body{margin:0}button,select{font:inherit;color:inherit}button{cursor:pointer;border:0;background:transparent}button:hover{background:#383b46}
-header{height:50px;display:flex;align-items:center;gap:13px;padding:0 15px;background:#24252d;border-bottom:1px solid var(--edge)}
-.brand{font-size:17px;font-weight:800;letter-spacing:.2px;color:#e6a66a}.brand span{color:#d4d8e3}.crumb{color:#8e91a0}
-#run{margin-left:auto;background:#36634e;border-radius:7px;padding:7px 15px;color:#d7ffe6;font-weight:700}#run:hover{background:#437a61}
-select{background:#30323d;border:1px solid #4c4e60;padding:6px 9px;border-radius:6px;max-width:265px}
-.workspace{display:flex;height:calc(100vh - 76px);min-height:400px}
-.rail{width:43px;flex-shrink:0;background:#202127;border-right:1px solid var(--edge);display:flex;flex-direction:column;align-items:center;padding-top:8px}
-.rail button{width:36px;height:36px;color:#a3a5b1;border-radius:7px;font-size:18px}.rail button.active{color:var(--accent);background:#313540}
-.pane{overflow:hidden;display:flex;flex-direction:column;background:#202127}
-#project{width:var(--project-width);flex-shrink:0}#inspector{width:var(--inspector-width);flex-shrink:0}
-.pane-title{height:36px;display:flex;align-items:center;gap:10px;padding:0 13px;border-bottom:1px solid var(--edge);font-size:12px;font-weight:650}
-.tree-item{padding:6px 14px;color:#b4b6c4;cursor:pointer}.tree-item:hover{background:#32343e}.tree-group{padding:11px 12px 5px;color:#a3a6b3}
-#symbols{margin-top:12px;border-top:1px solid var(--edge)}
-.split{flex-shrink:0;background:#353741;transition:background .12s}.split:hover{background:#609de4}
-.split.vertical{width:5px;cursor:col-resize}.split.horizontal{height:5px;cursor:row-resize}
-.center{flex:1;min-width:180px;display:flex;flex-direction:column}
-.tabbar{height:38px;display:flex;align-items:center;background:#26272e;border-bottom:1px solid var(--edge);overflow-x:auto;white-space:nowrap}
-.tab{padding:9px 14px;border-bottom:2px solid transparent;color:#979aa7;white-space:nowrap}.tab.active{border-bottom-color:#75abef;color:#e2e4ef;background:#2b2d37}
-.editor-header{height:28px;padding:6px 13px;color:#8d90a0;font-size:11px;background:#202129}
-.editor{flex:1;min-height:100px;display:flex;overflow:hidden}
-.line-numbers{width:45px;background:#1d1e24;color:#606572;overflow:hidden;padding:14px 8px;text-align:right;user-select:none;font:13px/1.65 ui-monospace,monospace}
-textarea{width:100%;height:100%;resize:none;border:0;outline:0;background:#1d1e24;color:#d9cda9;padding:14px 15px;font:13px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:4}
-#inspector-content{margin:0;padding:15px;overflow:auto;flex:1;background:#1d1e24;color:#b7cce3;font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap}.viz-node{display:block;text-align:left;width:100%;font:12px/1.55 ui-monospace,monospace;padding:3px 6px;border-radius:4px;color:#b7cce3}.viz-node:hover,.source-selected>.viz-node{background:#354e6c;color:white}.viz-line{border-left:1px solid #303744}.viz-children{margin-left:8px}.cfg-function{margin-bottom:20px}.cfg-block,.instance-card{display:block;width:100%;padding:12px;margin:8px 0;background:#303446;border:1px solid #586175;border-radius:8px;text-align:left}.cfg-edge{margin-left:16px;color:#84b3e9}.instance-card small{display:block;color:#aaa}.code-view{white-space:pre-wrap;overflow:auto}.tree-item{display:block;width:100%;text-align:left}.tree-item.selected{background:#303b4a;color:#8cbdf4}
-#bottom{height:var(--bottom-height);flex-shrink:0;background:#1c1d23;display:flex;flex-direction:column}
-.console{flex:1;overflow:auto;color:#b8deb8;white-space:pre-wrap;margin:0;padding:11px 16px;font:12px/1.6 ui-monospace,monospace}
-.pass{display:grid;grid-template-columns:100px 1fr 75px;gap:12px;align-items:center;padding:6px 14px;font-size:11px}.meter{height:8px;background:#2e303b;border-radius:9px;overflow:hidden}.meter div{background:#7d9ed6;height:100%;border-radius:9px}
-.statusbar{height:26px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:#2c485e;color:#ecf4fd;font-size:11px}
-.hidden{display:none!important}#inspector-tabs{flex-wrap:wrap;height:auto;min-height:38px}
-@media(max-width:950px){#project{display:none}#inspector{width:35vw}.crumb{display:none}}
-@media(max-width:700px){#inspector{display:none}.workspace{height:calc(100vh - 76px)}header{gap:6px}select{max-width:130px}}
-
-/* JetBrains New UI inspired restrained colors and density */
-:root{--bg:#17191d;--panel:#22252c;--edge:#343943;--accent:#75a7ff;--text:#d5d9e1;--muted:#8995a7}header{background:#24272e;box-shadow:0 1px 3px #101216}#run{background:#356c54}#run:hover{background:#418467}.rail{background:#1e2126}.pane{background:#22252c}.tabbar{background:#252932}.tab.active{background:#303745;border-bottom-color:#80aaff}.editor-header{background:#20242a}.editor,textarea{background:#1b1f25}#inspector-content{background:#1b1f25}.statusbar{background:#2b527d}.cfg-block:hover,.instance-card:hover{border-color:#82b1ff}.tree-item.selected{background:#33435a}button:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #6eacff;outline-offset:-2px}
-
-#gutter{flex:none;overflow:hidden;scrollbar-width:none;padding:14px 4px 14px 2px;font:13px/1.65 ui-monospace,monospace}
-.gutter-line{height:21.45px;white-space:nowrap;cursor:pointer}.gutter-line:hover{color:#abc7fa}.gutter-run{color:#5cb78f;font-weight:bold}
-.project-folder{padding-top:6px;padding-bottom:6px;color:#aeb9cb;font-size:12px;cursor:pointer}
-#cargo-toolwindow{position:fixed;z-index:35;right:25px;top:54px;width:340px;max-height:70vh;overflow:auto;background:#272c35;border:1px solid #495262;box-shadow:0 14px 55px #0009;border-radius:10px;padding:14px}
-.cargo-title{font-weight:700;margin-bottom:12px;font-size:15px}
-.cargo-actions{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:14px}.cargo-actions button{border-radius:6px;background:#35445b;padding:7px}
-.cargo-section{padding:12px 0;border-top:1px solid #3d4553}.cargo-row{padding:5px 9px;color:#a8c4ed}.cargo-warning{color:#efa58a;padding:8px}
-.command-overlay{position:fixed;inset:0;z-index:100;background:#0008;display:flex;justify-content:center;align-items:flex-start;padding-top:min(16vh,150px)}
-.command-panel{width:min(630px,94vw);background:#282e39;border:1px solid #586374;box-shadow:0 22px 70px #000a;border-radius:12px;overflow:hidden}
-.command-panel input{width:100%;padding:16px;border:0;border-bottom:1px solid #465062;outline:0;background:#292e38;color:#e6eaf5;font:14px system-ui}
-.command-results{max-height:440px;overflow:auto;padding:7px}.command-result{display:block;width:100%;padding:10px 14px;text-align:left;border-radius:6px}.command-result:hover{background:#384b65}
-.callgraph-card{border:1px solid #495369;background:#292f3b;margin:10px 0;border-radius:8px;padding:9px}
-.callgraph-edge{display:block;padding:6px 14px;color:#98b5e5;text-align:left;width:100%}.graph-summary{padding:10px;color:#9db7d2}
-#source{font-variant-ligatures:normal}
-
-.token-stream{display:flex;flex-wrap:wrap;align-content:flex-start;gap:6px}.token-chip{font:12px/1.4 ui-monospace,monospace;padding:5px 8px;border-radius:5px;border:1px solid #454c5b;background:#292d39;color:#d8dfea}
-.token-chip:hover{background:#40557b;border-color:#85b4ed}.token-chip[data-kind="keyword"]{color:#e7a7c8}.token-chip[data-kind="number"]{color:#b5cc8d}.token-chip[data-kind="string"]{color:#dcb886}.token-chip[data-kind="identifier"]{color:#9dc9e8}.token-chip[data-kind="eof"]{opacity:.5}
-.symbol-table{width:100%;border-collapse:collapse;color:#c5d5ec;font:12px/1.5 ui-monospace,monospace}
-.symbol-table th{text-align:left;position:sticky;top:0;background:#252a34;padding:9px 6px;border-bottom:1px solid #586072}
-.symbol-table td{padding:8px 6px;border-bottom:1px solid #343b48}
-.symbol-table tr:hover td{background:#334358;cursor:pointer}
-</style></head><body>
-<header><div class="brand">◈ Ferrite <span>Rust IDE</span></div><div class="crumb">File　 Edit　 View　 Navigate　 Code　 Refactor　 Run　 Tools　 VCS</div>
-<select id="examples" aria-label="Select Rust example"></select>
-<button id="export-project" title="Download full project snapshot for native Cargo">⇩ Export</button><button title="Reset dock layout" id="reset-layout">Reset Layout</button><button id="check" title="Cargo check">✓ Check</button><button id="cargo" title="Inspect Cargo metadata">Cargo</button><label style="white-space:nowrap"><input id="auto" type="checkbox" checked> Auto-compile</label><button id="run" title="Compile and Run (Ctrl/⌘+Enter)">▶ Run</button></header>
-<div class="workspace">
-<nav class="rail" aria-label="Tool windows"><button data-pane="project" class="active" title="Project">▤</button><button data-pane="inspector" class="active" title="Compiler">⌘</button><button data-pane="bottom" class="active" title="Terminal">▣</button></nav>
-<aside class="pane" id="project"><div class="pane-title">PROJECT <span style="margin-left:auto">⌄</span></div>
-<div class="tree-group">⌄ ferrite-demo <button id="new-file" title="Create file">＋</button><button id="delete-file" title="Delete active file">−</button></div><div id="project-tree"></div></aside>
-<div class="split vertical" data-split="left"></div>
-<main class="center"><div class="tabbar" id="open-files"></div><div class="editor-header">Ferrite › <span id="editor-file">src/main.rs</span> <span id="dirty"></span></div><div class="editor"><div id="gutter" class="line-numbers" aria-label="Editor gutter"></div><textarea id="source" spellcheck="false" aria-label="Rust source editor"></textarea></div>
-<div class="split horizontal" data-split="bottom"></div><section id="bottom"><div class="tabbar"><button class="tab active">▣ Run</button><button class="tab" onclick="document.getElementById('terminal').textContent='Use the Compiler pane to inspect intermediate representations.'">Build</button></div><pre class="console" id="terminal"></pre></section></main>
-<div class="split vertical" data-split="right"></div>
-<aside class="pane" id="inspector"><div class="pane-title">RUST COMPILER EXPLORER <span style="margin-left:auto;color:#9295a3">Rust subset</span></div><div class="tabbar" id="inspector-tabs"></div><div id="inspector-content" class="visualizer"></div>
-<div class="pane-title">COMPILER PASSES / WALL TIME</div><div id="passes" style="padding:8px 0 13px"></div></aside>
-</div><div class="statusbar"><span id="status">Ready</span><span>UTF-8　 ·　 Rust　 ·　 Ferrite JS backend　 ·　 Educational subset</span></div>
-<aside id="cargo-toolwindow" class="hidden" aria-label="Cargo tool window"></aside>
-<script type="module" src="./src/workspace.js"></script></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#1e1f22">
+  <meta name="description" content="Ferrite: a source-linked Rust compiler laboratory, dockable IDE, executable MIR debugger and optional local native Cargo integration.">
+  <title>Ferrite — Rust compiler laboratory</title>
+  <link rel="stylesheet" href="./styles/ide.css">
+</head>
+<body>
+  <header class="main-toolbar">
+    <div class="product-mark" aria-label="Ferrite">Fe</div>
+    <button id="project-menu" class="project-switch"><span id="project-name">geometry-lab</span><span class="muted">⌄</span></button>
+    <button id="search-everywhere" class="toolbar-search" title="Search Everywhere (Ctrl/Cmd+Shift+P)">Search Everywhere <kbd>⇧ ⌘ P</kbd></button>
+    <span class="toolbar-spacer"></span>
+    <select id="backend-select" aria-label="Compiler backend"><option value="browser">Ferrite · MIR / JavaScript</option><option value="native">Native · installed Cargo</option></select>
+    <div id="run-actions" class="toolbar-actions"></div>
+    <button id="stop" class="icon-button" title="Stop compilation or execution" aria-label="Stop"></button>
+  </header>
+  <nav class="workspace-toolbar" aria-label="Workspace actions">
+    <select id="sample-select" aria-label="Example project"></select>
+    <div class="toolbar-divider"></div>
+    <div id="file-actions" class="toolbar-actions"></div>
+    <span class="toolbar-spacer"></span>
+    <label class="toggle-label"><input type="checkbox" id="auto-check" checked>Auto-check</label>
+    <label class="toggle-label"><input type="checkbox" id="optimize" checked>Optimize MIR</label>
+    <button id="native-connect" class="subtle-button">Native bridge</button>
+    <button id="layout-reset" class="icon-button" title="Reset docking layout" aria-label="Reset layout"></button>
+  </nav>
+  <div class="ide-body">
+    <nav class="tool-rail left-rail" id="left-rail" aria-label="Tool windows"></nav>
+    <main id="dock-layout" class="dock-layout">
+      <aside data-dock="left" class="dock-region dock-left" aria-label="Left tool windows"></aside>
+      <div data-resize="left" class="splitter splitter-left"></div>
+      <section class="editor-region" aria-label="Editor">
+        <div id="document-tabs" class="document-tabs" role="tablist" aria-label="Open documents"></div>
+        <div class="editor-breadcrumb"><span id="active-path">src/main.rs</span><span id="editor-language">Rust</span></div>
+        <div id="editor-root" class="editor-root"></div>
+      </section>
+      <div data-resize="right" class="splitter splitter-right"></div>
+      <aside data-dock="right" class="dock-region dock-right" aria-label="Right tool windows"></aside>
+      <div data-resize="bottom" class="splitter splitter-bottom"></div>
+      <section data-dock="bottom" class="dock-region dock-bottom" aria-label="Bottom tool windows"></section>
+    </main>
+    <nav class="tool-rail right-rail" id="right-rail" aria-label="Compiler tool windows"></nav>
+  </div>
+  <footer class="statusbar"><span id="status" role="status">Starting compiler…</span><span class="status-spacer"></span><span id="source-position">1:1</span><span>UTF-8</span><span>4 spaces</span><span id="build-version">Ferrite 0.6 · Rust subset</span></footer>
+  <input type="file" id="import-input" accept=".json,.ferrite.json" hidden>
+  <noscript>Ferrite needs JavaScript enabled. The compiler and source editor run locally in your browser.</noscript>
+  <script type="module" src="./src/ui/main.js"></script>
+</body>
+</html>

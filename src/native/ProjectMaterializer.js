@@ -38,7 +38,7 @@ export class ProjectMaterializer {
   }
   async outputFiles() {
     const files = {};
-    for (const path of ['Cargo.lock', 'Cargo.toml']) try { files[path] = await readFile(await this.safePath(path), 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    for (const path of new Set(['Cargo.lock', 'Cargo.toml', ...[...this.previous.keys()].filter(path => path.endsWith('.rs'))])) try { const text = await readFile(await this.safePath(path), 'utf8'); if (!this.previous.has(path) || text !== this.previous.get(path) || path === 'Cargo.lock') files[path] = text; } catch (error) { if (error.code !== 'ENOENT') throw error; }
     return files;
   }
   async dispose() { await rm(this.root, {recursive: true, force: true}); }

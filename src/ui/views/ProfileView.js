@@ -1,0 +1,8 @@
+import {Dom} from './Dom.js';
+export class ProfileView {
+  constructor(root){this.root=root;}
+  render(build){this.root.replaceChildren();const hero=Dom.element('div','profile-hero');hero.append(Dom.element('span','metric-value',build.elapsedMs.toFixed(2)),Dom.element('span','metric-unit','ms project compile'),Dom.element('span','cache-badge',build.cacheHit?'EXACT CACHE HIT':`${build.cache.parsedFiles} parsed · ${build.cache.reusedFiles} reused`));this.root.append(hero);
+    const total=build.timings.reduce((n,t)=>n+t.ms,0)||1;for(const pass of build.timings){const row=Dom.element('div','timing-row'),label=Dom.element('div','timing-label');label.append(Dom.element('span','',pass.name),Dom.element('code','',pass.ms.toFixed(3)+' ms'));const track=Dom.element('div','timing-track'),fill=Dom.element('div','timing-fill');fill.style.width=Math.max(.5,pass.ms/total*100)+'%';track.append(fill);row.append(label,track);this.root.append(row);}this.root.append(Dom.element('p','view-note',build.cacheHit?'No compiler passes reran. This is an exact-project result cache hit, not a new measurement of those passes.':'Wall-clock measurements inside the compiler worker. Parsing can reuse unchanged files; semantic analysis still reruns for changed projects.'));
+    const counts=Dom.element('div','profile-counts');for(const [label,value] of [['Tokens',build.tokens.length],['Instances',build.sem.instances.length],['MIR blocks',build.mir.reduce((n,fn)=>n+fn.blocks.length,0)],['Optimizations',build.optimizations.length]]){const card=Dom.element('div');card.append(Dom.element('strong','',value),Dom.element('span','',label));counts.append(card);}this.root.append(counts);
+  }
+}

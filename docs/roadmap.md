@@ -1,20 +1,12 @@
-# Ferrite language and IDE roadmap
+# Remaining engineering scope
 
-Ferrite's modular JavaScript compiler (`src/engine.js`) is a limited Rust-like language implementation, not rustc.
+Implemented behavior is documented in README and covered by compiler, service, native-lifecycle and browser acceptance tests. The following are not complete:
 
-## Implemented
+- Browser Rust conformance: full trait/coherence and associated types, general lifetimes/regions, rustc-equivalent non-lexical borrow checking, closure capture and call traits, async/generator lowering, user macro engines, full const evaluation and platform ABI.
+- Native object, LLVM/Cranelift and WebAssembly backends. Current browser output is verified MIR and JavaScript.
+- Dependency-tracked incremental semantic queries. Current cache reuses exact file parsing and exact whole-project compilation.
+- Native debugger/rust-analyzer LSP, refactorings and full semantic completion. Browser debugging is real MIR debugging, not native debugging.
+- Complete RustRover visual/product parity. The current compact dockable UI is an independent design using similar IDE organization.
+- Registry/build-script execution directly in an isolated browser Rust toolchain. Current full Cargo operations intentionally delegate to the installed native toolchain.
 
-- Lexing with token positions; AST parser supporting functions, limited generics, struct declarations, control flow, mutable locals, array literals/indexing, unary/binary expressions, and return values.
-- Subset semantic checking of scopes, types, generic trait bounds and reachable generic instances.
-- Experimental basic-block MIR, JavaScript backend and browser Worker execution.
-- RustRover-inspired project/editor/terminal/compiler layout, draggable splitters, persisted widths, samples, and profiling.
-
-## Missing
-
-- Full Rust grammar and macro expansion; traits and impls, enums, pattern matching, closures, async, modules, unsafe and lifetimes.
-- Full type inference, trait solving and coherence.
-- Move semantics, NLL borrow checker, region inference and drop elaboration.
-- Full MIR verification, optimized native and WASM backends, incremental compiler, linker and cargo support.
-- Complete RustRover fidelity, debugger, refactoring, language service and multi-file integration.
-
-Run `npm test` on Node.js 20+ for the subset regression suite. This does not establish rustc compatibility. Generated JavaScript Workers are not hardened sandboxes for untrusted programs.
+Unsupported syntax must continue to produce explicit diagnostics rather than silently treating it as supported. New stages must have executable/verified compiler output behind their visualizations and span synchronization. Browser changes should pass real HTTP acceptance tests before deployment; native features should be exercised with actual Cargo, not only mocks.

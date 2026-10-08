@@ -32,3 +32,12 @@ test('loopback Cargo bridge enforces token, exact Origin and native execution bo
     const records=(await r.text()).trim().split('\n').map(JSON.parse);assert.equal(records[0].type,'log');assert.equal(records.at(-1).result.exitCode,0);assert.equal(calls,1);
   }finally{await bridge.close();}
 });
+
+test('native materializer returns formatted Rust source changes for the IDE', async () => {
+  const {ProjectMaterializer} = await import('../src/native/ProjectMaterializer.js');
+  const {writeFile} = await import('node:fs/promises');
+  const {join} = await import('node:path');
+  const materializer=await ProjectMaterializer.create({files:{'Cargo.toml':'[package]\nname="format-test"','src/main.rs':'fn main(){}'}});
+  try { await writeFile(join(materializer.root,'src/main.rs'),'fn main() {}\n');const files=await materializer.outputFiles();assert.equal(files['src/main.rs'],'fn main() {}\n'); }
+  finally { await materializer.dispose(); }
+});

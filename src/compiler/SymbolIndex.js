@@ -11,6 +11,11 @@ export class SymbolIndex {
     this.enums.set('Result', {kind: 'enum', name: 'Result', generics: [{name: 'T', bounds: []}, {name: 'E', bounds: []}],
       variants: [{name: 'Ok', fields: ['T']}, {name: 'Err', fields: ['E']}], attributes: []});
     this.addItems(ast.items, '');
+    // Trait methods inherit the trait's visibility, not an absent `pub` on impl methods.
+    for (const method of this.functions.values()) if (method.implementedTrait) {
+      const trait = this.resolve(this.traits, method.implementedTrait, method.module, method, false);
+      method.visibility = trait?.visibility ?? method.visibility;
+    }
   }
   addItems(items, module) {
     for (const original of items) {
@@ -30,7 +35,7 @@ export class SymbolIndex {
       if (item.kind === 'impl') {
         this.impls.push(item);
         this.addItems(item.methods.map(method => ({...method, owner: prefix + item.target,
-          crateRoot: item.crateRoot, dependency: item.dependency, name: `${item.target}::${method.localName}`})), item.module);
+          crateRoot: item.crateRoot, dependency: item.dependency, implementedTrait: item.trait, name: `${item.target}::${method.localName}`})), item.module);
         continue;
       }
       item.name = prefix + item.name;

@@ -1,0 +1,39 @@
+/** Explicitly configured loopback transport. Bearer tokens remain in memory only. */
+export class NativeCargoClient {
+  constructor({fetcher = (...args) => fetch(...args)} = {}) { this.fetcher = fetcher; this.base = null; this.token = null; this.capabilities = null; this.active = null; }
+  async connect(address, token) {
+    const url = new URL(address);
+    if (!['127.0.0.1', 'localhost'].includes(url.hostname) || url.protocol !== 'http:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw Error('Use an HTTP loopback address such as http://127.0.0.1:8787');
+    if (typeof token !== 'string' || token.length < 16 || /[\r\n]/.test(token)) throw Error('Enter the private bearer token printed by the bridge');
+    const response = await this.fetcher(`${url.origin}/v1/capabilities`, {headers: {Authorization: `Bearer ${token}`}, signal: AbortSignal.timeout(5000)});
+    if (!response.ok) throw Error(`Bridge connection refused (${response.status})`);
+    const data = await response.json();
+    if (data.backend !== 'native-cargo' || data.protocol !== 1 || !Array.isArray(data.commands)) throw Error('Unsupported Cargo bridge protocol');
+    this.base = url.origin; this.token = token; this.capabilities = data; return data;
+  }
+  async run(files, command, options, onEvent) {
+    if (!this.capabilities?.commands.includes(command)) throw Error('Connect a native Cargo bridge supporting this command');
+    if (this.active) throw Error('A native command is already running');
+    const controller = new AbortController(); this.active = controller;
+    try {
+      const response = await this.fetcher(`${this.base}/v1/run`, {method: 'POST', headers: {Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json'}, body: JSON.stringify({files, command, ...options}), signal: controller.signal});
+      if (!response.ok) throw Error((await response.json()).error ?? `Cargo request failed (${response.status})`);
+      const reader = response.body.getReader(), decoder = new TextDecoder(); let buffer = '', result = null, bytes = 0;
+      const deliver = line => { if (!line.trim()) return; const event = JSON.parse(line); if (event.type === 'error') throw Error(event.message); if (event.type === 'result') result = event.result; onEvent(event); };
+      for (;;) {
+        const {value, done} = await reader.read(); if (done) break;
+        bytes += value.length; if (bytes > 12 * 1024 * 1024) { controller.abort(); throw Error('Cargo stream exceeded 12 MiB'); }
+        buffer += decoder.decode(value, {stream: true}); let index;
+        while ((index = buffer.indexOf('\n')) >= 0) { const line = buffer.slice(0, index); buffer = buffer.slice(index + 1); deliver(line); }
+      }
+      buffer += decoder.decode(); deliver(buffer);
+      if (!result) throw Error('Native Cargo stream ended before a result'); return result;
+    } finally { this.active = null; }
+  }
+  async cancel() {
+    if (!this.base || !this.active) return;
+    try { await this.fetcher(`${this.base}/v1/cancel`, {method: 'POST', headers: {Authorization: `Bearer ${this.token}`}, signal: AbortSignal.timeout(3000)}); }
+    finally { this.active?.abort(); }
+  }
+  disconnect() { this.active?.abort(); this.base = null; this.token = null; this.capabilities = null; }
+}

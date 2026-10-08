@@ -27,5 +27,8 @@ export const sampleProjects={
 "src/main.rs":'fn main() { let mut sum = 0u32; for x in 1u32..=10u32 { sum += x; } println!("Sum {}", sum); }'},
 "Nested ranges":{
 "Cargo.toml":'[package]\nname = "nested-ranges"\nversion = "0.1.0"\nedition = "2021"\n',
-"src/main.rs":'fn main() { for i in 1u32..3u32 { for j in 1u32..4u32 { println!("{} x {} = {}", i, j, i * j); } } }'}
+"src/main.rs":'fn main() { for i in 1u32..3u32 { for j in 1u32..4u32 { println!("{} x {} = {}", i, j, i * j); } } }'},
+"Pattern matching":{
+"Cargo.toml":'[package]\nname = "pattern-matching"\nversion = "0.1.0"\nedition = "2021"\n',
+"src/main.rs":'fn label(value: u32) -> u32 {\n    match value {\n        0u32 => 100u32,\n        1u32 => 200u32,\n        _ => 999u32,\n    }\n}\nfn main(){ for n in 0u32..4u32 { println!("{} => {}", n, label(n)); } }'}
 };

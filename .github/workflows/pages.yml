@@ -7,26 +7,29 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
+  validate:
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
   deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout validated commit
         uses: actions/checkout@v4
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - name: Archive exact deployment source
         run: git archive --format=zip HEAD -o "$RUNNER_TEMP/ferrite-source.zip"
       - name: Retain deployment source
@@ -35,16 +38,18 @@ jobs:
           name: ferrite-source
           path: ${{ runner.temp }}/ferrite-source.zip
           retention-days: 7
-      - name: Validate all JavaScript modules
-        run: node tools/check-syntax.mjs
-      - name: Run compiler and project regression tests
-        run: npm test
+      - name: Prepare the static site only
+        run: |
+          mkdir .pages-site
+          cp index.html .pages-site/
+          cp -R styles src .pages-site/
+          touch .pages-site/.nojekyll
       - name: Configure Pages
         uses: actions/configure-pages@v5
-      - name: Upload static site
+      - name: Upload validated static site
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: .pages-site
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4

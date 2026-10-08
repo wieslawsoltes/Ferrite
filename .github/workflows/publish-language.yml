@@ -1,0 +1,49 @@
+name: Publish verified compiler commits
+on:
+  push:
+    branches: [automation/ferrite-language-publish]
+    paths: [.github/compiler-payload.b64]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Restore and verify focused feature commits
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, json, os, subprocess, tempfile
+          from pathlib import Path
+          payload = json.loads(gzip.decompress(base64.b64decode(Path('.github/compiler-payload.b64').read_text())))
+          target = 'feat/compiler-language-toolchain'
+          def git(*args, **kwargs):
+              return subprocess.check_output(['git', *args], **kwargs).decode().strip()
+          expected = payload['base']
+          remote = git('ls-remote', 'origin', 'refs/heads/' + target).split()[0]
+          if remote != expected:
+              raise SystemExit('Target branch moved; refusing to overwrite concurrent work')
+          git('config', 'user.name', 'Wiesław Šoltés')
+          git('config', 'user.email', 'wieslawsoltes@users.noreply.github.com')
+          git('checkout', '--detach', expected)
+          for change in payload['commits']:
+              with tempfile.NamedTemporaryFile(suffix='.patch') as patch:
+                  patch.write(change['patch'].encode()); patch.flush()
+                  git('apply', '--index', '--whitespace=error', patch.name)
+              tree = git('write-tree')
+              if tree != change['tree']:
+                  raise SystemExit('Source tree mismatch: ' + tree)
+              git('commit', '-m', change['message'])
+          subprocess.run(['npm', 'run', 'check'], check=True)
+          subprocess.run(['npm', 'test'], check=True)
+          git('push', '--force-with-lease=refs/heads/' + target + ':' + expected, 'origin', 'HEAD:refs/heads/' + target)
+          head = git('rev-parse', 'HEAD')
+          Path(os.environ['GITHUB_STEP_SUMMARY']).write_text('Published `' + head + '` with verified tree `' + git('write-tree') + '`.\nTransport files are isolated from the feature branch.\n')
+          print('PUBLISHED_HEAD=' + head)
+          PY

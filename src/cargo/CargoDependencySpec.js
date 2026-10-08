@@ -22,7 +22,9 @@ export class CargoDependencySpec {
     } else throw Error('Choose registry, Git, or path');
     if (input.rename) { this.text(input.rename); args.push('--rename', input.rename); }
     if (input.defaultFeatures === false) args.push('--no-default-features');
-    if (input.optional) args.push('--optional');
+    else if (input.defaultFeatures === true) args.push('--default-features');
+    if (input.optional === true) args.push('--optional');
+    else if (input.optional === false) args.push('--no-optional');
     if (input.features?.length) {
       if (!Array.isArray(input.features) || input.features.some(value => typeof value !== 'string' || !/^[\w+./-]+$/.test(value))) throw Error('Invalid crate features');
       args.push('--features', [...new Set(input.features)].join(','));

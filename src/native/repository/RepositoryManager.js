@@ -50,7 +50,7 @@ export class RepositoryManager {
     if (input?.trust !== true) throw Error('Explicit project trust is required for native repository access');
     if (this.sessions.size + this.opening >= this.maxSessions) throw Error('Close a repository session before opening another');
     const manifest = P.path(input.manifest || 'Cargo.toml');
-    if (P.ignored(manifest) || !manifest.endsWith('Cargo.toml')) throw Error('Select a Cargo.toml manifest');
+    if (P.ignored(manifest) || manifest.split('/').at(-1)!=='Cargo.toml') throw Error('Select a Cargo.toml manifest');
     let root, owned = false, session, reserved = false;
     this.opening++;
     try {
@@ -118,7 +118,7 @@ export class RepositoryManager {
     return this.exclusive(input.id, input.version, async session => {
       if (input.manifest) {
         P.path(input.manifest);
-        if (!input.manifest.endsWith('Cargo.toml') || P.ignored(input.manifest)) throw Error('Invalid Cargo manifest');
+        if (input.manifest.split('/').at(-1)!=='Cargo.toml' || P.ignored(input.manifest)) throw Error('Invalid Cargo manifest');
         await P.read(session.root, input.manifest);
         session.manifest = input.manifest;
       }

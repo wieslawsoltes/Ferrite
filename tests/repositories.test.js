@@ -246,3 +246,8 @@ test('failed process startup after source synchronization invalidates stale clie
   await assert.rejects(()=>manager.run({...opened,version:manager.get(opened.id).version,command:'build'}),/Reload/);
   const reopened=await manager.open({kind:'local',path:root,trust:true});assert(reopened.files['src/main.rs'].includes('saved before failure'));assert(!reopened.needsRefresh);
 });
+
+test('explicit crate checkboxes can reenable default features and remove an existing optional flag',()=>{
+  const args=CargoDependencySpec.arguments({name:'serde',defaultFeatures:true,optional:false});
+  assert(args.includes('--default-features'));assert(args.includes('--no-optional'));
+});

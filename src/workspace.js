@@ -1,3 +1,7 @@
+import {EditorGutter} from "./ide/EditorGutter.js";
+import {ProjectTree} from "./ide/ProjectTree.js";
+import {CommandPalette} from "./ide/CommandPalette.js";
+import {CargoToolWindow} from "./ide/CargoToolWindow.js";
 import {SourceNavigator} from "./ide/SourceNavigator.js";
 import {CallGraphView} from "./visualizers/CallGraphView.js";
 import {compileProject} from "./project.js";
@@ -10,6 +14,22 @@ let files=createProject(),file="src/main.rs",compilation=null,stage="AST",auto=t
 const tree=createVisualizer($("inspector-content"),loc=>navigator.jump(loc));
 const navigator=new SourceNavigator(()=>compilation,()=>files,open,()=> $("source"));
 const callGraph=new CallGraphView($("inspector-content"),loc=>navigator.jump(loc));
+const gutter=new EditorGutter($("gutter"),$("source"),()=>compile(true));
+const projectTree=new ProjectTree($("project-tree"),path=>{open(path);schedule();});
+const cargoWindow=new CargoToolWindow($("cargo-toolwindow"),()=>files,command=>{
+ $("cargo-toolwindow").classList.add("hidden");
+ if(command==="test"){diagnostics("Cargo test requires the real Cargo toolchain; browser compiler only supports a Rust subset.");return;}
+ compile(command==="run");
+});
+const palette=new CommandPalette(document.body,()=>[
+ {label:"Run current crate",execute:()=>compile(true)},
+ {label:"Check current crate",execute:()=>compile(false)},
+ {label:"Cargo tool window",execute:()=>showCargo()},
+ {label:"Reset window layout",execute:()=> $("reset-layout").click()},
+ ...Object.keys(files).map(path=>({label:"Open file: "+path,execute:()=>open(path)})),
+ ...Object.keys(sampleProjects).map(name=>({label:"Sample: "+name,execute:()=>chooseSample(name)})),
+ ...(compilation?.stages||[]).map(s=>({label:"Compiler stage: "+s.name,execute:()=>{stage=s.name;renderStage();}}))
+]);
 function save(){try{localStorage.setItem(storageKey,JSON.stringify({files,file,auto}));}catch{}}
 function restore(){try{const v=JSON.parse(localStorage.getItem(storageKey)||"null");if(v&&v.files&&typeof v.files==="object"){files=v.files;file=v.file in files?v.file:Object.keys(files)[0];auto=v.auto!==false;}}catch{}}
 function extension(path){return path.endsWith(".rs")?"rs":path.endsWith(".toml")?"toml":"text";}
@@ -17,9 +37,9 @@ function jump(loc,path){const p=path||"src/main.rs";if(p in files&&p!==file)open
 function open(path){if(!(path in files))return;files[file]=$("source").value;file=path;$("source").value=files[path];$("editor-file").textContent=path;$("dirty").textContent="";renderProject();save();}
 function renderProject(){
  $("project-tree").replaceChildren();$("open-files").replaceChildren();
- for(const path of Object.keys(files).sort()){const b=document.createElement("button");b.className="tree-item"+(file===path?" selected":"");b.textContent=(path.endsWith(".rs")?"🦀 ":"▤ ")+path;b.onclick=()=>{open(path);schedule();};$("project-tree").append(b);}
+ projectTree.render(files,file);
  for(const path of Object.keys(files).filter(x=>x.endsWith(".rs")||x==="Cargo.toml")){const b=document.createElement("button");b.className="tab"+(path===file?" active":"");b.textContent=path.split("/").at(-1);b.onclick=()=>{open(path);schedule();};$("open-files").append(b);}
- $("editor-file").textContent=file;$("auto").checked=auto;
+ $("editor-file").textContent=file;$("auto").checked=auto;gutter.render();
 }
 function visitSelection(loc){navigator.jump(loc);}
 function renderStage(){
@@ -71,5 +91,11 @@ const layoutKey="ferrite-ide-layout-v1";
 for(const splitter of document.querySelectorAll("[data-split]")){let down=null;splitter.onpointerdown=e=>{down={x:e.clientX,y:e.clientY,left:parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--project-width"))||255,right:parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--inspector-width"))||420,bottom:parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--bottom-height"))||230};splitter.setPointerCapture(e.pointerId);};splitter.onpointermove=e=>{if(!down)return;const prop=splitter.dataset.split;if(prop==="left")document.documentElement.style.setProperty("--project-width",Math.max(150,Math.min(500,down.left+e.clientX-down.x))+"px");if(prop==="right")document.documentElement.style.setProperty("--inspector-width",Math.max(220,Math.min(800,down.right+down.x-e.clientX))+"px");if(prop==="bottom")document.documentElement.style.setProperty("--bottom-height",Math.max(100,Math.min(520,down.bottom+down.y-e.clientY))+"px");};splitter.onpointerup=()=>{down=null;try{localStorage.setItem(layoutKey,JSON.stringify(["--project-width","--inspector-width","--bottom-height"].map(k=>document.documentElement.style.getPropertyValue(k))));}catch{}};}
 try{const values=JSON.parse(localStorage.getItem(layoutKey)||"null");if(Array.isArray(values))["--project-width","--inspector-width","--bottom-height"].forEach((k,i)=>{if(/^\d+px$/.test(values[i]||""))document.documentElement.style.setProperty(k,values[i]);});}catch{}
 $("reset-layout").onclick=()=>{for(const k of ["--project-width","--inspector-width","--bottom-height"])document.documentElement.style.removeProperty(k);for(const name of ["project","inspector","bottom"])$(name).classList.remove("hidden");try{localStorage.removeItem(layoutKey);}catch{}};
-$("cargo").onclick=()=>{stage="Cargo";compile(false);};
+function showCargo(){const popup=$("cargo-toolwindow");popup.classList.toggle("hidden");if(!popup.classList.contains("hidden"))cargoWindow.render();}
+$("cargo").onclick=()=>{stage="Cargo";compile(false);showCargo();};
+document.addEventListener("keydown",event=>{
+ if((event.ctrlKey||event.metaKey)&&event.shiftKey&&event.key.toLowerCase()==="p"){event.preventDefault();palette.open();}
+ if(event.altKey&&event.key==="1"){event.preventDefault();$("project").classList.toggle("hidden");}
+ if(event.key==="Escape"){$("cargo-toolwindow").classList.add("hidden");palette.close();}
+});
 restore();$("source").value=files[file]??"";renderProject();compile(false);

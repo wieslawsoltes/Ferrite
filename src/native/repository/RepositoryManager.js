@@ -3,7 +3,7 @@ import {RepositoryLanguageProject} from './RepositoryLanguageProject.js';
 import {RustAnalyzerSession} from '../lsp/RustAnalyzerSession.js';
 import {mkdtemp, mkdir, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join, resolve} from 'node:path';
+import {join, resolve, dirname} from 'node:path';
 import {RepositoryPolicy as P} from './RepositoryPolicy.js';
 import {RepositorySession} from './RepositorySession.js';
 import {NativeCargoRunner} from '../NativeCargoRunner.js';
@@ -40,8 +40,8 @@ export class RepositoryManager {
     return result.stdout.trim();
   }
   async metadata(session, signal) {
-    const result = await this.process.run('cargo', ['metadata', '--no-deps', '--format-version', '1', '--manifest-path', session.manifest],
-      {cwd: session.root, signal, timeoutMs: 120000});
+    const result = await this.process.run('cargo', ['metadata', '--no-deps', '--format-version', '1', '--manifest-path', resolve(session.root,session.manifest)],
+      {cwd: dirname(resolve(session.root,session.manifest)), signal, timeoutMs: 120000});
     if (result.exitCode !== 0) { session.metadata = null; session.metadataError = result.stderr.slice(-3000); return; }
     session.metadata = JSON.parse(result.stdout); session.metadataError = null;
   }
@@ -67,7 +67,7 @@ export class RepositoryManager {
         if (input.submodules === true) await this.git(['submodule', 'update', '--init', '--recursive', '--checkout', '--jobs', String(this.budget.capacity)], {cwd: root, signal, onEvent});
       } else throw Error('Select local or remote repository');
       const existing = [...this.sessions.values()].find(s => s.root === root);
-      if (existing && !existing.busy) return existing.describe();
+      if (existing && !existing.busy) return await this.refresh({id:existing.id,manifest}, {signal});
       if (existing || this.reservedRoots.has(root)) throw Error('This local directory is already being opened or used');
       this.reservedRoots.add(root); reserved = true;
       session = new RepositorySession({root, owned, source: input.kind === 'remote' ? P.remote(input.url) : root, manifest});
@@ -86,6 +86,8 @@ export class RepositoryManager {
   async run(input, options = {}) {
     return this.exclusive(input.id, input.version, async session => {
       const {signal, onEvent} = options;
+      if(!Number.isSafeInteger(input.version))throw Error('Provide the current repository revision');
+      if(session.needsRefresh)throw Error('Reload the repository after a failed operation before building');
       const jobs = this.budget.jobs(input.jobs);
       onEvent?.({kind: 'status', text: `Waiting for ${jobs} of ${this.budget.capacity} native build slots…\n`});
       const lease = await this.budget.acquire(jobs, signal);
@@ -105,6 +107,10 @@ export class RepositoryManager {
           rebuilt: result.artifacts.filter(a => !a.fresh).length, elapsedMs: result.elapsedMs,
           scheduling: 'cargo-dependency-graph', quality: 'unchanged rustc checks and selected Cargo profile'
         }};
+      } catch(error) {
+        // Source synchronization can finish before spawn fails or a post-build scan errors.
+        // Invalidate every other client's revision; no stale snapshot may overwrite that state.
+        session.version++;session.needsRefresh=true;throw error;
       } finally { lease.release(); }
     });
   }
@@ -124,6 +130,7 @@ export class RepositoryManager {
   }
   async language(input, {signal} = {}) {
     return this.exclusive(input.id, input.version, async session => {
+      if(session.needsRefresh)throw Error('Reload the repository before semantic tooling');
       session.language ??= new RustAnalyzerSession({project: new RepositoryLanguageProject(session)});
       return session.language.request({files: input.files}, input.method, {file: input.file, position: input.position, newName: input.newName, options: input.options ?? {}, signal});
     });

@@ -173,7 +173,7 @@ export class IdeApplication {
       if(this.repositories.session){this.cargo.repository=this.repositories.session;this.cargo.render();}
 
       if(serial!==this.requestSerial||(revision!==this.model.revision&&(!result.repository||result.ideHadConcurrentEdits)))return;
-      const diagnostics=(result.diagnostics??[]).map(d=>NativeDiagnosticMapper.map(d,this.model.files,{root:result.sourceRoot}));this.selection.reset(this.model.revision);this.problems.render(diagnostics);
+      const diagnostics=(result.diagnostics??[]).map(d=>NativeDiagnosticMapper.map(d,this.model.files,{root:result.sourceRoot,cwd:result.workingDirectory}));this.selection.reset(this.model.revision);this.problems.render(diagnostics);
       if(result.exitCode!==0)this.dock.open('problems');
       this.status(`Native cargo ${command} · exit ${result.exitCode} · ${result.elapsedMs?.toFixed(0)??'?'} ms`,result.exitCode===0?'success':'error');
       if(!this.runOutput.textContent)this.writeOutput(result.stdout+result.stderr);

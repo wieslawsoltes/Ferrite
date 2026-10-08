@@ -40,6 +40,7 @@ export class GeminiProvider {
     const consume = event => {
       if (event.error) throw new AgentError('PROVIDER_RESPONSE', 'Gemini reported a response error');
       if (event.promptFeedback?.blockReason) blocked = true;
+      if (event.usageMetadata) usage = event.usageMetadata;
       const candidate = event.candidates?.[0]; if (!candidate) return;
       for (const part of candidate.content?.parts ?? []) {
         // Preserve full parts, especially signed tool calls; merge only unsigned text deltas.

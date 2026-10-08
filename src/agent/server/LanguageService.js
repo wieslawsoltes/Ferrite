@@ -1,3 +1,4 @@
+import {TerminalManager} from '../terminal/TerminalManager.js';
 import {pathToFileURL, fileURLToPath} from 'node:url';
 import {relative, isAbsolute} from 'node:path';
 import {RustAnalyzerSession} from '../../native/lsp/RustAnalyzerSession.js';
@@ -7,7 +8,7 @@ import {AgentError} from '../core/AgentError.js';
 /** Serialized LSP requests against the real checkout, with no implicit workspace/applyEdit. */
 export class LanguageService {
   static methods = new Set(['textDocument/completion', 'completionItem/resolve', 'textDocument/hover', 'textDocument/definition', 'textDocument/declaration', 'textDocument/typeDefinition', 'textDocument/implementation', 'textDocument/references', 'textDocument/documentSymbol', 'workspace/symbol', 'textDocument/signatureHelp', 'textDocument/prepareRename', 'textDocument/rename', 'textDocument/formatting', 'textDocument/rangeFormatting', 'textDocument/codeAction', 'codeAction/resolve', 'textDocument/codeLens', 'codeLens/resolve', 'textDocument/inlayHint', 'inlayHint/resolve', 'textDocument/foldingRange', 'textDocument/selectionRange', 'textDocument/semanticTokens/full', 'textDocument/semanticTokens/range', 'textDocument/prepareCallHierarchy', 'callHierarchy/incomingCalls', 'callHierarchy/outgoingCalls', 'textDocument/prepareTypeHierarchy', 'typeHierarchy/supertypes', 'typeHierarchy/subtypes', 'rust-analyzer/viewSyntaxTree', 'rust-analyzer/expandMacro', 'rust-analyzer/viewHir', 'rust-analyzer/viewMir', 'experimental/runnables', 'rust-analyzer/relatedTests', 'experimental/parentModule', 'experimental/matchingBrace', 'experimental/joinLines', 'experimental/ssr', 'rust-analyzer/viewItemTree', 'rust-analyzer/viewCrateGraph', 'rust-analyzer/getFailedObligations']);
-  constructor(workspace, events, {session = new RustAnalyzerSession()} = {}) { this.workspace = workspace; this.events = events; this.session = session; this.session.project = new PersistentLanguageProject(workspace.root); this.queue = Promise.resolve(); this.diagnostics = new Map(); this.peer = null; }
+  constructor(workspace, events, {session = new RustAnalyzerSession({environment: TerminalManager.environment(process.env)})} = {}) { this.workspace = workspace; this.events = events; this.session = session; this.session.project = new PersistentLanguageProject(workspace.root); this.queue = Promise.resolve(); this.diagnostics = new Map(); this.peer = null; }
   async validateUris(value, depth = 0) {
     if (depth > 24) throw Error('LSP arguments too deeply nested');
     if (!value || typeof value !== 'object') return;

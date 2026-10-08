@@ -10,14 +10,14 @@ import {WorkspaceEditPlan} from '../../ui/model/WorkspaceEditPlan.js';
 /** One lazily started installed rust-analyzer with an isolated, trusted virtual project. */
 export class RustAnalyzerSession {
   static methods=new Set(['textDocument/completion','textDocument/hover','textDocument/definition','textDocument/references','textDocument/rename','textDocument/documentSymbol','textDocument/signatureHelp']);
-  constructor({spawnProcess=spawn}={}){this.spawnProcess=spawnProcess;this.project=null;this.peer=null;this.child=null;this.documents=new Map();this.busy=false;this.status=null;this.stderr='';this.optionsKey=null;}
+  constructor({spawnProcess=spawn,environment=process.env}={}){this.spawnProcess=spawnProcess;this.environment=environment;this.project=null;this.peer=null;this.child=null;this.documents=new Map();this.busy=false;this.status=null;this.stderr='';this.optionsKey=null;}
   config(options={}){return {checkOnSave:false,cargo:{extraEnv:{CARGO_NET_OFFLINE:'true'},buildScripts:{enable:options.expandNativeMacros===true},features:options.allFeatures?'all':options.features??[],noDefaultFeatures:options.defaultFeatures===false,targetDir:join(this.project.root,'target-ra')},procMacro:{enable:options.expandNativeMacros===true},cachePriming:{enable:false}};}
   async start(snapshot,options,signal){
     if(this.peer&&!this.peer.closed)return;
     if(this.child)await this.terminate();
     if(!this.project)this.project=await ProjectMaterializer.create(snapshot);else await this.project.update(snapshot);
     this.stderr='';this.status=null;this.documents.clear();
-    this.child=this.spawnProcess('rust-analyzer',[],{cwd:this.project.root,env:process.env,shell:false,detached:process.platform!=='win32',stdio:['pipe','pipe','pipe']});
+    this.child=this.spawnProcess('rust-analyzer',[],{cwd:this.project.root,env:this.environment,shell:false,detached:process.platform!=='win32',stdio:['pipe','pipe','pipe']});
     const child=this.child;this.exited=new Promise(resolve=>{child.once('close',resolve);child.once('error',resolve);});
     child.stderr.on('data',bytes=>{this.stderr=(this.stderr+bytes.toString('utf8')).slice(-32768);});
     this.peer=new JsonRpcPeer(child.stdout,child.stdin,{

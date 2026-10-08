@@ -7,6 +7,7 @@ import {ToolRegistry} from '../core/ToolRegistry.js';
 import {AgentHarness} from '../core/AgentHarness.js';
 import {ProviderRegistry} from '../providers/ProviderRegistry.js';
 import {PrivateStore} from './PrivateStore.js';
+import {StateLease} from './StateLease.js';
 import {NativeWorkspace} from './NativeWorkspace.js';
 import {CompilerService} from './CompilerService.js';
 import {LanguageService} from './LanguageService.js';
@@ -26,7 +27,9 @@ export class AgentRuntime {
     const inside = relative(workspace.root, stateRoot);
     if (!inside || inside !== '..' && !inside.startsWith('../') && !inside.startsWith('..\\') && !isAbsolute(inside)) throw Error('Agent state must be stored outside the source workspace');
     const store = await new PrivateStore(stateRoot).initialize(); workspace.store = store;
-    const runtime = new AgentRuntime(); Object.assign(runtime, {events, workspace, store});
+    const lease = await StateLease.acquire(stateRoot);
+    const runtime = new AgentRuntime(); Object.assign(runtime, {events, workspace, store, lease});
+    try {
     runtime.providers = providers ?? new ProviderRegistry(options);
     // Redact configured API keys before data reaches any observer or persistent tool artifact.
     const emit = events.emit.bind(events); events.emit = (type, data) => emit(type, JSON.parse(runtime.providers.redact(JSON.stringify(data ?? {}))));
@@ -38,7 +41,12 @@ export class AgentRuntime {
     registerCompilerTools(runtime.tools, runtime);
     runtime.harness = new AgentHarness({providers: runtime.providers, tools: runtime.tools, store, events, onCancel: id => runtime.terminals.closeOwner(id), instructions: async () => (await workspace.text('AGENTS.md', {optional: true}))?.slice(0, 32000) ?? ''});
     registerAgentTools(runtime.tools, runtime); return runtime;
+    } catch (error) { await runtime.close(); throw error; }
   }
   capabilities() { return {name: 'Ferrite Agent Workbench', version: '0.7.0', workspace: this.workspace.root, nativeExecution: 'trusted-host-not-sandboxed', terminal: process.platform === 'win32' ? 'use-wsl' : 'posix-python-pty', providers: this.providers.list(), tools: this.tools.list(), ideCommands: IDE_COMMANDS, languageMethods: [...LanguageService.methods], mcpVersions: ['2026-07-28', '2025-11-25']}; }
-  async close() { this.approvals.close(); this.ide.close(); await this.harness.close(); await Promise.allSettled([this.terminals.dispose(), this.language.close(), this.compiler.close()]); }
+  close() { return this.closing ??= (async () => {
+    this.approvals?.close(); this.ide?.close();
+    try { await this.harness?.close(); }
+    finally { await Promise.allSettled([this.terminals?.dispose(), this.language?.close(), this.compiler?.close()]); await this.lease?.release(); }
+  })(); }
 }

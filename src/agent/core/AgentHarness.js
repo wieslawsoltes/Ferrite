@@ -1,3 +1,4 @@
+import {SessionEventJournal} from './SessionEventJournal.js';
 import {randomUUID, createHash} from 'node:crypto';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {AgentError} from './AgentError.js';
@@ -17,7 +18,7 @@ Return a useful final summary of changes, validation and remaining limitations.`
 export class AgentHarness {
   constructor({providers, tools, store, events, instructions = async () => '', onCancel = async () => {}, retryDelay = sleep, maxConcurrent = 4} = {}) {
     this.providers = providers; this.tools = tools; this.store = store; this.events = events; this.instructions = instructions;
-    this.onCancel = onCancel; this.retryDelay = retryDelay; this.maxConcurrent = maxConcurrent; this.sessions = new Map(); this.active = new Map();
+    this.onCancel = onCancel; this.retryDelay = retryDelay; this.maxConcurrent = maxConcurrent; this.sessions = new Map(); this.active = new Map(); this.journal = new SessionEventJournal(events, this.sessions);
   }
   static config(input = {}) {
     const config = {provider: input.provider ?? 'openai', model: input.model ?? '', mode: input.mode ?? 'ask', contextTokens: input.contextTokens ?? 32768,
@@ -37,8 +38,7 @@ export class AgentHarness {
   async save(session) { session.updatedAt = new Date().toISOString(); await this.store.write('sessions', session.id, session); }
   emit(session, type, data = {}) {
     const safe = JSON.parse(this.providers.redact(JSON.stringify(data)));
-    const event = this.events.emit(type, {sessionId: session.id, ...safe}); session.events.push(event);
-    if (session.events.length > 4000) session.events.splice(0, session.events.length - 4000); return event;
+    return this.events.emit(type, {sessionId: session.id, ...safe});
   }
   async get(id) {
     if (this.sessions.has(id)) return this.sessions.get(id);
@@ -84,7 +84,7 @@ export class AgentHarness {
   async fork(id) {
     const source = await this.get(id); if (this.active.has(id)) throw new AgentError('SESSION_BUSY', 'Pause the session before forking');
     const session = await this.create(source.config, {parentId: source.id, objective: source.objective});
-    session.summary = ContextManager.fallback(source.summary, ContextManager.groups(source.messages)); session.plan = structuredClone(source.plan);
+    session.latestUser = source.latestUser; session.summary = ContextManager.fallback(source.summary, ContextManager.groups(source.messages)); session.plan = structuredClone(source.plan);
     await this.save(session); return session;
   }
   async start(id, prompt, {config, signal: parentSignal, interactive = true, depth = 0} = {}) {
@@ -219,5 +219,5 @@ export class AgentHarness {
       await this.save(session);
     }
   }
-  async close() { for (const id of [...this.active.keys()]) await this.cancel(id); await Promise.allSettled([...this.active.values()].map(value => value.operation)); }
+  async close() { for (const id of [...this.active.keys()]) await this.cancel(id); await Promise.allSettled([...this.active.values()].map(value => value.operation)); this.journal.close(); }
 }

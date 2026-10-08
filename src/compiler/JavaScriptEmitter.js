@@ -23,7 +23,8 @@ export class JavaScriptEmitter {
       case "return":return "return "+expr(n.value)+";";
       case "expression":return expr(n.value)+";";
       case "if":return "if("+expr(n.condition)+")"+block(n.then)+(n.otherwise?"else "+(n.otherwise.kind==="ifExpr"?expr(n.otherwise)+";":block(n.otherwise)):"");
-      case "while":return "while("+expr(n.condition)+")"+block(n.then);\n      case "for":return "for(let "+n.name+"="+expr(n.from)+";"+n.name+(n.inclusive?"<=":"<")+expr(n.to)+";"+n.name+"++)"+block(n.then);
+      case "while":return "while("+expr(n.condition)+")"+block(n.then);
+      case "for":return "for(let "+n.name+"="+expr(n.from)+";"+n.name+(n.inclusive?"<=":"<")+expr(n.to)+";"+n.name+"++)"+block(n.then);
       case "loop":return "while(true)"+block(n.then);
       case "break":return "break;";
       case "continue":return "continue;";

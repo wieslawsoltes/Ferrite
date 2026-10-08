@@ -27,6 +27,7 @@ export class TomlParser {
       for(const assignment of this.split(text.slice(1,-1))){
         const i=assignment.indexOf("=");if(i<0)throw Error("Invalid inline table: "+assignment);
         const key=assignment.slice(0,i).trim();
+        if(["__proto__","prototype","constructor"].includes(key))throw Error("Reserved TOML key "+key);
         if(Object.hasOwn(object,key))throw Error("Duplicate inline key "+key);
         object[key]=this.parseValue(assignment.slice(i+1));
       }
@@ -35,8 +36,8 @@ export class TomlParser {
     throw Error("Unsupported TOML value "+text);
   }
   parse(source) {
-    const sections={},errors=[];let path=[];
-    const getTable=keys=>{let table=sections;for(const k of keys)table=table[k]??=(Object.create(null));return table;};
+    const sections=Object.create(null),errors=[];let path=[];
+    const getTable=keys=>{let table=sections;for(const k of keys){if(["__proto__","prototype","constructor"].includes(k))throw Error("Reserved TOML key "+k);table=table[k]??=(Object.create(null));}return table;};
     for(const [i,raw] of source.split(/\r?\n/).entries()){
       let line=raw.trim();if(!line||line.startsWith("#"))continue;
       // Remove comments only outside quoted strings.
@@ -47,7 +48,9 @@ export class TomlParser {
       if(heading){path=heading[1].split(".");getTable(path);continue;}
       const assignment=/^([A-Za-z0-9_.-]+)\s*=\s*(.+)$/.exec(line);
       if(!assignment){errors.push({line:i+1,message:"Unsupported TOML syntax"});continue;}
-      const keys=assignment[1].split("."),leaf=keys.pop(),table=getTable([...path,...keys]);
+      const keys=assignment[1].split("."),leaf=keys.pop();
+      if(["__proto__","prototype","constructor"].includes(leaf)){errors.push({line:i+1,message:"Reserved TOML key "+leaf});continue;}
+      const table=getTable([...path,...keys]);
       if(Object.hasOwn(table,leaf)){errors.push({line:i+1,message:"Duplicate TOML key "+assignment[1]});continue;}
       try{table[leaf]=this.parseValue(assignment[2]);}catch(error){errors.push({line:i+1,message:error.message});}
     }

@@ -1,3 +1,4 @@
+import {WebAssemblyEmitter} from './compiler/wasm/WebAssemblyEmitter.js';
 import {Configuration} from './compiler/Configuration.js';
 import {Lexer} from './compiler/Lexer.js';
 import {Parser} from './compiler/Parser.js';
@@ -34,10 +35,13 @@ export function compile(source, options = {}) {
   const verification = pass('Verify MIR', () => MirVerifier.verify(mir));
   const optimized = options.optimize === false ? {functions: mir, changes: []} : pass('Optimize MIR', () => MirOptimizer.optimize(mir));
   const emitted = pass('Emit JavaScript', () => new JavaScriptEmitter(optimized.functions, {entry: semantic.entry ?? null, runtime: options.runtime}).build());
+  const wasm = pass('Emit WebAssembly', () => new WebAssemblyEmitter(optimized.functions, {entry: semantic.entry ?? null}).build());
+  // Plain byte arrays keep cached artifacts deeply immutable and structured-cloneable.
+  wasm.bytes = Array.from(wasm.bytes);
   const sem = {instances: semantic.instances.map(({key, name, fn, typeArguments, returnType, calls, locals}) => ({key, name, typeArguments, returnType, calls, locals, span: fn.span, loc: fn.loc})),
     closures:semantic.closures, symbols: semantic.symbols, structures: semantic.structures, enums: semantic.enums,
     obligations: semantic.obligations.map(o => `${o.type}: ${o.trait}`), traitObligations: semantic.obligations, warnings: semantic.warnings};
-  return {version: '0.7.0', configuration:configured.decisions, tokens, ast, expanded: expansion.ast, expansions: expansion.expansions,
+  return {version: '0.8.0', wasm, configuration:configured.decisions, tokens, ast, expanded: expansion.ast, expansions: expansion.expansions,
     hir: semantic.instances.map(({key, fn}) => ({instance: key, body: fn.body, span: fn.span})), sem, ownership, mir,
     optimizedMir: optimized.functions, optimizations: optimized.changes, verification, js: emitted.code,
     generatedMap: emitted.sourceMap, entry: semantic.entry, queries: options.queryCache?.snapshot() ?? null, timings, diagnostics: semantic.warnings};

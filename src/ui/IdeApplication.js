@@ -111,13 +111,14 @@ export class IdeApplication {
       if(serial!==this.requestSerial||result.revision!==this.model.revision)return;
       this.build=result.build;this.buildRevision=revision;this.selection.reset(revision);this.inspector.setBuild(this.build);this.profile.render(this.build);this.problems.render(this.build.diagnostics??[]);this.renderStructure();this.cargo.render();
       this.status(`${this.build.cacheHit?'Cache hit':'Compiled'} · ${this.build.elapsedMs.toFixed(2)} ms · ${this.build.sem.instances.length} instances · ${this.build.cache.reusedFiles} files reused`,'success');
-      if(command==='build'){this.download('ferrite-generated.mjs',`const postMessage = text => process.stdout.write(String(text));\n${this.build.js}`,'text/javascript');this.writeOutput('Build succeeded. Generated JavaScript downloaded as ferrite-generated.mjs.\nRun with Node.js 20+; this is not a native executable.');}
+      if(command==='build'&&this.backend==='wasm'){this.download('ferrite.wasm',new Uint8Array(this.build.wasm.bytes),'application/wasm');this.writeOutput('Build succeeded. Real WebAssembly downloaded. This module requires the Ferrite checked host ABI (WebAssemblyRuntime); it is not a WASI executable.');}
+      else if(command==='build'){this.download('ferrite-generated.mjs',`const postMessage = text => process.stdout.write(String(text));\n${this.build.js}`,'text/javascript');this.writeOutput('Build succeeded. Generated JavaScript downloaded as ferrite-generated.mjs.\nRun with Node.js 20+; this is not a native executable.');}
       else if(['run','debug','test'].includes(command)){
-        this.runMode=command;this.writeOutput('');this.runLabel.textContent=command==='debug'?'Executable MIR debugger':'Ferrite MIR execution';
+        this.runMode=command;this.writeOutput('');this.runLabel.textContent=command==='debug'?'Executable MIR debugger':this.backend==='wasm'?'WebAssembly execution · checked host ABI':'Ferrite MIR execution';
         if(command==='test'){this.tests.reset();this.dock.open('tests');}
         else if(command==='debug')this.dock.open('debugger');else this.dock.open('run');
         if(command!=='test'&&!this.build.entry){this.writeOutput('Library target checked successfully. Select a binary target to run.');return;}
-        this.execution.start(this.build,command,this.model.breakpointList);
+        this.execution.start(this.build,command,this.model.breakpointList,this.backend);
       }
     }catch(error){if(error.name==='AbortError')return;if(serial===this.requestSerial&&revision===this.model.revision){this.buildRevision=-1;this.inspector.invalidate();this.error(error);}}
   }
@@ -143,7 +144,7 @@ export class IdeApplication {
     if(event.type==='output')this.writeOutput(event.text);
     else if(event.type==='paused'||event.type==='done'){
       this.debugger.render(event.state);if(event.type==='paused'){this.status(`Paused · ${event.state.steps} instructions`,'');this.dock.open('debugger');const span=event.state.next??event.state.last?.span;if(span)this.selection.select(span,'debugger');}
-      else{this.writeOutput(event.state.output);this.runLabel.textContent=`Process finished · ${event.state.steps.toLocaleString()} MIR instructions`;this.status('Process finished successfully','success');}
+      else{this.writeOutput(event.state.output);this.runLabel.textContent=`Process finished · ${event.state.steps.toLocaleString()} ${event.state.backend==='wasm'?'WebAssembly-lowered':'MIR'} instructions`;this.status('Process finished successfully','success');}
     }else if(event.type==='test')this.tests.append(event.result);
     else if(event.type==='tests-done'){const failures=event.results.filter(r=>r.status==='failed').length;this.status(`${event.results.length} tests · ${failures} failed`,failures?'error':'success');}
     else if(event.type==='error')this.error(event);else if(event.type==='stopped')this.status('Execution stopped','');

@@ -1,3 +1,4 @@
+import {WebAssemblyRuntime} from '../../runtime/WebAssemblyRuntime.js';
 import {MirVirtualMachine} from '../../runtime/MirVirtualMachine.js';
 let machine = null, running = false, breakpoints = [], lastOutput = '', skipLine = null;
 const options = {maxSteps: 1_000_000, maxOutput: 200_000, maxTrace: 0, maxDepth: 128};
@@ -38,6 +39,14 @@ async function runTests(functions, tests) {
 self.onmessage = ({data}) => {
   try {
     if (data.command === 'start') {
+      if(data.backend==='wasm'&&data.mode==='run'){const wasm=new WebAssemblyRuntime(data.wasm,options),state=wasm.run({entry:data.entry});postMessage({type:'done',state:{...state,backend:'wasm',frames:[]}});return;}
+      if(data.backend==='wasm'&&data.mode==='test'){
+        const results=[];for(const test of data.tests??[]){let status=test.ignore?'ignored':'passed',caught=null;
+          if(!test.ignore){try{new WebAssemblyRuntime(data.wasm,options).run({entry:test.instance});}catch(error){caught=error;}
+            if(!!caught!==!!test.shouldPanic||['R_BUDGET','R_STACK'].includes(caught?.code))status='failed';}
+          const result={...test,status,message:status==='failed'?caught?.message??'Expected panic did not occur':''};results.push(result);postMessage({type:'test',result});
+        }postMessage({type:'tests-done',results});return;
+      }
       if (data.mode === 'test') { runTests(data.functions, data.tests ?? []).catch(e => postMessage(errorData(e))); return; }
       machine = new MirVirtualMachine(data.functions, {...options, entry: data.entry}); breakpoints = data.breakpoints ?? [];
       if (data.mode === 'debug') publish(); else { running = true; pump(); }

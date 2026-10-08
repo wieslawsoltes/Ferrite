@@ -1,3 +1,4 @@
+import {WebAssemblyView} from './WebAssemblyView.js';
 import {Dom} from './Dom.js';
 import {SpanRegistry} from './SpanRegistry.js';
 import {TreeView} from './TreeView.js';
@@ -25,6 +26,7 @@ export class InspectorView {
     const descriptions={tokens:'Lexical tokens · click to reveal the exact source range',tree:'Structured compiler nodes · expand branches to inspect children',cfg:'Executable typed-register MIR · arrows show control flow',callgraph:'Reachable concrete instances · arrows are resolved calls',code:'Generated JavaScript · source-linked instructions emitted from MIR',ownership:'Conservative whole-local ownership analysis · not rustc NLL',types:'Resolved local types and concrete trait obligations',cargo:'Browser Cargo plan · unsupported toolchain features use Native Cargo'};
     this.caption.textContent=descriptions[stage.kind]??`${stage.name} · source-linked compiler results`;
     switch(stage.kind){
+      case 'wasm':new WebAssemblyView(this.content,this.registry).render(stage.data);break;
       case 'tokens':this.tokens(stage.data);break;
       case 'tree':this.tree.render(stage.data);break;
       case 'cfg':this.graph.renderCfg(stage.data.find(fn=>fn.instance===this.instance)??stage.data[0]);break;

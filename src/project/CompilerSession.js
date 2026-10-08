@@ -89,6 +89,7 @@ export class CompilerSession {
       {name: 'Optimizations', kind: 'optimizations', data: compilation.optimizations},
       {name: 'Call Graph', kind: 'callgraph', data: CallGraphBuilder.build(compilation.ast, compilation.sem.instances)},
       {name: 'Incremental queries', kind: 'queries', data: hit ? {...compilation.queries, projectCacheHit: true} : compilation.queries},
+      {name: 'WebAssembly', kind:'wasm',data:compilation.wasm},
       {name: 'JavaScript', kind: 'code', data: {code: compilation.js, mappings: compilation.generatedMap}}
     ];
     return {...compilation, tests, stages, plan, cacheHit: !!hit, cache: {hits: this.hits, misses: this.misses, entries: this.results.size, ...syntaxStats},

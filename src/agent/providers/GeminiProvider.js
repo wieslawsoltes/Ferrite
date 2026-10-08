@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {randomUUID} from '../core/Platform.js';
 import {AgentError} from '../core/AgentError.js';
 import {HttpTransport} from './HttpTransport.js';
 

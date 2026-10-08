@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {randomUUID} from './Platform.js';
 import {AgentError} from './AgentError.js';
 
 /** Human approvals are one-shot, session-scoped, expiring, and never supplied by model input. */

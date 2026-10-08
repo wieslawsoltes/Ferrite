@@ -2,7 +2,7 @@ import {AgentError} from '../core/AgentError.js';
 
 /** Bounded JSON/SSE transport. Redirects are rejected so authorization cannot be forwarded. */
 export class HttpTransport {
-  constructor({fetcher = fetch, maxBytes = 16 * 1024 * 1024, timeoutMs = 180000} = {}) { this.fetcher = fetcher; this.maxBytes = maxBytes; this.timeoutMs = timeoutMs; }
+  constructor({fetcher = (...args) => globalThis.fetch(...args), maxBytes = 16 * 1024 * 1024, timeoutMs = 180000} = {}) { this.fetcher = fetcher; this.maxBytes = maxBytes; this.timeoutMs = timeoutMs; }
   static retryAfter(value, now = Date.now()) {
     if (!value) return 0; const seconds = Number(value);
     return Math.max(0, Math.min(120000, Number.isFinite(seconds) ? seconds * 1000 : (Date.parse(value) || now) - now));
@@ -10,8 +10,8 @@ export class HttpTransport {
   async request(url, {method = 'POST', headers = {}, body, signal, onEvent} = {}) {
     AgentError.abort(signal); const combined = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(this.timeoutMs)]);
     let response;
-    try { response = await this.fetcher(url, {method, headers: {'Content-Type': 'application/json', ...headers}, ...(body === undefined ? {} : {body: JSON.stringify(body)}), signal: combined, redirect: 'error'}); }
-    catch (error) { AgentError.abort(signal); throw new AgentError('PROVIDER_NETWORK', 'Provider request failed or timed out', {retryable: true, status: 502, cause: error}); }
+    try { response = await this.fetcher(url, {method, headers: {'Content-Type': 'application/json', ...headers}, ...(body === undefined ? {} : {body: JSON.stringify(body)}), signal: combined, redirect: 'error', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer'}); }
+    catch (error) { AgentError.abort(signal); throw new AgentError('PROVIDER_NETWORK', 'Provider connection failed or timed out. Check network access, API entitlement and browser CORS; no proxy or billing fallback was used.', {retryable: true, status: 502, cause: error}); }
     if (!response.ok) {
       // Do not echo response bodies: gateways can reflect tokens and submitted source code.
       await response.body?.cancel();

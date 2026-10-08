@@ -1,3 +1,4 @@
+import {AgentWorkbench} from './agent/AgentWorkbench.js';
 import {SearchView} from './views/SearchView.js';
 import {LanguageToolsView} from './views/LanguageToolsView.js';
 import {NativeArtifactsView} from './views/NativeArtifactsView.js';
@@ -35,7 +36,7 @@ export class IdeApplication {
     this.build=null;this.buildRevision=-1;this.requestSerial=0;this.options={};this.backend='browser';this.runMode=null;this.nativeArgs=[];
     this.settings={auto:true,optimize:true};try{Object.assign(this.settings,JSON.parse(storage?.getItem('ferrite.settings.v3')??'{}'));}catch{}
     this.settings.auto=this.settings.auto!==false;this.settings.optimize=this.settings.optimize!==false;
-    const definitions=[['project','Project','folder'],['structure','Structure','tree'],['search','Find in Files','search'],['cargo','Cargo','cargo'],['compiler','Compiler','code'],['profile','Profile','chart'],['language','Rust tooling','search'],['native-artifacts','Native artifacts','code'],['run','Run','console'],['problems','Problems','warning'],['debugger','Debugger','debug'],['tests','Tests','test']].map(([id,title,icon])=>({id,title,icon,element:Dom.element('div','tool-panel')}));
+    const definitions=[['agent','Coding Agent','code'],['terminal','Terminal','console'],['project','Project','folder'],['structure','Structure','tree'],['search','Find in Files','search'],['cargo','Cargo','cargo'],['compiler','Compiler','code'],['profile','Profile','chart'],['language','Rust tooling','search'],['native-artifacts','Native artifacts','code'],['run','Run','console'],['problems','Problems','warning'],['debugger','Debugger','debug'],['tests','Tests','test']].map(([id,title,icon])=>({id,title,icon,element:Dom.element('div','tool-panel')}));
     this.panels=new Map(definitions.map(d=>[d.id,d.element]));
     this.dock=new DockLayout(this.$('dock-layout'),definitions,{storage});
     this.editor=new CodeEditor(this.$('editor-root'),this.model,this.selection);this.tabs=new TabStrip(this.$('document-tabs'),this.model);
@@ -51,10 +52,11 @@ export class IdeApplication {
     this.cargo=new CargoView(this.panels.get('cargo'),this.model,this.native,{onCommand:command=>this.compile(command),onOptions:options=>{this.options=options;this.invalidate();this.schedule();},onConnected:connected=>{this.backend=connected?'native':'browser';this.$('backend-select').value=this.backend;this.status(connected?'Connected to the trusted native Cargo toolchain.':'Native bridge disconnected.','success');}});
     this.structureRegistry=new SpanRegistry(this.selection,'structure');this.runOutput=Dom.element('pre','run-output');this.runOutput.id='terminal';this.runOutput.setAttribute('aria-label','Program output');
     this.runLabel=Dom.element('span','','No program running');const runHeader=Dom.element('div','run-header');runHeader.append(Dom.icon('console'),this.runLabel,Dom.button('Clear',()=>{this.runOutput.textContent='';},{className:'subtle-button'}));this.panels.get('run').append(runHeader,this.runOutput);
+    this.agent=new AgentWorkbench(this);
     this.palette=new CommandPalette(()=>this.commands());this.toolbar(definitions);this.events();
     this.model.subscribe(event=>this.modelChanged(event));this.renderWorkspace();this.cargo.render();this.compile('check');
     // Read-only inspection hook used by browser acceptance tests and embedders.
-    Object.defineProperty(window,'ferrite',{value:Object.freeze({version:'0.6.0',getSnapshot:()=>this.model.snapshot(),getBuild:()=>this.build,getRevision:()=>this.model.revision,getSelection:()=>this.selection.value}),configurable:true});
+    Object.defineProperty(window,'ferrite',{value:Object.freeze({version:'0.7.0',getSnapshot:()=>this.model.snapshot(),getBuild:()=>this.build,getRevision:()=>this.model.revision,getSelection:()=>this.selection.value}),configurable:true});
   }
   toolbar(definitions){
     for(const [command,title,icon] of [['check','Check','check'],['build','Build','build'],['run','Run','run'],['debug','Debug','debug'],['test','Test','test']]){
@@ -69,7 +71,7 @@ export class IdeApplication {
     for(const [id,key] of [['auto-check','auto'],['optimize','optimize']])this.$(id).onchange=()=>{this.settings[key]=this.$(id).checked;try{this.storage?.setItem('ferrite.settings.v3',JSON.stringify(this.settings));}catch{}if(key==='optimize')this.invalidate();if(this.settings.auto)this.schedule();};
     this.$('backend-select').onchange=()=>{this.backend=this.$('backend-select').value;if(this.backend==='native'&&!this.native.capabilities)this.cargo.connect();};
     this.$('search-everywhere').onclick=()=>this.palette.open();this.$('project-menu').onclick=()=>this.palette.open();this.$('native-connect').onclick=()=>this.cargo.connect();
-    for(const id of ['project','structure','search','cargo','problems','debugger','tests','run','compiler','profile','native-artifacts','language']){const definition=definitions.find(d=>d.id===id);const button=Dom.button('',()=>this.dock.toggle(id),{icon:definition.icon,className:'rail-button',title:`${definition.title} tool window`});button.dataset.tool=id;this.$(['compiler','profile','native-artifacts','language'].includes(id)?'right-rail':'left-rail').append(button);}
+    for(const id of ['project','structure','search','cargo','problems','debugger','tests','run','terminal','compiler','profile','native-artifacts','language','agent']){const definition=definitions.find(d=>d.id===id);const button=Dom.button('',()=>this.dock.toggle(id),{icon:definition.icon,className:'rail-button',title:`${definition.title} tool window`});button.dataset.tool=id;this.$(['compiler','profile','native-artifacts','language','agent'].includes(id)?'right-rail':'left-rail').append(button);}
   }
   events(){
     document.addEventListener('keydown',event=>{
@@ -169,6 +171,7 @@ export class IdeApplication {
   }
   renderStructure(){const root=this.panels.get('structure');this.structureRegistry.clear();root.replaceChildren();for(const item of this.build.sem.symbols){const row=Dom.button(item.name,null,{icon:item.kind==='fn'?'code':'tree',className:'project-row'});row.append(Dom.element('small','muted',item.kind));this.structureRegistry.bind(row,item.span);root.append(row);}}
   executionEvent(event){
+    this.lastExecutionEvent={...event,generation:this.execution.generation};this.executionEventSerial=(this.executionEventSerial??0)+1;
     if(event.type==='output')this.writeOutput(event.text);
     else if(event.type==='paused'||event.type==='done'){
       this.debugger.render(event.state);if(event.type==='paused'){this.status(`Paused · ${event.state.steps} instructions`,'');this.dock.open('debugger');const span=event.state.next??event.state.last?.span;if(span)this.selection.select(span,'debugger');}

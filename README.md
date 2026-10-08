@@ -13,7 +13,7 @@ The IDE follows RustRover's compact editor and tool-window organization. It is a
 
 Edit persistent multi-file Cargo projects using document tabs, a project tree, syntax highlighting, line numbers, breakpoints, undo/redo and a command palette. Create, rename and delete files, import/export complete snapshots, switch targets and examples, or enable debounced automatic checking.
 
-Project, Structure, Find in Files, Cargo, Compiler, Profile, Rust tooling, Native artifacts, Run, Problems, Debugger and Tests are real tabbed tool windows. Drag a tool tab to another region, double-click to float it, use the splitters to resize, or reset the layout. Tool windows remain accessible at small screen sizes.
+Project, Structure, Find in Files, Repositories, Crates, Cargo, Compiler, Profile, Rust tooling, Native artifacts, Run, Problems, Debugger and Tests are real tabbed tool windows. Drag a tool tab to another region, double-click to float it, use the splitters to resize, or reset the layout. Tool windows remain accessible at small screen sizes.
 
 **Ctrl/Cmd+Shift+F / H:** find/replace across files. **Ctrl/Cmd+F / H:** search the current file. **Ctrl+Space:** native semantic completion. **F12:** definition. **Shift+F6:** native semantic rename. **Ctrl/Cmd+Enter:** run. **Ctrl/Cmd+Shift+P:** Search Everywhere. **F5:** debug/resume. **F10:** step source line. **F11:** step MIR instruction. **Alt+1:** Project. **Ctrl/Cmd+S:** save. **Ctrl/Cmd+Z / Shift+Z:** undo/redo in the active document.
 
@@ -47,7 +47,7 @@ Functions, lexical locals/shadowing, numeric inference for supported cases, sign
 
 Ownership checking is a **conservative whole-local move/loan model**, not rustc's full non-lexical lifetime analysis. General async/generators, procedural/declarative user macros, higher-ranked closure/lifetime bounds, full associated-type/trait coherence, complete lifetime and const-generic semantics, platform ABIs and LLVM/native object generation are not implemented by the JavaScript frontend. Unsupported features produce diagnostics; the native example explicitly uses installed Cargo.
 
-The sample catalog includes including a multi-file geometry/trait application, Option pattern loops, a Result pipeline, a local Cargo workspace with a path dependency, test-harness behavior, u128 arithmetic, capturing closures, Cargo feature selection, pattern coverage, aliases/where constraints and an ownership error. A native-only sample demonstrates async syntax and `macro_rules!`; those features are compiled by the installed toolchain, not fabricated in the browser.
+The sample catalog includes a multi-file geometry/trait application, Option pattern loops, a Result pipeline, a local Cargo workspace with a path dependency, test-harness behavior, u128 arithmetic, capturing closures, Cargo feature selection, pattern coverage, aliases/where constraints and an ownership error. A native-only sample demonstrates async syntax and `macro_rules!`; those features are compiled by the installed toolchain, not fabricated in the browser.
 
 ## Run locally
 
@@ -66,6 +66,36 @@ npm run build:workers
 ```
 
 The bundles avoid a worker module-import waterfall. The persistent compiler worker owns bounded file-parser, typed-body query and exact-project result caches. Body changes invalidate the edited function; signature, alias and obligation environment changes invalidate dependent semantic results conservatively. The Incremental queries view reports real cache hits and dependencies. This is not a full rustc query-engine implementation. Cache hits are explicitly labeled and do not replay stale pass timings. Timing bars are measured wall-clock pass durations, not CPU profiles or universal speedup claims.
+
+## Git repositories, full applications, and parallel builds
+
+**Repositories** opens trusted HTTPS/SSH Git clones or authorized local Cargo directories.
+Repository sessions retain complete files, binary assets, configuration and native build caches;
+the editor receives a bounded text projection. Select a nested Cargo manifest, workspace package
+and target; builds run from the manifest directory through actual installed Cargo/rustc.
+**Crates** adds/removes registry, Git and path dependencies through Cargo, with feature, rename
+and dependency-section options. Manifest/lockfile changes are conflict-checked and synchronized.
+The Run panel streams native output and supplies stdin or EOF; native GUIs run on the local machine.
+
+```sh
+node tools/cargo-bridge.mjs --trust-projects --origin http://localhost:8080 \
+  --allow-root /absolute/path/to/repositories --max-jobs 8 --port 8787
+```
+
+The bridge exposes native job, profile, target, toolchain, timeout, offline, lockfile and timing
+controls. Cargo schedules real dependency builds; separate sessions share a bounded job budget.
+The JS compiler now parallelizes independent file parsing in persistent CPU workers, with
+ordered cache adoption and the original ordered semantic/ownership/final-verification passes.
+Profile includes source-linked parser lanes and actual native Cargo timing reports.
+
+[Repository workflows and trust boundaries](docs/repositories.md) ·
+[Parallel scheduling and measurement](docs/parallel-builds.md) ·
+[Full native workspace example](examples/native-workspace/README.md) ·
+[Registry example](examples/registry-app/README.md)
+
+Remote clones are temporary and removed when their session/bridge closes. Export or copy
+changes first; local repositories are never deleted. Native sessions are not cloud builds,
+VCS commit/push clients, hostile-code sandboxes, or a full Rust compiler in JavaScript.
 
 ## Native Cargo
 
@@ -97,6 +127,7 @@ python -m pip install playwright==1.57.0
 python -m playwright install chromium
 npm run test:browser                     # real HTTP document + production workers
 npm run test:native                      # actual installed Cargo, offline local workspace
+npm run test:repositories                # real Git/Cargo, assets, macros, stdin, jobs=1/2 parity
 FERRITE_NATIVE_TEST=1 npm run test:browser # browser-to-native integration as well
 ```
 
@@ -104,7 +135,7 @@ Browser tests exercise all stage renderers, cross-file source synchronization, a
 
 Restricted environments can run `FERRITE_MEMORY_TEST=1` to load the same production modules in memory. That mode deliberately does **not** claim HTTP delivery, persistence or native-network validation. The JSON evidence records the mode.
 
-[Architecture and compatibility](docs/architecture.md) · [Patterns](docs/patterns.md) · [Type aliases and constraints](docs/types.md) · [Find/replace](docs/search.md) · [Remaining scope](docs/roadmap.md)
+[Architecture and compatibility](docs/architecture.md) · [Patterns](docs/patterns.md) · [Type aliases and constraints](docs/types.md) · [Find/replace](docs/search.md) · [Repositories](docs/repositories.md) · [Parallel builds](docs/parallel-builds.md) · [Remaining scope](docs/roadmap.md)
 
 Compiler classes: `src/compiler/`; project/Cargo services: `src/project/`, `src/cargo/`; VM: `src/runtime/`; native bridge: `src/native/`; IDE models/services/views: `src/ui/`. `IdeApplication` is the composition root. Legacy prototype UI implementations are removed.
 

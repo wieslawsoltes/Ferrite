@@ -126,9 +126,9 @@ export class AgentWorkbench {
     finally { this.pendingCommands.delete(event.id); }
   }
   async command(command, args = {}) {
-    const app = this.app;
+    const app = this.app, epoch = this.client.epoch, generation = this.sync.generation;
     if (args.expectedRevision !== undefined && args.expectedRevision !== app.model.revision) throw Error('Stale IDE revision; inspect the current state before retrying.');
-    if (!['editor.state','layout.reset'].includes(command) && !command.startsWith('panel.')) { if (!this.sync.enabled || this.sync.conflicts.length) throw Error('Explicitly import and synchronize this native checkout before source-dependent IDE commands.'); await this.sync.sync(); if (args.expectedRevision !== undefined && args.expectedRevision !== app.model.revision) throw Error('Source changed while synchronizing. Inspect the new revision.'); }
+    if (!['editor.state','layout.reset'].includes(command) && !command.startsWith('panel.')) { if (!this.sync.enabled || this.sync.conflicts.length) throw Error('Explicitly import and synchronize this native checkout before source-dependent IDE commands.'); await this.sync.sync(); if (epoch !== this.client.epoch || generation !== this.sync.generation || !this.sync.enabled) throw Error('Workspace context changed during the IDE command. Inspect and synchronize again.'); if (args.expectedRevision !== undefined && args.expectedRevision !== app.model.revision) throw Error('Source changed while synchronizing. Inspect the new revision.'); }
     if (command === 'editor.state') return this.state();
     if (command === 'editor.open' || command === 'editor.select') {
       const path = args.path ?? args.file ?? app.model.active, text = app.model.read(path); app.model.open(path);
@@ -152,5 +152,5 @@ export class AgentWorkbench {
     else throw Error('Unsupported IDE command.');
     await this.heartbeat(); return this.state();
   }
-  dispose() { this.disposed = true; clearInterval(this.timer); this.unsubscribe(); this.sync.disconnect(); this.terminal.dispose(); this.client.disconnect().catch(()=>{}); }
+  dispose() { this.disposed = true; clearInterval(this.timer); this.unsubscribe(); this.sync.dispose(); this.terminal.dispose(); this.client.disconnect().catch(()=>{}); }
 }

@@ -1,3 +1,4 @@
+import {VirtualFileSystem} from '../../project/VirtualFileSystem.js';
 import {spawn} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 import {join} from 'node:path';
@@ -10,8 +11,8 @@ import {WorkspaceEditPlan} from '../../ui/model/WorkspaceEditPlan.js';
 /** One lazily started installed rust-analyzer with an isolated, trusted virtual project. */
 export class RustAnalyzerSession {
   static methods=new Set(['textDocument/completion','textDocument/hover','textDocument/definition','textDocument/references','textDocument/rename','textDocument/documentSymbol','textDocument/signatureHelp']);
-  constructor({spawnProcess=spawn,environment=process.env}={}){this.spawnProcess=spawnProcess;this.environment=environment;this.project=null;this.peer=null;this.child=null;this.documents=new Map();this.busy=false;this.status=null;this.stderr='';this.optionsKey=null;}
-  config(options={}){return {checkOnSave:false,cargo:{extraEnv:{CARGO_NET_OFFLINE:'true'},buildScripts:{enable:options.expandNativeMacros===true},features:options.allFeatures?'all':options.features??[],noDefaultFeatures:options.defaultFeatures===false,targetDir:join(this.project.root,'target-ra')},procMacro:{enable:options.expandNativeMacros===true},cachePriming:{enable:false}};}
+  constructor({spawnProcess=spawn,project=null,environment=process.env}={}){this.spawnProcess=spawnProcess;this.environment=environment;this.project=project;this.borrowed=!!project;this.peer=null;this.child=null;this.documents=new Map();this.busy=false;this.status=null;this.stderr='';this.optionsKey=null;}
+  config(options={}){return {linkedProjects:[join(this.project.root,this.project.manifest??'Cargo.toml')],checkOnSave:false,cargo:{extraEnv:{CARGO_NET_OFFLINE:options.offline===false?'false':'true'},buildScripts:{enable:options.expandNativeMacros===true},features:options.allFeatures?'all':options.features??[],noDefaultFeatures:options.defaultFeatures===false,targetDir:join(this.project.root,'target-ra')},procMacro:{enable:options.expandNativeMacros===true},cachePriming:{enable:false}};}
   async start(snapshot,options,signal){
     if(this.peer&&!this.peer.closed)return;
     if(this.child)await this.terminate();
@@ -68,7 +69,7 @@ export class RustAnalyzerSession {
   async request(snapshot,method,{file,position,newName,options={},signal}={}){
     if(!RustAnalyzerSession.methods.has(method))throw Error('Unsupported language operation');
     if(this.busy)throw Error('A language operation is already running');
-    const files=ProjectMaterializer.validate(snapshot);
+    const files=this.borrowed?VirtualFileSystem.validate(snapshot?.files):ProjectMaterializer.validate(snapshot);
     if(!Object.hasOwn(files,file)||!file.endsWith('.rs'))throw Error('Select a Rust source file from this project');
     if(method!=='textDocument/documentSymbol')WorkspaceEditPlan.offset(files[file],position);
     if(method==='textDocument/rename'&&(typeof newName!=='string'||newName.length>1000||!/^(?:r#)?[\p{ID_Start}_][\p{ID_Continue}]*$/u.test(newName)))throw Error('Enter a valid Rust identifier');

@@ -1,11 +1,12 @@
+import {RustAnalyzerSession} from './lsp/RustAnalyzerSession.js';
 import {createServer} from 'node:http';
 import {randomBytes, timingSafeEqual} from 'node:crypto';
 import {NativeCargoRunner} from './NativeCargoRunner.js';
 
 /** Opt-in, bearer-authenticated loopback bridge. Native projects must be trusted. */
 export class CargoBridgeServer {
-  constructor({origins = ['http://127.0.0.1:8080', 'http://localhost:8080'], runner = new NativeCargoRunner(), token = randomBytes(32).toString('hex')} = {}) {
-    this.origins = new Set(origins.map(value => new URL(value).origin)); this.runner = runner; this.token = token;
+  constructor({origins = ['http://127.0.0.1:8080', 'http://localhost:8080'], runner = new NativeCargoRunner(), language = new RustAnalyzerSession(), token = randomBytes(32).toString('hex')} = {}) {
+    this.origins = new Set(origins.map(value => new URL(value).origin)); this.runner = runner;this.language=language;this.languageActive=null; this.token = token;
     this.active = null; this.server = createServer((request, response) => this.handle(request, response));
     this.server.requestTimeout = 15000; this.server.headersTimeout = 10000;
   }
@@ -31,9 +32,10 @@ export class CargoBridgeServer {
     if (request.method === 'OPTIONS') { response.writeHead(204); response.end(); return; }
     if (!this.authorized(request)) return this.reply(response, 401, {error: 'A valid bridge bearer token is required'});
     if (request.method === 'GET' && request.url === '/v1/capabilities') return this.reply(response, 200, {
-      backend: 'native-cargo', protocol: 1, commands: [...NativeCargoRunner.commands], busy: !!this.active,
+      backend: 'native-cargo', protocol: 1, commands: [...NativeCargoRunner.commands], busy: !!this.active, languageServer:{backend:'rust-analyzer',methods:[...RustAnalyzerSession.methods],lazy:true},
       warning: 'Native Cargo, build scripts and programs execute with the local user permissions. This is not a sandbox.'
     });
+    if(request.method==='POST'&&request.url==='/v1/lsp')return this.languageRequest(request,response);
     if (request.method === 'POST' && request.url === '/v1/cancel') {
       this.active?.controller.abort(); return this.reply(response, 200, {cancelled: !!this.active});
     }
@@ -57,12 +59,26 @@ export class CargoBridgeServer {
     catch (error) { emit({type: 'error', message: error.message}); }
     finally { this.active = null; response.off('close', disconnected); if (!response.destroyed) response.end(); }
   }
+  async languageRequest(request,response){
+    if(this.languageActive)return this.reply(response,409,{error:'A language operation is already running'});
+    if(!String(request.headers['content-type']).startsWith('application/json'))return this.reply(response,415,{error:'Expected application/json'});
+    let input;try{input=await this.body(request);}catch(error){return this.reply(response,400,{error:error.message});}
+    if(this.languageActive)return this.reply(response,409,{error:'A language operation is already running'});
+    const controller=new AbortController(),closed=()=>{if(!response.writableEnded)controller.abort();};response.on('close',closed);
+    const operation=this.language.request({files:input.files},input.method,{file:input.file,position:input.position,newName:input.newName,options:input.options??{},signal:controller.signal});
+    this.languageActive={controller,operation};
+    try{const result=await operation;if(!response.destroyed)this.reply(response,200,result);}
+    catch(error){if(!response.destroyed)this.reply(response,400,{error:error.message});}
+    finally{this.languageActive=null;response.off('close',closed);}
+  }
   async listen(port = 0) {
     await new Promise((resolve, reject) => { this.server.once('error', reject); this.server.listen(port, '127.0.0.1', resolve); });
     this.port = this.server.address().port; return {url: `http://127.0.0.1:${this.port}`, token: this.token};
   }
   async close() {
     if (this.active) { this.active.controller.abort(); try { await this.active.operation; } catch {} }
+    if(this.languageActive){this.languageActive.controller.abort();try{await this.languageActive.operation;}catch{}}
+    await this.language.dispose();
     this.server.closeAllConnections(); await new Promise(resolve => this.server.close(resolve)); await this.runner.dispose();
   }
 }

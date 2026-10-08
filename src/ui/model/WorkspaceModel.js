@@ -4,13 +4,13 @@ import {VirtualFileSystem as V} from '../../project/VirtualFileSystem.js';
 export class WorkspaceModel {
   constructor(files, {storage = null, key = 'ferrite.workspace.v3'} = {}) {
     this.storage = storage; this.key = key; this.listeners = new Set(); this.revision = 0;
-    this.positions = new Map(); this.breakpoints = new Map(); this.saved = new Map();
+    this.transactions=[];this.positions = new Map(); this.breakpoints = new Map(); this.saved = new Map();
     this.replace(files, false);
   }
   subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   emit(kind, detail = {}) { for (const listener of this.listeners) listener({kind, revision: this.revision, ...detail}); }
   replace(files, notify = true) {
-    this.files = V.validate(files); this.active = Object.hasOwn(this.files, 'src/main.rs') ? 'src/main.rs' : Object.keys(this.files).find(f => f.endsWith('.rs')) ?? Object.keys(this.files)[0];
+    this.transactions=[];this.files = V.validate(files); this.active = Object.hasOwn(this.files, 'src/main.rs') ? 'src/main.rs' : Object.keys(this.files).find(f => f.endsWith('.rs')) ?? Object.keys(this.files)[0];
     this.tabs = [this.active]; this.positions.clear(); this.breakpoints.clear(); this.saved = new Map(Object.entries(this.files));
     this.revision++; if (notify) this.emit('replace');
   }
@@ -57,6 +57,15 @@ export class WorkspaceModel {
     this.files = candidate; this.revision++;
     this.emit('files', {path: this.active, changed: paths});
     return paths;
+  }
+  applyTransaction(changes) {
+    const before=Object.fromEntries(Object.keys(changes).map(path=>[path,this.read(path)]));
+    const paths=this.applyFiles(changes);if(paths.length){this.transactions.push({before,after:{...changes}});if(this.transactions.length>20)this.transactions.shift();}return paths;
+  }
+  undoTransaction() {
+    const transaction=this.transactions.at(-1);if(!transaction)return false;
+    if(Object.entries(transaction.after).some(([path,text])=>this.files[path]!==text))throw Error('Files changed after the refactoring; undo would overwrite newer edits');
+    this.transactions.pop();this.applyFiles(transaction.before);return true;
   }
   dirty(path) { return this.saved.get(path) !== this.files[path]; }
   snapshot() { return {format: 'ferrite-project-v1', files: {...this.files}}; }

@@ -28,6 +28,7 @@ export class CargoView {
       input.onchange=()=>{action(input.checked);this.onOptions(this.options);this.render();};label.append(input,document.createTextNode(title));panel.append(label);return input;
     };
     toggle('Default features',this.options.defaultFeatures!==false,checked=>this.options={...this.options,defaultFeatures:checked},'cargo-default-features');
+    toggle('Analyze native build scripts / procedural macros',!!this.options.expandNativeMacros,checked=>this.options={...this.options,expandNativeMacros:checked},'native-macro-analysis');
     toggle('All features',!!this.options.allFeatures,checked=>this.options={...this.options,allFeatures:checked},'cargo-all-features');
     for(const name of state.available??[]){
       if(name==='default')continue;

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import {WorkspaceEditPlan} from '../src/ui/model/WorkspaceEditPlan.js';
+import {SourceFile} from '../src/project/SourceFile.js';
 /** Real installed Cargo integration; no fake process and no registry dependencies. */
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
@@ -41,6 +43,17 @@ try{
     ['fn main(){let mut n=1;let mut f=||{n+=1;n};println!("{} {}",f(),f());}', '2 3']
   ];
   for(const [source,expected] of browserLanguageCases){files['app/src/main.rs']=source;const actual=await run('run',{args:['--package','smoke-app']});assert.equal(actual.exitCode,0);assert(actual.stdout.includes(expected));}
+  files['app/src/main.rs']='pub fn doubled(value:i32)->i32 {value*2}\nfn main(){println!("{}", doubled(21));}\n';
+  const lspFile='app/src/main.rs';
+  const position=(needle,delta=1)=>{const p=new SourceFile(lspFile,files[lspFile]).position(files[lspFile].lastIndexOf(needle)+delta);return {line:p.line-1,character:p.column-1};};
+  const language=async(command,options={})=>{const result=await client.language(files,'textDocument/'+command,{file:lspFile,position:position('doubled'),...options});cases.push({command:'rust-analyzer '+command});return result;};
+  const definition=await language('definition');assert(definition.locations.some(l=>l.span.file===lspFile&&l.span.line===1));
+  const references=await language('references');assert(references.locations.length>=2);
+  const hover=await language('hover');assert(hover.text.includes('doubled'));
+  const renamed=await language('rename',{newName:'twice'}),transaction=WorkspaceEditPlan.prepare(files,renamed.changes);assert(transaction.count>=2);Object.assign(files,transaction.files);
+  assert.equal((await run('run',{args:['--package','smoke-app']})).exitCode,0);
+  files[lspFile]='pub fn doubled(value:i32)->i32 {value*2}\nfn main(){doub}\n';
+  const completions=await language('completion',{position:position('doub}',4)});assert(completions.items.some(item=>item.label.startsWith('doubled')));
   files['app/src/main.rs']='fn main() { let value: u32 = "type error"; println!("{}",value); }\n';
   const invalid=await run('check');assert.notEqual(invalid.exitCode,0);assert(invalid.diagnostics.some(d=>d.code==='E0308'));
   const output=process.env.FERRITE_NATIVE_OUTPUT??'artifacts/native';await mkdir(output,{recursive:true});await writeFile(`${output}/results.json`,JSON.stringify({backend:'installed-cargo',cases},null,2));

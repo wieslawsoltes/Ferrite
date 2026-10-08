@@ -4,7 +4,7 @@ import {Dom} from './Dom.js';
 export class DockLayout {
   constructor(root, definitions, {storage = null} = {}) {
     this.root = root; this.storage = storage; this.definitions = definitions; this.panels = new Map(definitions.map(p => [p.id, p]));
-    this.initial = {left: ['project','structure','cargo'], right: ['compiler','profile','native-artifacts'], bottom: ['run','problems','debugger','tests']};
+    this.initial = {left: ['project','structure','cargo'], right: ['compiler','profile','native-artifacts','language'], bottom: ['run','problems','debugger','tests']};
     this.layout = structuredClone(this.initial); this.active = {left:'project',right:'compiler',bottom:'run'};
     this.sizes = {left:245,right:560,bottom:235}; this.hidden = new Set(); this.floating = new Set(); this.homes = new Map(); this.floatBoxes = new Map();
     this.restore(); this.regions = new Map();

@@ -1,6 +1,6 @@
 /** Explicitly configured loopback transport. Bearer tokens remain in memory only. */
 export class NativeCargoClient {
-  constructor({fetcher = (...args) => fetch(...args)} = {}) { this.fetcher = fetcher; this.base = null; this.token = null; this.capabilities = null; this.active = null; }
+  constructor({fetcher = (...args) => fetch(...args)} = {}) { this.fetcher = fetcher; this.base = null; this.token = null; this.capabilities = null; this.active = null;this.languageActive=null; }
   async connect(address, token) {
     const url = new URL(address);
     if (!['127.0.0.1', 'localhost'].includes(url.hostname) || url.protocol !== 'http:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw Error('Use an HTTP loopback address such as http://127.0.0.1:8787');
@@ -30,10 +30,23 @@ export class NativeCargoClient {
       if (!result) throw Error('Native Cargo stream ended before a result'); return result;
     } finally { this.active = null; }
   }
+  async language(files,method,{file,position,newName,options={}}={}) {
+    if(!this.capabilities?.languageServer?.methods.includes(method))throw Error('Connect a bridge with installed rust-analyzer support');
+    if(this.languageActive)throw Error('A language request is already running');
+    const controller=new AbortController();this.languageActive=controller;
+    try {
+      const response=await this.fetcher(`${this.base}/v1/lsp`,{method:'POST',headers:{Authorization:`Bearer ${this.token}`,'Content-Type':'application/json'},body:JSON.stringify({files,method,file,position,newName,options}),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(65000)])});
+      const reader=response.body.getReader(),chunks=[];let length=0;
+      for(;;){const {done,value}=await reader.read();if(done)break;length+=value.length;if(length>8*1024*1024){controller.abort();throw Error('Language response exceeds 8 MiB');}chunks.push(value);}
+      const joined=new Uint8Array(length);let offset=0;for(const chunk of chunks){joined.set(chunk,offset);offset+=chunk.length;}
+      const result=JSON.parse(new TextDecoder().decode(joined));if(!response.ok)throw Error(result.error??'Language request failed');return result;
+    }finally{if(this.languageActive===controller)this.languageActive=null;}
+  }
   async cancel() {
+    this.languageActive?.abort();
     if (!this.base || !this.active) return;
     try { await this.fetcher(`${this.base}/v1/cancel`, {method: 'POST', headers: {Authorization: `Bearer ${this.token}`}, signal: AbortSignal.timeout(3000)}); }
     finally { this.active?.abort(); }
   }
-  disconnect() { this.active?.abort(); this.base = null; this.token = null; this.capabilities = null; }
+  disconnect() { this.languageActive?.abort();this.active?.abort(); this.base = null; this.token = null; this.capabilities = null; }
 }

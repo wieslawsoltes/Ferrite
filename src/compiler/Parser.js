@@ -47,6 +47,11 @@ export class Parser {
     else {let name=take().value;if(!/^[A-Za-z_]/.test(name))throw Error("Expected expression at "+start.line+":"+start.column);
       while(peek()==="::"){take();name+="::"+take().value;}left=node("variable",{name},start);}
     for(;;){
+      if(peek()==="{"&&left.kind==="variable"&&/^[A-Za-z_]\\w*$/.test(peek(1))&&peek(2)===":"){
+        take();const fields=[];
+        while(peek()!=="}"){const field=take().value;eat(":");fields.push({name:field,value:expr()});if(peek()!==",")break;take();}
+        eat("}");left=node("structLiteral",{name:left.name,fields},start);continue;
+      }
       if(peek()==="!"&&left.kind==="variable"){take();left={...left,macro:true};continue;}
       if(peek()==="("){take();const args=[];while(peek()!==")"){args.push(expr());if(peek()!==",")break;take();}eat(")");left=node("call",{callee:left,args,macro:!!left.macro},start);continue;}
       if(peek()==="["){take();const index=expr();eat("]");left=node("index",{object:left,index},start);continue;}

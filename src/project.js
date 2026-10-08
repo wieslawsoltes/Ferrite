@@ -1,3 +1,4 @@
+import {CallGraphBuilder} from "./compiler/CallGraphBuilder.js";
 import {compile} from "./engine.js";
 import {CompilerCache} from "./compiler/CompilerCache.js";
 const cache = new CompilerCache(24);
@@ -14,6 +15,8 @@ export function compileProject(files,command="check"){
  {name:"Cargo",data:plan},{name:"Modules",data:unit.modules},{name:"Tokens",data:compilation.tokens},
  {name:"AST",data:compilation.ast},{name:"HIR / Symbols",data:compilation.sem.symbols},
  {name:"Types / Traits",data:compilation.sem},{name:"MIR / CFG",data:compilation.mir},
- {name:"Generic Instances",data:compilation.sem.instances},{name:"JavaScript",data:compilation.js}
+ {name:"Generic Instances",data:compilation.sem.instances},
+ {name:"Call Graph",data:CallGraphBuilder.build(compilation.ast,compilation.sem.instances)},
+ {name:"JavaScript",data:compilation.js}
  ]};
 }

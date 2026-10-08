@@ -11,7 +11,7 @@ const messages = [];
 for (const name of names) {
   const encoded = await readFile(`${directory}/${name}`, 'utf8');
   if (encoded.length > 2_000_000) throw Error('Oversized source update');
-  const patch = JSON.parse(gunzipSync(Buffer.from(encoded, 'base64'), {maxOutputLength: 8_000_000}));
+  const patch = encoded.trimStart().startsWith('{') ? JSON.parse(encoded) : JSON.parse(gunzipSync(Buffer.from(encoded, 'base64'), {maxOutputLength: 8_000_000}));
   if (patch.format !== 'ferrite-source-update-v1' || !Array.isArray(patch.files) || patch.files.length > 128) throw Error('Invalid update format');
   if (typeof patch.message !== 'string' || /[\r\n]/.test(patch.message)) throw Error('Invalid commit message');
   const prepared = [], seen = new Set();

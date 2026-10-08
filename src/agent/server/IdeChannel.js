@@ -10,7 +10,7 @@ export class IdeChannel {
     this.clientId = randomUUID(); this.updated = Date.now(); this.state = null; return this.clientId;
   }
   heartbeat(clientId, state) {
-    if (clientId !== this.clientId) throw new AgentError('IDE_OWNER', 'IDE connection has expired', {status: 409});
+    if (!this.clientId || typeof clientId !== 'string' || clientId !== this.clientId) throw new AgentError('IDE_OWNER', 'IDE connection has expired', {status: 409});
     if (!state || typeof state !== 'object' || Array.isArray(state) || JSON.stringify(state).length > 200000) throw Error('Invalid IDE state');
     this.updated = Date.now(); this.state = structuredClone(state); return {connected: true};
   }
@@ -32,6 +32,6 @@ export class IdeChannel {
     if (clientId !== request.clientId || clientId !== this.clientId) throw new AgentError('IDE_OWNER', 'Invalid IDE reply owner');
     request.finish(error ? new AgentError('IDE_COMMAND', String(error).slice(0, 2000)) : null, result); return {accepted: true};
   }
-  disconnect(clientId) { if (clientId !== this.clientId) return; this.clientId = null; this.updated = 0; for (const request of [...this.pending.values()]) request.finish(new AgentError('IDE_OFFLINE', 'IDE disconnected')); }
+  disconnect(clientId) { if (clientId !== this.clientId) return; this.clientId = null; this.updated = 0; this.state = null; for (const request of [...this.pending.values()]) request.finish(new AgentError('IDE_OFFLINE', 'IDE disconnected')); }
   close() { this.disconnect(this.clientId); }
 }

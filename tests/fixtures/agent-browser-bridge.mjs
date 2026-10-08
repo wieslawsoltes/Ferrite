@@ -2,6 +2,7 @@
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {setTimeout as sleep} from 'node:timers/promises';
 import {randomUUID} from 'node:crypto';
 import {AgentRuntime} from '../../src/agent/server/AgentRuntime.js';
 import {AgentBridgeServer} from '../../src/agent/server/AgentBridgeServer.js';
@@ -23,6 +24,13 @@ const transport={async request(url,options){
 }};
 const runtime=await AgentRuntime.create({root:join(root,'workspace'),state:join(root,'state'),environment:{},transport});
 const bridge=new AgentBridgeServer(runtime,{origins:[process.argv[2]??'http://localhost:8080']});
+// Delay ownership acquisition beyond the UI polling interval. Never replace the
+// browser's fetch in HTTP mode: receiver and handshake races must be exercised.
+const route = bridge.route.bind(bridge);
+bridge.route = async (method, url, input, signal) => {
+  if (url.pathname === '/v1/ide/connect') await sleep(650, undefined, {signal});
+  return route(method, url, input, signal);
+};
 const connection=await bridge.listen();console.log(JSON.stringify({...connection,root:runtime.workspace.root}));
 let closing=false;async function close(){if(closing)return;closing=true;await bridge.close();await rm(root,{recursive:true,force:true});process.exit();}
 process.on('SIGTERM',close);process.on('SIGINT',close);

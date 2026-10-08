@@ -9,9 +9,19 @@ const names = (await readdir(directory)).filter(name => /^\d+-[a-z-]+\.b64$/.tes
 if (!names.length) throw Error('No reviewed source update');
 const messages = [];
 for (const name of names) {
-  const encoded = await readFile(`${directory}/${name}`, 'utf8');
+  let encoded = await readFile(`${directory}/${name}`, 'utf8');
   if (encoded.length > 2_000_000) throw Error('Oversized source update');
-  const patch = encoded.trimStart().startsWith('{') ? JSON.parse(encoded) : JSON.parse(gunzipSync(Buffer.from(encoded, 'base64'), {maxOutputLength: 8_000_000}));
+  let patch, parts = [];
+  if (encoded.trimStart().startsWith('{')) {
+    const value = JSON.parse(encoded);
+    if (value.format === 'ferrite-source-transport-v1') {
+      if (!Array.isArray(value.parts) || !value.parts.length || value.parts.length > 64 || value.parts.some(p => !/^\d+-\d+\.part$/.test(p)) || new Set(value.parts).size !== value.parts.length) throw Error('Invalid source transport parts');
+      parts = value.parts;
+      encoded = (await Promise.all(parts.map(p => readFile(`${directory}/${p}`, 'utf8')))).join('');
+      if (encoded.length > 2_000_000 || hash(Buffer.from(encoded, 'base64')) !== value.sha256) throw Error('Source transport checksum mismatch');
+    } else patch = value;
+  }
+  patch ??= JSON.parse(gunzipSync(Buffer.from(encoded, 'base64'), {maxOutputLength: 8_000_000}));
   if (patch.format !== 'ferrite-source-update-v1' || !Array.isArray(patch.files) || patch.files.length > 128) throw Error('Invalid update format');
   if (typeof patch.message !== 'string' || /[\r\n]/.test(patch.message)) throw Error('Invalid commit message');
   const prepared = [], seen = new Set();
@@ -46,7 +56,9 @@ for (const name of names) {
   for (const {target, output} of prepared) {
     if (output === null) await rm(target); else { await mkdir(dirname(target), {recursive: true}); await writeFile(target, output); }
   }
-  await rm(`${directory}/${name}`); messages.push(patch.message);
+  await rm(`${directory}/${name}`);
+  for (const part of parts) await rm(`${directory}/${part}`);
+  messages.push(patch.message);
   console.log(`Applied ${prepared.length} exact-content source updates`);
 }
 if (process.env.GITHUB_OUTPUT) await writeFile(process.env.GITHUB_OUTPUT, `message=${messages.join('; ')}\n`, {flag: 'a'});

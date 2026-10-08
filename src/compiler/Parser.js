@@ -18,7 +18,7 @@ export class Parser {
       if(peek()==="EOF")throw Error("Unclosed block at "+start.line+":"+start.column);
       if(peek()==="let"){const t=take(),mutable=peek()==="mut"?!!take():false,name=take().value;let annotation=null;if(peek()===":"){take();annotation=type();}eat("=");const value=expr();eat(";");body.push(node("let",{name,mutable,annotation,value},t));continue;}
       if(peek()==="return"){const t=take(),value=peek()===";"?null:expr();eat(";");body.push(node("return",{value},t));continue;}
-      if(peek()==="while"){const t=take(),condition=expr(),then=block();body.push(node("while",{condition,then},t));continue;}
+      if(peek()==="for"){const t=take(),name=take().value;eat("in");const from=expr();const inclusive=peek()==="..=";if(peek()!==".."&&peek()!=="..=")throw Error("Expected range .. or ..= after for iterator");take();const to=expr(),then=block();body.push(node("for",{name,from,to,inclusive,then},t));continue;}\n      if(peek()==="while"){const t=take(),condition=expr(),then=block();body.push(node("while",{condition,then},t));continue;}
       if(peek()==="loop"){const t=take(),then=block();body.push(node("loop",{then},t));continue;}
       if(peek()==="break"||peek()==="continue"){const t=take();eat(";");body.push(node(t.value,{},t));continue;}
       if(peek()==="if"){const t=take(),condition=expr(),then=block();let otherwise=null;if(peek()==="else"){take();otherwise=peek()==="if"?conditional():block();}body.push(node("if",{condition,then,otherwise},t));continue;}

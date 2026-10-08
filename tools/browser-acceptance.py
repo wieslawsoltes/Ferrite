@@ -375,8 +375,137 @@ def run():
             case('project search navigates source, previews replacements, applies and undoes atomically', project_search)
             page.locator('#layout-reset').click()
 
+            def folder_import():
+                import tempfile
+                with tempfile.TemporaryDirectory(prefix='ferrite-folder-') as directory:
+                    folder=Path(directory)
+                    (folder/'src').mkdir()
+                    (folder/'Cargo.toml').write_text('[package]\nname="folder_app"\nversion="0.1.0"\nedition="2021"\n')
+                    (folder/'src/main.rs').write_text('fn main(){println!("folder imported");}\n')
+                    (folder/'asset.bin').write_bytes(bytes([0,255,1]))
+                    (folder/'.env').write_text('DO_NOT_IMPORT=secret\n')
+                    show_tool('Repositories')
+                    page.locator('input[webkitdirectory]').set_input_files(str(folder))
+                    page.wait_for_function('window.ferrite.getSnapshot().files["src/main.rs"].includes("folder imported")')
+                    snapshot=page.evaluate('window.ferrite.getSnapshot()')
+                    assert set(snapshot['files'])=={'Cargo.toml','src/main.rs'}, snapshot
+                    run_program('folder imported\n')
+                select_sample('Geometry lab · traits & modules')
+            case('browser local-folder import preserves Rust text and excludes binary assets and secrets', folder_import)
+
+            def parallel_parser():
+                page.locator('#auto-check').uncheck()
+                files={'Cargo.toml':'[package]\nname="parallel_app"\nversion="0.1.0"\nedition="2021"\n',
+                  'src/main.rs':'mod a;mod b;mod c;fn main(){println!("{}",a::value()+b::value()+c::value());}\n',
+                  'src/a.rs':'pub fn value()->i32{10}\n','src/b.rs':'pub fn value()->i32{20}\n','src/c.rs':'pub fn value()->i32{12}\n'}
+                page.locator('#import-input').set_input_files({'name':'parallel.ferrite.json','mimeType':'application/json','buffer':json.dumps({'format':'ferrite-project-v1','files':files}).encode()})
+                page.wait_for_function('window.ferrite.getSnapshot().files["src/a.rs"]!==undefined')
+                show_tool('Cargo')
+                page.get_by_label('Browser parser workers',exact=True).fill('4')
+                page.get_by_label('Browser parser workers',exact=True).press('Tab')
+                run_program('42\n')
+                report=page.evaluate('window.ferrite.getBuild().parallel')
+                assert report['usedWorkers']==4 and report['peakActiveTasks']==4,report
+                assert report['parsedFiles']==4 and len(report['tasks'])==4, report
+                show_tool('Profile')
+                expect(page.locator('.parallel-profile')).to_contain_text('4 workers')
+                row=page.locator('.parallel-profile [data-source-file="src/b.rs"]')
+                row.click()
+                expect(page.locator('#active-path')).to_have_text('src/b.rs')
+                assert page.locator('#source').evaluate('e=>e.selectionEnd>e.selectionStart')
+                page.screenshot(path=str(OUTPUT/'parallel-parser.png'))
+                page.locator('#source').fill('pub fn value()->i32{21}\n')
+                expect(page.locator('.parallel-profile .source-link')).to_have_count(0)
+                run_program('43\n')
+                page.locator('#backend-select').select_option('wasm')
+                run_program('43\n')
+                page.locator('#auto-check').check()
+                select_sample('Geometry lab · traits & modules')
+            case('production browser parser workers execute concurrently with linked task lanes and unchanged VM/Wasm results',parallel_parser)
+
+            def repository_ui_contract():
+                # This case tests the production UI against an explicit in-memory transport fixture.
+                # Real native process/HTTP behavior is tested separately in Node and installed-toolchain CI.
+                page.locator('#auto-check').uncheck()
+                page.evaluate('''() => {
+                  const files={'Cargo.toml':'[package]\\nname="repo_app"\\nversion="0.1.0"\\nedition="2021"\\n','src/main.rs':'fn main(){println!("repo");}\\n'};
+                  const session={id:'fixture-repository',version:1,root:'/trusted/repo_app',source:'https://example.invalid/repo_app.git',head:'a'.repeat(40),owned:true,manifest:'Cargo.toml',files,omittedCount:1,omitted:[{path:'asset.bin',reason:'binary'}],manifests:['Cargo.toml'],metadata:{workspace_members:['app'],target_directory:'/trusted/repo_app/target',packages:[{id:'app',name:'repo_app',features:{},dependencies:[],targets:[{name:'repo_app',kind:['bin'],src_path:'/trusted/repo_app/src/main.rs'}]}]}};
+                  const fixture=window.__repositoryFixture={original:window.fetch,requests:[],session,finish:null};
+                  const json=value=>new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}});
+                  const stream=value=>new Response(JSON.stringify({type:'started',operationId:'fixture-operation'})+'\\n'+JSON.stringify({type:'result',result:value})+'\\n',{headers:{'Content-Type':'application/x-ndjson'}});
+                  const complete=(input)=>{session.files={...input.files,'Cargo.lock':'version = 4\\n'};session.version++;if(input.command==='add')session.files['Cargo.toml']+='\\n[dependencies]\\nserde_json="1"\\n';return {repository:structuredClone(session),sourceRoot:session.root,exitCode:0,stdout:'fixture output\\n',stderr:'',elapsedMs:1,artifacts:[],diagnostics:[],buildSummary:{jobs:Number(input.jobs||2),fresh:1,rebuilt:2,elapsedMs:1}};};
+                  window.fetch=async(address,options={})=>{
+                    const path=new URL(address).pathname,input=options.body?JSON.parse(options.body):{};fixture.requests.push({path,input});
+                    if(path==='/v1/capabilities')return json({backend:'native-cargo',protocol:1,commands:['check','build','run','test','add','remove'],repositories:{protocol:1,maxJobs:4,allowedRoots:['/trusted']}});
+                    if(path==='/v1/repository/open'||path==='/v1/repository/reload')return stream(structuredClone(session));
+                    if(path==='/v1/repository/list')return stream([{id:session.id,root:session.root,owned:true,busy:false}]);
+                    if(path==='/v1/repository/close')return stream({closed:true});
+                    if(path==='/v1/repository/input'){fixture.finish?.(input.text);return json({accepted:true});}
+                    if(path==='/v1/repository/run'){
+                      if(input.command!=='run')return stream(complete(input));
+                      return new Response(new ReadableStream({start(controller){
+                        const emit=value=>controller.enqueue(new TextEncoder().encode(JSON.stringify(value)+'\\n'));
+                        emit({type:'started',operationId:'fixture-operation'});emit({type:'log',text:'ready for stdin\\n'});
+                        fixture.finish=text=>{const result=complete(input);result.stdout='stdin: '+text;emit({type:'log',text:result.stdout});emit({type:'result',result});controller.close();fixture.finish=null;};
+                      }}),{headers:{'Content-Type':'application/x-ndjson'}});
+                    }
+                    throw Error('Unexpected fixture route '+path);
+                  };
+                }''')
+                try:
+                    page.locator('#native-connect').click()
+                    page.get_by_role('textbox',name='Cargo bridge bearer token').fill('fixture-token-not-persisted-12345')
+                    page.get_by_role('checkbox',name='I trust this project and authorize native code execution.').check()
+                    page.get_by_role('button',name='Connect',exact=True).click()
+                    expect(page.locator('#status')).to_contain_text('Connected to the trusted native Cargo')
+                    show_tool('Repositories')
+                    page.locator('#repository-path').fill('https://example.invalid/repo_app.git')
+                    expect(page.locator('#repository-open')).to_be_disabled()
+                    page.locator('#repository-trust').check()
+                    page.locator('#repository-open').click()
+                    expect(page.locator('.repository-info')).to_contain_text('/trusted/repo_app')
+                    expect(page.locator('#backend-select')).to_have_value('native')
+                    show_tool('Cargo')
+                    expect(page.locator('#cargo-target')).to_have_value('bin:repo_app')
+                    page.get_by_label('Native parallel Cargo jobs',exact=True).fill('2')
+                    page.get_by_label('Native parallel Cargo jobs',exact=True).press('Tab')
+                    page.get_by_label('Generate Cargo timing report',exact=True).check()
+                    page.locator('#build').click()
+                    expect(page.locator('#status')).to_contain_text('exit 0')
+                    request=page.evaluate('window.__repositoryFixture.requests.filter(r=>r.path.endsWith("/run")).at(-1).input')
+                    assert request['jobs']=='2' and '--timings' in request['args'] and 'repo_app' in request['args'],request
+                    assert page.evaluate('window.ferrite.getSnapshot().files["Cargo.lock"]')=='version = 4\n'
+                    show_tool('Crates')
+                    page.locator('#crate-name').fill('serde_json')
+                    page.get_by_label('Version requirement (optional)',exact=True).fill('1')
+                    page.locator('#crate-add').click()
+                    expect(page.locator('#status')).to_contain_text('Cargo dependency edit · exit 0')
+                    assert '[dependencies]' in page.evaluate('window.ferrite.getSnapshot().files["Cargo.toml"]')
+                    page.locator('#run').click()
+                    expect(page.locator('#terminal')).to_contain_text('ready for stdin')
+                    page.get_by_label('Native standard input',exact=True).fill('hello input')
+                    page.get_by_role('button',name='Send input',exact=True).click()
+                    expect(page.locator('#status')).to_contain_text('exit 0')
+                    expect(page.locator('#terminal')).to_contain_text('stdin: hello input')
+                    show_tool('Repositories')
+                    page.get_by_role('button',name='List bridge sessions',exact=True).click()
+                    expect(page.locator('.repository-session')).to_have_count(1)
+                    page.screenshot(path=str(OUTPUT/'repositories-contract.png'))
+                    assert 'fixture-token-not-persisted' not in json.dumps(page.evaluate('window.ferrite.getSnapshot()'))
+                    page.get_by_role('button',name='Close repository session',exact=True).click()
+                    page.get_by_role('button',name='Close',exact=True).click()
+                    expect(page.locator('#backend-select')).to_have_value('browser')
+                    show_tool('Cargo')
+                    page.get_by_role('button',name='Disconnect',exact=True).click()
+                finally:
+                    page.evaluate('window.fetch=window.__repositoryFixture.original;delete window.__repositoryFixture')
+                page.locator('#auto-check').check()
+                select_sample('Geometry lab · traits & modules')
+            case('repository UI contract: explicit trust, metadata targets, Cargo options, crate edits, lockfile merge, stdin and close (simulated transport)',repository_ui_contract)
+            page.locator('#layout-reset').click()
+
             if os.environ.get('FERRITE_NATIVE_TEST') == '1' and not MEMORY:
-                native_process = subprocess.Popen(['node', 'tools/cargo-bridge.mjs', '--trust-projects', '--origin', base.rstrip('/'), '--port', '0'], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                native_process = subprocess.Popen(['node', 'tools/cargo-bridge.mjs', '--trust-projects', '--origin', base.rstrip('/'), '--port', '0', '--max-jobs', '2', '--allow-root', str(ROOT/'examples/native-workspace')], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 address_line = native_process.stdout.readline().strip()
                 token_line = native_process.stdout.readline().strip()
                 address = address_line.removeprefix('Ferrite native Cargo bridge: ')
@@ -441,6 +570,52 @@ def run():
                     page.locator('#auto-check').check()
                     select_sample('Geometry lab · traits & modules')
                 case('real authenticated Cargo bridge runs full Rust and maps native diagnostics', native_cargo)
+
+                def native_repository():
+                    page.locator('#auto-check').uncheck()
+                    page.locator('#native-connect').click()
+                    page.get_by_role('textbox',name='Cargo bridge address').fill(address)
+                    page.get_by_role('textbox',name='Cargo bridge bearer token').fill(token)
+                    page.get_by_role('checkbox',name='I trust this project and authorize native code execution.').check()
+                    page.get_by_role('button',name='Connect',exact=True).click()
+                    expect(page.locator('#status')).to_contain_text('Connected to the trusted native Cargo')
+                    show_tool('Repositories')
+                    page.get_by_label('Repository source',exact=True).select_option('local')
+                    page.locator('#repository-path').fill(str(ROOT/'examples/native-workspace'))
+                    page.locator('#repository-trust').check()
+                    page.locator('#repository-open').click()
+                    expect(page.locator('.repository-info')).to_contain_text('native-workspace',timeout=60000)
+                    show_tool('Cargo')
+                    page.locator('#cargo-package').select_option('native-lab')
+                    page.get_by_label('Native parallel Cargo jobs',exact=True).fill('2')
+                    page.get_by_label('Native parallel Cargo jobs',exact=True).press('Tab')
+                    page.get_by_label('Program / test arguments (JSON array)',exact=True).fill('["--no-input"]')
+                    page.get_by_label('Program / test arguments (JSON array)',exact=True).press('Tab')
+                    page.locator('#run').click()
+                    expect(page.locator('#status')).to_contain_text('exit 0',timeout=60000)
+                    expect(page.locator('#terminal')).to_contain_text('total=42, asset=4 bytes, build.rs executed')
+                    expect(page.locator('#terminal')).to_contain_text('nested Cargo configuration loaded')
+                    assert 'Cargo.lock' in page.evaluate('window.ferrite.getSnapshot().files')
+                    show_tool('Cargo')
+                    page.get_by_label('Program / test arguments (JSON array)',exact=True).fill('[]')
+                    page.get_by_label('Program / test arguments (JSON array)',exact=True).press('Tab')
+                    page.locator('#run').click()
+                    expect(page.locator('#terminal')).to_contain_text('Name: ',timeout=60000)
+                    page.get_by_label('Native standard input',exact=True).fill('native repository')
+                    page.get_by_role('button',name='Send input',exact=True).click()
+                    expect(page.locator('#status')).to_contain_text('exit 0',timeout=60000)
+                    expect(page.locator('#terminal')).to_contain_text('Hello, native repository!')
+                    page.screenshot(path=str(OUTPUT/'native-repository-real.png'))
+                    show_tool('Repositories')
+                    page.get_by_role('button',name='Close repository session',exact=True).click()
+                    page.get_by_role('button',name='Close',exact=True).click()
+                    expect(page.locator('#backend-select')).to_have_value('browser')
+                    show_tool('Cargo')
+                    page.get_by_role('button',name='Disconnect',exact=True).click()
+                    page.locator('#auto-check').check()
+                    select_sample('Geometry lab · traits & modules')
+                case('real native repository: local workspace, macros, build script, asset, nested Cargo config and stdin',native_repository)
+
 
             def mobile():
                 page.set_viewport_size({'width': 390, 'height': 844})

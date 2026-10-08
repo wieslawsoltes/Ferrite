@@ -20,10 +20,26 @@ The debugger displays live VM frames/registers and uses MIR/source span stepping
 
 ## Cargo boundary
 
-Browser Cargo planning is not a Cargo reimplementation. Registry fetching, arbitrary build scripts, platform selection, complete Rust and toolchain commands belong to the real local Cargo runner. `CargoBridgeServer` exposes an opt-in loopback endpoint with exact-origin, Host and bearer checks; `NativeCargoRunner` retains one owned temporary project and `ProcessRunner` handles streamed Unicode output, timeout, cancellation and process-group cleanup.
+Browser Cargo planning is not a Cargo reimplementation. Registry fetching, arbitrary build scripts, platform selection, complete Rust and toolchain commands belong to the real local Cargo runner. `CargoBridgeServer` exposes an opt-in loopback endpoint with exact-origin, Host and bearer checks; `NativeCargoRunner` can own a legacy temporary snapshot project or borrow a persistent `RepositorySession`; `ProcessRunner` handles streamed Unicode output, timeout, cancellation and process-group cleanup.
 
 Native file updates are applied atomically to the virtual workspace without changing the active document. A nonzero exit remains an error even when Cargo generates a lockfile. Tokens remain memory-only. The bridge is not a sandbox; projects must be trusted.
 
 ## Compatibility limits
 
-Ferrite's ownership model is conservative whole-local analysis, not full rustc NLL. General trait/associated-type solving, complete lifetime/const generics, closures, async/generators and user macros are not implemented by the browser backend. Native Cargo is used for such programs. The IDE does not claim pixel-perfect or full functional JetBrains RustRover parity.
+Ferrite's ownership model is conservative whole-local analysis, not full rustc NLL. General trait/associated-type solving, complete lifetime/const generics, higher-ranked closure semantics, async/generators and user macros are not implemented by the browser backend. Native Cargo is used for such programs. The IDE does not claim pixel-perfect or full functional JetBrains RustRover parity.
+
+## Repository and parallel boundaries
+
+`RepositoryManager` owns live native handles. `RepositoryPolicy` controls editor file access;
+`RepositorySnapshot` creates bounded text projections while leaving native assets intact.
+`RepositorySession` applies preimage-checked staged edits. `RepositoryController` performs
+three-way reconciliation against current IDE text and holds session handles in memory only.
+`NativeCargoMetadata` adapts real metadata; browser Cargo parsing is not on the native build path.
+`BuildJobBudget` provides weighted admission, while Cargo owns dependency scheduling.
+
+`ParserWorkerPool` parallelizes pure file parsing, dispatches longest files first and commits
+results in filename order. Shared compiler state stays in the parent compile worker.
+`FileParserCache` accepts validated worker results; all original semantic/ownership/verifier
+passes still run. Failure falls back to the same serial parser, not relaxed semantics.
+Profile task spans are invalidated whenever source/settings change. See
+[repository contracts](repositories.md) and [parallel build contracts](parallel-builds.md).

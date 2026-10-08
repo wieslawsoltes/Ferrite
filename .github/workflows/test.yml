@@ -31,7 +31,9 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt --component rust-analyzer --component rust-src
           rustup default stable
       - name: Exercise installed Cargo over an offline local workspace
-        run: npm run test:native
+        run: |
+          npm run test:native
+          npm run test:repositories
       - name: Exercise the HTTP IDE and authenticated Cargo bridge in Chromium
         env:
           FERRITE_NATIVE_TEST: '1'

@@ -40,13 +40,16 @@ publishing actions are intentionally excluded from the browser bridge.
 
 Docking, source synchronization, native semantic navigation/refactor preview and
 literal Find/Replace are implemented. Full RustRover product/visual parity,
-advanced editing/refactoring workflows, native debugger integration and repository
-VCS operations remain incomplete. Search is deliberately literal; semantic rename
+advanced editing/refactoring workflows, native debugger integration and Git commit/merge/push
+UI remain incomplete. Trusted remote/local repository loading, persistent native Cargo
+workspaces, crate editing, source conflict checks and piped stdin/EOF are implemented. Search is deliberately literal; semantic rename
 uses rust-analyzer instead.
 
 Incremental reuse exists for unchanged file parsing, typed bodies and completed
-projects. Full fine-grained query dependency tracking, persistent on-disk build
-caches and broad reproducible performance studies remain work items. Timings are
+projects. Pure file parsing also runs in a deterministic worker pool. Native repository sessions
+reuse real Cargo on-disk caches. Fine-grained semantic query tracking, parallel shared-state
+browser passes, persistent browser compiler caches and broad reproducible performance
+studies remain work items. Timings are
 measured per workload, not universal speedup claims.
 
 All supported stages must expose actual compiler data and original-file spans.

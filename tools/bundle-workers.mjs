@@ -6,7 +6,7 @@ import {dirname,resolve,relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
-const entries=['src/ui/workers/compile-worker.js','src/ui/workers/execution-worker.js'];
+const entries=['src/ui/workers/parse-worker.js','src/ui/workers/compile-worker.js','src/ui/workers/execution-worker.js'];
 for(const entry of entries){
   const seen=new Map(),active=new Set(),ordered=[];
   async function visit(path){

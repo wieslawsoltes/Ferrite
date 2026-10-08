@@ -1,3 +1,6 @@
+import {RepositoryController} from './controllers/RepositoryController.js';
+import {RepositoryView} from './views/RepositoryView.js';
+import {DependencyView} from './views/DependencyView.js';
 import {SearchView} from './views/SearchView.js';
 import {LanguageToolsView} from './views/LanguageToolsView.js';
 import {NativeArtifactsView} from './views/NativeArtifactsView.js';
@@ -35,22 +38,26 @@ export class IdeApplication {
     this.build=null;this.buildRevision=-1;this.requestSerial=0;this.options={};this.backend='browser';this.runMode=null;this.nativeArgs=[];
     this.settings={auto:true,optimize:true};try{Object.assign(this.settings,JSON.parse(storage?.getItem('ferrite.settings.v3')??'{}'));}catch{}
     this.settings.auto=this.settings.auto!==false;this.settings.optimize=this.settings.optimize!==false;
-    const definitions=[['project','Project','folder'],['structure','Structure','tree'],['search','Find in Files','search'],['cargo','Cargo','cargo'],['compiler','Compiler','code'],['profile','Profile','chart'],['language','Rust tooling','search'],['native-artifacts','Native artifacts','code'],['run','Run','console'],['problems','Problems','warning'],['debugger','Debugger','debug'],['tests','Tests','test']].map(([id,title,icon])=>({id,title,icon,element:Dom.element('div','tool-panel')}));
+    const definitions=[['project','Project','folder'],['structure','Structure','tree'],['search','Find in Files','search'],['cargo','Cargo','cargo'],['repositories','Repositories','folder'],['crates','Crates','cargo'],['compiler','Compiler','code'],['profile','Profile','chart'],['language','Rust tooling','search'],['native-artifacts','Native artifacts','code'],['run','Run','console'],['problems','Problems','warning'],['debugger','Debugger','debug'],['tests','Tests','test']].map(([id,title,icon])=>({id,title,icon,element:Dom.element('div','tool-panel')}));
     this.panels=new Map(definitions.map(d=>[d.id,d.element]));
     this.dock=new DockLayout(this.$('dock-layout'),definitions,{storage});
     this.editor=new CodeEditor(this.$('editor-root'),this.model,this.selection);this.tabs=new TabStrip(this.$('document-tabs'),this.model);
     const projectHeading=Dom.element('div','project-heading');projectHeading.append(Dom.icon('folder'),Dom.element('span','','Project files'));const filter=Dom.element('input','project-filter');filter.placeholder='Filter files';filter.setAttribute('aria-label','Filter project files');const projectTree=Dom.element('div','project-tree');projectTree.id='project-tree';this.projectView=new ProjectView(projectTree,this.model);filter.oninput=()=>{this.projectView.filter=filter.value;this.projectView.render();};
     this.projectFooter=Dom.element('div','project-footer');this.panels.get('project').append(projectHeading,filter,projectTree,this.projectFooter);
-    this.inspector=new InspectorView(this.panels.get('compiler'),this.selection);this.profile=new ProfileView(this.panels.get('profile'));
+    this.inspector=new InspectorView(this.panels.get('compiler'),this.selection);this.profile=new ProfileView(this.panels.get('profile'),this.selection);
     this.languageTools=new LanguageToolsView(this.panels.get('language'),this.model,this.selection,command=>this.languageCommand(command));
     this.search=new SearchView(this.panels.get('search'),this.model,this.selection);
     this.nativeArtifacts=new NativeArtifactsView(this.panels.get('native-artifacts'),this.selection);
     this.problems=new DiagnosticsView(this.panels.get('problems'),this.selection);this.problems.render([]);
     this.debugger=new DebuggerView(this.panels.get('debugger'),this.selection,command=>this.execution.command(command,this.model.breakpointList));
     this.tests=new TestsView(this.panels.get('tests'),this.selection);this.tests.reset();
-    this.cargo=new CargoView(this.panels.get('cargo'),this.model,this.native,{onCommand:command=>this.compile(command),onOptions:options=>{this.options=options;this.invalidate();this.schedule();},onConnected:connected=>{this.backend=connected?'native':'browser';this.$('backend-select').value=this.backend;this.status(connected?'Connected to the trusted native Cargo toolchain.':'Native bridge disconnected.','success');}});
+    this.repositories=new RepositoryController(this.model,this.native,{onLoaded:()=>{this.backend='native';this.$('backend-select').value='native';this.options={};if(this.cargo)this.cargo.options={};},onChanged:()=>{if(this.nativeRepositoryAttached&&!this.repositories.session){this.backend='browser';this.$('backend-select').value='browser';this.options={};if(this.cargo)this.cargo.options={};}this.nativeRepositoryAttached=!!this.repositories.session;if(this.cargo){this.cargo.repository=this.repositories.session;this.cargo.render();}this.repositoryView?.render();this.dependencyView?.render();},onLog:event=>{if(event.type==='log')this.runOutput.textContent+=event.text??'';}});
+    this.repositoryView=new RepositoryView(this.panels.get('repositories'),this.repositories,{onError:error=>this.error(error),onBrowserFolder:result=>{this.stop(false);this.backend='browser';this.$('backend-select').value='browser';this.editor.clearHistory();this.model.replace(result.files);this.model.save();this.status(`Imported local folder: ${result.omitted.length} files omitted from the text-only browser project`,'success');}});
+    this.dependencyView=new DependencyView(this.panels.get('crates'),this.repositories,{getPackage:()=>this.options.package??this.cargo?.currentPackage,onError:error=>this.error(error),onResult:result=>{clearTimeout(this.compileTimer);this.writeOutput(result.stdout+result.stderr);this.dock.open('run');this.status(`Cargo dependency edit · exit ${result.exitCode}`,result.exitCode?'error':'success');}});
+    this.cargo=new CargoView(this.panels.get('cargo'),this.model,this.native,{onCommand:command=>this.compile(command),onOptions:options=>{this.options=options;this.invalidate();this.schedule();},onConnected:connected=>{if(!connected)this.repositories.detach();this.repositoryView.render();this.dependencyView.render();this.backend=connected?'native':'browser';this.$('backend-select').value=this.backend;this.status(connected?'Connected to the trusted native Cargo toolchain.':'Native bridge disconnected.','success');}});
     this.structureRegistry=new SpanRegistry(this.selection,'structure');this.runOutput=Dom.element('pre','run-output');this.runOutput.id='terminal';this.runOutput.setAttribute('aria-label','Program output');
     this.runLabel=Dom.element('span','','No program running');const runHeader=Dom.element('div','run-header');runHeader.append(Dom.icon('console'),this.runLabel,Dom.button('Clear',()=>{this.runOutput.textContent='';},{className:'subtle-button'}));this.panels.get('run').append(runHeader,this.runOutput);
+    const stdinForm=Dom.element('form','native-stdin'),stdin=Dom.element('input','text-field');stdin.placeholder='Native stdin (line input; not a PTY)';stdin.setAttribute('aria-label','Native standard input');const send=Dom.button('Send input',null);send.type='submit';stdinForm.append(stdin,send);stdinForm.onsubmit=async event=>{event.preventDefault();try{if(!this.repositories.session)throw Error('Open a native repository to send input');await this.native.sendInput(this.repositories.session.id,stdin.value+'\n');stdin.value='';}catch(error){this.status(error.message,'error');}};this.panels.get('run').append(stdinForm);stdinForm.append(Dom.button('Close stdin',async()=>{try{if(!this.repositories.session)throw Error('Open a native repository first');await this.native.sendInput(this.repositories.session.id,null);}catch(error){this.status(error.message,'error');}},{className:'subtle-button'}));
     this.palette=new CommandPalette(()=>this.commands());this.toolbar(definitions);this.events();
     this.model.subscribe(event=>this.modelChanged(event));this.renderWorkspace();this.cargo.render();this.compile('check');
     // Read-only inspection hook used by browser acceptance tests and embedders.
@@ -61,7 +68,7 @@ export class IdeApplication {
       const button=Dom.button(title,()=>this.compile(command),{icon,className:`${command}-action ${command==='run'?'primary-run':''}`});button.id=command;button.title=command==='run'?'Run (Ctrl/Cmd+Enter)':command==='debug'?'Debug executable MIR (F5)':`Compile: ${command}`;this.$('run-actions').append(button);
     }
     this.$('stop').append(Dom.icon('stop'));this.$('stop').onclick=()=>this.stop();this.$('layout-reset').append(Dom.icon('reset'));this.$('layout-reset').onclick=()=>this.dock.reset();
-    for(const [title,icon,action] of [['New','plus',()=>this.createFile()],['Rename','file',()=>this.renameFile()],['Delete','trash',()=>this.removeFile()],['Save','save',()=>{this.model.save();this.status('Workspace saved in this browser.','success');}],['Import','import',()=>this.$('import-input').click()],['Export','export',()=>this.download('ferrite-project.ferrite.json',JSON.stringify(this.model.snapshot(),null,2))]]){
+    for(const [title,icon,action] of [['New','plus',()=>this.createFile()],['Rename','file',()=>this.renameFile()],['Delete','trash',()=>this.removeFile()],['Save','save',()=>{this.model.save();this.status('Workspace saved in this browser.','success');}],['Import','import',()=>this.$('import-input').click()],['Repository','folder',()=>this.dock.open('repositories')],['Export','export',()=>this.download('ferrite-project.ferrite.json',JSON.stringify(this.model.snapshot(),null,2))]]){
       const button=Dom.button(title,action,{icon});button.id=`file-${title.toLowerCase()}`;this.$('file-actions').append(button);
     }
     for(const sample of SampleCatalog.projects){const option=Dom.element('option','',sample.name);option.value=sample.name;this.$('sample-select').append(option);}this.$('sample-select').onchange=()=>this.chooseSample(this.$('sample-select').value);
@@ -69,7 +76,7 @@ export class IdeApplication {
     for(const [id,key] of [['auto-check','auto'],['optimize','optimize']])this.$(id).onchange=()=>{this.settings[key]=this.$(id).checked;try{this.storage?.setItem('ferrite.settings.v3',JSON.stringify(this.settings));}catch{}if(key==='optimize')this.invalidate();if(this.settings.auto)this.schedule();};
     this.$('backend-select').onchange=()=>{this.backend=this.$('backend-select').value;if(this.backend==='native'&&!this.native.capabilities)this.cargo.connect();};
     this.$('search-everywhere').onclick=()=>this.palette.open();this.$('project-menu').onclick=()=>this.palette.open();this.$('native-connect').onclick=()=>this.cargo.connect();
-    for(const id of ['project','structure','search','cargo','problems','debugger','tests','run','compiler','profile','native-artifacts','language']){const definition=definitions.find(d=>d.id===id);const button=Dom.button('',()=>this.dock.toggle(id),{icon:definition.icon,className:'rail-button',title:`${definition.title} tool window`});button.dataset.tool=id;this.$(['compiler','profile','native-artifacts','language'].includes(id)?'right-rail':'left-rail').append(button);}
+    for(const id of ['project','structure','search','repositories','crates','cargo','problems','debugger','tests','run','compiler','profile','native-artifacts','language']){const definition=definitions.find(d=>d.id===id);const button=Dom.button('',()=>this.dock.toggle(id),{icon:definition.icon,className:'rail-button',title:`${definition.title} tool window`});button.dataset.tool=id;this.$(['compiler','profile','native-artifacts','language'].includes(id)?'right-rail':'left-rail').append(button);}
   }
   events(){
     document.addEventListener('keydown',event=>{
@@ -95,6 +102,8 @@ export class IdeApplication {
   }
   commands(){return [
     ...['check','build','run','debug','test'].map(command=>({label:`${command[0].toUpperCase()+command.slice(1)} current project`,icon:command==='run'?'run':'code',execute:()=>this.compile(command)})),
+    {label:'Open Git repository or local Cargo directory',icon:'folder',execute:()=>this.dock.open('repositories')},
+    {label:'Add remote or local Cargo crate',icon:'cargo',execute:()=>this.dock.open('crates')},
     {label:'Find in Files',icon:'search',execute:()=>this.openSearch(false)},
     {label:'Replace in Files',icon:'search',execute:()=>this.openSearch(false)},
     {label:'New project file',icon:'plus',execute:()=>this.createFile()},{label:'Rename current file',icon:'file',execute:()=>this.renameFile()},
@@ -110,16 +119,16 @@ export class IdeApplication {
   modelChanged(event){
     if(event.kind==='edit'){
       this.tabs.render();this.projectView.render();this.invalidate();this.schedule();clearTimeout(this.saveTimer);this.saveTimer=setTimeout(()=>this.model.save(),800);
-    }else if(['files','replace'].includes(event.kind)){this.renderWorkspace();this.cargo.render();this.invalidate();this.schedule();}
+    }else if(['files','replace'].includes(event.kind)){this.renderWorkspace();this.cargo.render();this.invalidate();if(!event.native)this.schedule();}
     else if(event.kind==='open')this.renderWorkspace();else if(event.kind==='saved'){this.tabs.render();this.projectView.render();}
     else if(event.kind==='storage-error')this.status('Browser storage could not save this workspace. Export a snapshot.','error');
   }
-  renderWorkspace(){this.tabs.render();this.projectView.render();this.editor.open(this.model.active);this.$('active-path').textContent=this.model.active??'No file open';this.$('editor-language').textContent=this.model.active?.endsWith('.rs')?'Rust':this.model.active?.endsWith('.toml')?'TOML':'Text';this.projectFooter.textContent=`${Object.keys(this.model.files).length} files · local browser workspace`;const manifest=this.model.files['Cargo.toml']??'';this.$('project-name').textContent=/^name\s*=\s*"([^"]+)"/m.exec(manifest)?.[1]??'Cargo workspace';}
-  invalidate(){this.languageTools.invalidate();this.native.languageActive?.abort();this.nativeArtifacts.invalidate();this.buildRevision=-1;this.selection.reset(this.model.revision);if(this.build)this.inspector.invalidate();this.execution.stop(false);this.debugger.render(null);this.structureRegistry.clear();Dom.empty(this.panels.get('structure'),'Compile the current source to refresh symbols.');this.status('Modified · compiler results are stale','');}
-  schedule(){clearTimeout(this.compileTimer);if(this.settings.auto)this.compileTimer=setTimeout(()=>this.compile('check'),260);}
+  renderWorkspace(){this.tabs.render();this.projectView.render();this.editor.open(this.model.active);this.$('active-path').textContent=this.model.active??'No file open';this.$('editor-language').textContent=this.model.active?.endsWith('.rs')?'Rust':this.model.active?.endsWith('.toml')?'TOML':'Text';this.projectFooter.textContent=`${Object.keys(this.model.files).length} editable files · ${this.repositories.session?'native checkout (sync on command)':'browser workspace'}`;const manifest=this.model.files[this.repositories.session?.manifest??'Cargo.toml']??'';this.$('project-name').textContent=/^name\s*=\s*"([^"]+)"/m.exec(manifest)?.[1]??'Cargo workspace';}
+  invalidate(){this.languageTools.invalidate();this.native.languageActive?.abort();this.nativeArtifacts.invalidate();this.profile.invalidate();this.buildRevision=-1;this.selection.reset(this.model.revision);if(this.build)this.inspector.invalidate();this.execution.stop(false);this.debugger.render(null);this.structureRegistry.clear();Dom.empty(this.panels.get('structure'),'Compile the current source to refresh symbols.');this.status('Modified · compiler results are stale','');}
+  schedule(){clearTimeout(this.compileTimer);if(this.backend==='native'&&this.native.active){this.nativeCheckPending=this.settings.auto;return;}if(this.settings.auto)this.compileTimer=setTimeout(()=>this.compile('check'),260);}
   async chooseSample(name){const sample=SampleCatalog.projects.find(s=>s.name===name);if(!sample)return;this.stop(false);this.options={};this.cargo.options={};this.editor.clearHistory();this.model.replace(sample.files);this.model.save();this.$('sample-select').value=name;this.backend=sample.native?'native':'browser';this.$('backend-select').value=this.backend;if(sample.native){clearTimeout(this.compileTimer);this.status('This example uses full Rust; connect Native Cargo to compile it.','');this.dock.open('cargo');}else await this.compile('check');}
   async compile(command='check'){
-    clearTimeout(this.compileTimer);const serial=++this.requestSerial,revision=this.model.revision;
+    clearTimeout(this.compileTimer);if(this.backend==='native'&&this.native.active){if(command==='check')this.nativeCheckPending=true;else this.status('Stop the current native operation before starting another.','');return;}const serial=++this.requestSerial,revision=this.model.revision;
     if(this.backend==='native'||!['check','build','run','debug','test'].includes(command))return this.nativeCommand(command,serial,revision);
     this.execution.stop(false);this.status(`Compiling ${command}…`,'busy');this.$('status').dataset.command=command;
     try{
@@ -145,28 +154,38 @@ export class IdeApplication {
     let newName;if(command==='rename'){newName=await DialogService.ask({title:'Rename Rust symbol',label:'New symbol name',confirm:'Preview edits'});if(!newName)return;}
     if(revision!==this.model.revision)return;
     this.dock.open('language');this.languageTools.message('Loading Rust semantic results…');
-    try{const result=await this.native.language(this.model.files,'textDocument/'+command,{file,position:{line:position.line-1,character:position.column-1},newName,options:this.options});
+    try{const parameters={file,position:{line:position.line-1,character:position.column-1},newName,options:this.options};
+      const result=await (this.repositories.session?this.native.repository('language',{id:this.repositories.session.id,version:this.repositories.session.version,files:this.model.files,method:'textDocument/'+command,...parameters}):this.native.language(this.model.files,'textDocument/'+command,parameters));
       if(revision===this.model.revision)this.languageTools.render(result,revision);
     }catch(error){if(error.name!=='AbortError'&&revision===this.model.revision)this.languageTools.message(error.message);}
+    finally{if(this.nativeCheckPending&&!this.repositories.needsReload){this.nativeCheckPending=false;this.schedule();}}
   }
   async nativeCommand(command,serial,revision){
     if(command==='debug'){this.error(Error('The browser debugger operates on Ferrite MIR. Native debugger integration is not implemented.'));return;}
     if(!this.native.capabilities){this.status('Connect the trusted native Cargo bridge to run this command.','error');this.dock.open('cargo');return;}
     this.compiler.cancel();this.execution.stop(false);this.runLabel.textContent=`Native Cargo · ${command}`;this.writeOutput('');this.dock.open('run');this.status(`Native cargo ${command}…`,'busy');
-    const args=[...this.nativeArgs,...CargoOptions.arguments(command,this.options)];
+    const effectiveOptions=this.repositories.session?{...this.options,package:this.options.package??this.cargo.currentPackage,target:this.options.target??this.cargo.currentTarget?.name,targetKind:this.options.targetKind??this.cargo.currentTarget?.kind}:this.options;
     try{
-      const result=await this.native.run(this.model.files,command,{args,json:true},event=>{if(event.type==='log'){this.runOutput.textContent+=(event.text??event.data??'');this.runOutput.scrollTop=this.runOutput.scrollHeight;}});
-      if(serial!==this.requestSerial||revision!==this.model.revision)return;
-      const diagnostics=(result.diagnostics??[]).map(d=>NativeDiagnosticMapper.map(d,this.model.files));this.selection.reset(revision);this.problems.render(diagnostics);
+      const args=[...this.nativeArgs,...CargoOptions.arguments(command,effectiveOptions)];
+      const nativeOptions={args,json:true,offline:!!this.options.offline,locked:!!this.options.locked,jobs:this.options.jobs||undefined,toolchain:this.options.toolchain||'',timeoutMs:(this.options.timeoutSeconds||120)*1000};
+      const result=await (this.repositories.session?this.repositories.run(command,nativeOptions,event=>this.nativeLog(event)):this.native.run(this.model.files,command,nativeOptions,event=>this.nativeLog(event)));
+      /* native logs are streamed by nativeLog; repository reconciliation is handled independently of editor revision. */
+      if(this.repositories.session){this.cargo.repository=this.repositories.session;this.cargo.render();}
+
+      if(serial!==this.requestSerial||(revision!==this.model.revision&&(!result.repository||result.ideHadConcurrentEdits)))return;
+      const diagnostics=(result.diagnostics??[]).map(d=>NativeDiagnosticMapper.map(d,this.model.files,{root:result.sourceRoot,cwd:result.workingDirectory}));this.selection.reset(this.model.revision);this.problems.render(diagnostics);
       if(result.exitCode!==0)this.dock.open('problems');
       this.status(`Native cargo ${command} · exit ${result.exitCode} · ${result.elapsedMs?.toFixed(0)??'?'} ms`,result.exitCode===0?'success':'error');
       if(!this.runOutput.textContent)this.writeOutput(result.stdout+result.stderr);
       if(result.artifacts?.length){this.runOutput.textContent+='\nArtifacts:\n'+result.artifacts.map(a=>a.executable??a.filenames.join('\n')).join('\n')+'\n';}
-      const changed=Object.entries(result.files??{}).filter(([path,text])=>typeof text==='string'&&text!==this.model.files[path]);
+      const changed=Object.entries(this.repositories.session?{}:(result.files??{})).filter(([path,text])=>typeof text==='string'&&text!==this.model.files[path]);
       if(changed.length){clearTimeout(this.compileTimer);this.model.applyFiles(Object.fromEntries(changed));clearTimeout(this.compileTimer);this.editor.open(this.model.active);this.model.save();this.status(`Native cargo ${command} · exit ${result.exitCode} · ${changed.length} generated/updated files synchronized`,result.exitCode===0?'success':'error');}
+      if(result.buildSummary)this.profile.native(result);
       if(command==='inspect'){this.nativeArtifacts.update(result.compilerArtifacts);this.dock.open('native-artifacts');}
     }catch(error){if(error.name!=='AbortError'&&serial===this.requestSerial&&revision===this.model.revision)this.error(error);}
+    finally{this.repositoryView.render();this.dependencyView.render();if(this.nativeCheckPending&&!this.repositories.needsReload){this.nativeCheckPending=false;this.schedule();}}
   }
+  nativeLog(event){if(event.type==='log'){this.runOutput.textContent+=event.text??event.data??'';this.runOutput.scrollTop=this.runOutput.scrollHeight;}}
   renderStructure(){const root=this.panels.get('structure');this.structureRegistry.clear();root.replaceChildren();for(const item of this.build.sem.symbols){const row=Dom.button(item.name,null,{icon:item.kind==='fn'?'code':'tree',className:'project-row'});row.append(Dom.element('small','muted',item.kind));this.structureRegistry.bind(row,item.span);root.append(row);}}
   executionEvent(event){
     if(event.type==='output')this.writeOutput(event.text);
@@ -179,7 +198,7 @@ export class IdeApplication {
   }
   writeOutput(text){this.runOutput.classList.remove('error');this.runOutput.textContent=text;this.runOutput.scrollTop=this.runOutput.scrollHeight;}
   error(error){const diagnostic=error.toJSON?.()??{code:error.code??'ERROR',message:error.message??String(error),span:error.span??null,notes:error.notes??[]};this.status(`${diagnostic.code} · ${diagnostic.message}`,'error');this.problems.render([diagnostic]);this.dock.open('problems');this.runOutput.textContent=`${diagnostic.code}: ${diagnostic.message}\n${Dom.sourceLabel(diagnostic.span)}`;this.runOutput.classList.add('error');}
-  stop(notify=true){clearTimeout(this.compileTimer);this.requestSerial++;this.compiler.cancel();this.execution.stop(false);this.native.cancel().catch(()=>{});if(notify)this.status('Stopped','');}
+  stop(notify=true){this.nativeCheckPending=false;clearTimeout(this.compileTimer);this.requestSerial++;this.compiler.cancel();this.execution.stop(false);this.native.cancel().catch(()=>{});if(notify)this.status('Stopped','');}
   status(message,kind=''){const node=this.$('status');node.textContent=message;node.dataset.kind=kind;}
   openSearch(currentFile=false){const input=this.editor.textarea,text=input.value.slice(input.selectionStart,input.selectionEnd);this.dock.open('search');this.search.open(text.length<=1024?text:'',currentFile);}
   async createFile(){const path=await DialogService.ask({title:'New project file',label:'Project-relative path',value:'src/new_module.rs',confirm:'Create file'});if(path===null)return;try{this.model.create(path,path.endsWith('.rs')?'// New Rust module\n':'');}catch(error){this.error(error);}}

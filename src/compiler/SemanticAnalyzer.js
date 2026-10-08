@@ -6,7 +6,7 @@ export class SemanticAnalyzer {
   for(const item of ast.items){if(defs.has(item.name)||structs.has(item.name))throw Error("Duplicate item "+item.name);if(item.kind==="fn")defs.set(item.name,item);else structs.set(item.name,item);symbols.push({name:item.name,kind:item.kind,line:item.loc.line});}
   if(!defs.has("main"))throw Error("Missing fn main()");
   let recursionDepth=0;
-  const traits=new Map([["Display",new Set(["&str","char","u32","i32","usize","f64","bool"])]]);
+  const traits=new Map([["Display",new Set(["&str","char","u32","i32","usize","f64","bool"])],["Copy",new Set(["&str","char","u32","i32","usize","f64","bool"])],["Clone",new Set(["&str","char","u32","i32","usize","f64","bool"])]]);
   function instantiate(name,argTypes){
     const fn=defs.get(name);if(!fn)throw Error("Unresolved function "+name);
     if(fn.params.length!==argTypes.length)throw Error(name+" expects "+fn.params.length+" argument(s)");
@@ -17,7 +17,7 @@ export class SemanticAnalyzer {
       if(g){if(subst.has(g.name)&&subst.get(g.name)!==actual)throw Error("Conflicting generic inference for "+g.name);subst.set(g.name,actual);}
       else if(!compatible(expected,actual))throw Error("Type mismatch in "+name+": expected "+expected+", got "+actual);
     }
-    for(const g of fn.generics){const actual=subst.get(g.name);if(!actual)throw Error("Cannot infer generic "+g.name+" in "+name);for(const bound of g.bounds){const ok=traits.get(bound)?.has(actual)||bound==="Copy"&&(!actual.startsWith("Vec<"));if(!ok)throw Error("Trait obligation failed: "+actual+": "+bound);obligations.push(actual+": "+bound);}}
+    for(const g of fn.generics){const actual=subst.get(g.name);if(!actual)throw Error("Cannot infer generic "+g.name+" in "+name);for(const bound of g.bounds){const ok=traits.get(bound)?.has(actual);if(!ok)throw Error("Trait obligation failed: "+actual+": "+bound);obligations.push(actual+": "+bound);}}
     const key=name+"<"+fn.generics.map(g=>subst.get(g.name)).join(",")+">";
     if(instances.has(key))return {key,returnType:subst.get(fn.returnType)||fn.returnType};
     if(++recursionDepth>80)throw Error("Generic instantiation recursion limit exceeded");
@@ -49,6 +49,7 @@ export class SemanticAnalyzer {
       else if(stmt.kind==="expression")infer(stmt.value);
       else if(stmt.kind==="while"||stmt.kind==="if"){if(infer(stmt.condition)!=="bool")throw Error(stmt.kind+" condition must be bool");checkBlock(stmt.then);if(stmt.otherwise){if(stmt.otherwise.kind==="ifExpr")infer(stmt.otherwise);else checkBlock(stmt.otherwise);}}
       else if(stmt.kind==="loop"||stmt.kind==="blockStatement")checkBlock(stmt.then||stmt.block);
+      else if(stmt.kind==="break"||stmt.kind==="continue"){}
     }const type=block.tail?infer(block.tail):"()";scopes.pop();return type;}
     const actualReturn=checkBlock(fn.body);
     if(fn.body.tail&&!compatible(entry.returnType,actualReturn))throw Error("Function "+name+" returns "+actualReturn+", expected "+entry.returnType);

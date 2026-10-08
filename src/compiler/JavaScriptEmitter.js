@@ -6,6 +6,7 @@ export class JavaScriptEmitter {
       case "literal":return JSON.stringify(n.value);
       case "variable":return n.name;
       case "array":return "["+n.items.map(expr).join(",")+"]";
+      case "structLiteral":return "({"+n.fields.map(f=>JSON.stringify(f.name)+":"+expr(f.value)).join(",")+"})";
       case "index":return "("+expr(n.object)+")["+expr(n.index)+"]";
       case "field":return "("+expr(n.object)+")["+JSON.stringify(n.field)+"]";
       case "binary":return "("+expr(n.left)+" "+n.op+" "+expr(n.right)+")";

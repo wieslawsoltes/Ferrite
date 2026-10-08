@@ -29,6 +29,23 @@ export class SemanticAnalyzer {
       if(!n)return "()";
       if(n.kind==="literal")return n.type;
       if(n.kind==="variable")return get(n.name).type;
+      if(n.kind==="match"){
+        const scrutinee=infer(n.value);let result=null,hasWildcard=false;
+        const seen=new Set();
+        for(const arm of n.arms){
+          if(arm.pattern.kind==="wildcard"){if(hasWildcard)throw Error("Duplicate wildcard match arm");hasWildcard=true;}
+          else{
+            if(arm.pattern.type!==scrutinee)throw Error("Match pattern type "+arm.pattern.type+" does not match "+scrutinee);
+            const key=JSON.stringify(arm.pattern.value);
+            if(seen.has(key))throw Error("Duplicate match pattern "+key);
+            seen.add(key);
+          }
+          const actual=arm.body.kind==="block"?checkBlock(arm.body):infer(arm.body);
+          if(result===null)result=actual;else if(!compatible(result,actual))throw Error("Incompatible match arm types "+result+" and "+actual);
+        }
+        if(!hasWildcard&&!(scrutinee==="bool"&&seen.has("true")&&seen.has("false")))throw Error("Non-exhaustive match requires wildcard arm");
+        return result??"()";
+      }
       if(n.kind==="structLiteral"){
         const shape=structs.get(n.name);if(!shape)throw Error("Unknown struct "+n.name);
         if(n.fields.length!==shape.fields.length)throw Error("Incorrect number of fields for "+n.name);

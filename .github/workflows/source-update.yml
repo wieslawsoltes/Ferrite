@@ -1,0 +1,68 @@
+name: Validate reviewed source update
+on:
+  push:
+    branches: [main]
+    paths: ['.github/source-updates/*.b64']
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: ferrite-reviewed-source
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply exact-content source delta
+        id: source
+        run: node tools/apply-source-update.mjs
+      - name: Generate deterministic worker bundles
+        run: npm run build:workers
+      - name: Validate compiler and runtime
+        run: |
+          npm run check
+          npm test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare native and browser acceptance dependencies
+        run: |
+          python -m pip install playwright==1.57.0
+          python -m playwright install --with-deps chromium
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
+      - name: Validate actual Cargo and HTTP IDE
+        env:
+          FERRITE_NATIVE_TEST: '1'
+        run: |
+          npm run test:native
+          npm run test:browser
+      - name: Preserve acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reviewed-source-validation
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Commit tested source without overwriting concurrent work
+        env:
+          MESSAGE: ${{ steps.source.outputs.message }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m "$MESSAGE"
+          git push origin HEAD:main
+          echo "Published $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Deploy the validated source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --ref main

@@ -10,7 +10,13 @@
     "test:browser": "python tools/browser-acceptance.py",
     "test:native": "node tools/native-smoke.mjs",
     "benchmark": "node tools/benchmark.mjs",
-    "cargo:bridge": "node tools/cargo-bridge.mjs"
+    "cargo:bridge": "node tools/cargo-bridge.mjs",
+    "agent:bridge": "node tools/agent-bridge.mjs",
+    "agent:mcp": "node tools/agent-mcp.mjs",
+    "agent": "node tools/agent.mjs",
+    "test:agent": "node --test tests/agent-*.test.js"
   },
-  "engines": {"node": ">=22"}
+  "engines": {
+    "node": ">=22"
+  }
 }

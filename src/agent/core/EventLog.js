@@ -4,7 +4,7 @@ export class EventLog {
     this.limit = limit; this.maxCharacters = maxCharacters; this.entries = []; this.sequence = 0; this.characters = 0; this.listeners = new Set();
   }
   emit(type, data = {}) {
-    const event = {sequence: ++this.sequence, at: new Date().toISOString(), type, ...data};
+    const event = {...data, sequence: ++this.sequence, at: new Date().toISOString(), type};
     const size = JSON.stringify(event).length;
     this.entries.push({event, size}); this.characters += size;
     while (this.entries.length > 1 && (this.entries.length > this.limit || this.characters > this.maxCharacters)) this.characters -= this.entries.shift().size;

@@ -8,7 +8,7 @@ export class ApprovalGate {
     const risk = typeof tool.risk === 'function' ? tool.risk(args) : tool.risk;
     if (risk === 'read' || risk === 'plan') return;
     if (context.mode === 'read-only') throw new AgentError('READ_ONLY', `${tool.name} is unavailable in read-only mode`);
-    if (context.allow?.has(risk) || context.mode === 'auto-edit' && risk === 'edit') return;
+    if (context.mode === 'trusted' || context.allow?.has(risk) || context.mode === 'auto-edit' && risk === 'edit') return;
     if (context.interactive !== true) throw new AgentError('APPROVAL_REQUIRED', `${tool.name} requires ${risk} approval; use the IDE or explicitly allow this risk when starting MCP`);
     AgentError.abort(context.signal);
     const id = randomUUID(), request = {id, sessionId: context.sessionId, tool: tool.name, risk, arguments: args, preview, expiresAt: Date.now() + this.timeoutMs};

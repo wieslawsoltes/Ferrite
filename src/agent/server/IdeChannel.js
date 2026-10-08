@@ -6,7 +6,8 @@ export class IdeChannel {
   constructor(events, {timeoutMs = 20000} = {}) { this.events = events; this.timeoutMs = timeoutMs; this.clientId = null; this.updated = 0; this.state = null; this.pending = new Map(); }
   connect() {
     if (this.clientId && Date.now() - this.updated < 15000) throw new AgentError('IDE_BUSY', 'Another IDE owns this bridge; disconnect it before connecting a second tab', {status: 409});
-    this.clientId = randomUUID(); this.updated = Date.now(); return this.clientId;
+    if (this.clientId) this.disconnect(this.clientId);
+    this.clientId = randomUUID(); this.updated = Date.now(); this.state = null; return this.clientId;
   }
   heartbeat(clientId, state) {
     if (clientId !== this.clientId) throw new AgentError('IDE_OWNER', 'IDE connection has expired', {status: 409});

@@ -112,7 +112,7 @@ export class NativeWorkspace {
         }
       } catch (error) {
         for (const edit of written.reverse()) {
-          try { if (NativeWorkspace.hash(await this.text(edit.path, {optional: true})) === edit.afterHash) await this.atomicWrite(edit.path, edit.before); }
+          try { if (NativeWorkspace.hash(await this.text(edit.path, {optional: true})) === edit.afterHash) await this.atomicWrite(edit.path, edit.before); else checkpoint.status = 'recovery-required'; }
           catch { checkpoint.status = 'recovery-required'; }
         }
         if (checkpoint.status !== 'recovery-required') checkpoint.status = 'failed'; checkpoint.error = error.message; await this.store?.write('checkpoints', id, checkpoint); throw error;

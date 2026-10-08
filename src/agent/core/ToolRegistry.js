@@ -3,7 +3,7 @@ import {JsonSchema} from './JsonSchema.js';
 
 /** Single executable contract for MCP, built-in agents and the IDE tool explorer. */
 export class ToolRegistry {
-  constructor({approvals, events, artifacts} = {}) { this.tools = new Map(); this.approvals = approvals; this.events = events; this.artifacts = artifacts; }
+  constructor({approvals, events, artifacts, sanitize = value => value} = {}) { this.tools = new Map(); this.approvals = approvals; this.events = events; this.artifacts = artifacts; this.sanitize = sanitize; }
   register(definition) {
     if (!/^[a-z][a-z0-9_]{0,63}$/.test(definition.name) || this.tools.has(definition.name)) throw Error('Invalid or duplicate tool name');
     if (!definition.description || typeof definition.run !== 'function') throw Error('Tool requires description and implementation');
@@ -21,7 +21,7 @@ export class ToolRegistry {
     await this.approvals?.authorize(tool, args, context, preview); AgentError.abort(context.signal);
     const start = performance.now(); this.events?.emit('tool.started', {sessionId: context.sessionId, callId: context.callId, name, arguments: args});
     try {
-      const result = await tool.run(args, context);
+      const result = this.sanitize(await tool.run(args, context));
       const text = JSON.stringify(result ?? null); let value = result ?? null;
       if (text.length > 24000 && this.artifacts) {
         const artifact = await this.artifacts.put(text);

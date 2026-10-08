@@ -21,9 +21,10 @@ export class AgentHarness {
   }
   static config(input = {}) {
     const config = {provider: input.provider ?? 'openai', model: input.model ?? '', mode: input.mode ?? 'ask', contextTokens: input.contextTokens ?? 32768,
-      outputTokens: input.outputTokens ?? 4096, maxSteps: input.maxSteps ?? 40, maxTotalTokens: input.maxTotalTokens ?? 500000, modelCompaction: input.modelCompaction !== false};
+      outputTokens: input.outputTokens ?? 4096, maxSteps: input.maxSteps ?? 40, maxTotalTokens: input.maxTotalTokens ?? 500000, modelCompaction: input.modelCompaction !== false, pinnedContext: input.pinnedContext ?? ''};
+    if (typeof config.pinnedContext !== 'string' || config.pinnedContext.length > 16000) throw Error('Pinned context must be text up to 16000 characters');
     if (!['openai', 'anthropic', 'gemini'].includes(config.provider) || typeof config.model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/.test(config.model)) throw new AgentError('INVALID_MODEL', 'Select a provider and a model returned by its API');
-    if (!['ask', 'auto-edit', 'read-only'].includes(config.mode)) throw Error('Invalid approval mode');
+    if (!['ask', 'auto-edit', 'read-only', 'trusted'].includes(config.mode)) throw Error('Invalid approval mode');
     if (!Number.isSafeInteger(config.maxSteps) || config.maxSteps < 1 || config.maxSteps > 200 || !Number.isSafeInteger(config.maxTotalTokens) || config.maxTotalTokens < 1000 || config.maxTotalTokens > 10_000_000) throw Error('Invalid agent budget');
     new ContextManager(config); return config;
   }
@@ -100,7 +101,8 @@ export class AgentHarness {
       if (prompt !== undefined && (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 100000)) throw Error('Enter a nonempty prompt of at most 100000 characters');
       if (prompt !== undefined) {
         if (!session.objective) session.objective = this.providers.redact(prompt);
-        const message = {role: 'user', text: this.providers.redact(prompt), at: new Date().toISOString()}; session.messages.push(message); session.transcript.push(message);
+        session.latestUser = this.providers.redact(prompt);
+        const message = {role: 'user', text: session.latestUser, at: new Date().toISOString()}; session.messages.push(message); session.transcript.push(message);
         this.emit(session, 'message.user', {text: message.text});
       }
       if (!session.messages.length && !session.summary) throw Error('The session has no task to resume');
@@ -131,7 +133,7 @@ export class AgentHarness {
     }
   }
   usage(session, usage) {
-    for (const key of ['input', 'output', 'cached']) session.usage[key] += Math.max(0, Number(usage?.[key]) || 0);
+    for (const key of ['input', 'output', 'cached']) { const value = Number(usage?.[key]); if (Number.isFinite(value) && value > 0) session.usage[key] += Math.ceil(value); }
     this.emit(session, 'usage.updated', {usage: session.usage});
   }
   async compact(session, {force = false, signal} = {}) {

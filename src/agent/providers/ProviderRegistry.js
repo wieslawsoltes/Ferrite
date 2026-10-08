@@ -3,10 +3,10 @@ import {OpenAIProvider} from './OpenAIProvider.js';
 import {AnthropicProvider} from './AnthropicProvider.js';
 import {GeminiProvider} from './GeminiProvider.js';
 
-/** Keys exist only in bridge memory. No generic credential-bearing proxy endpoints. */
+/** User-supplied keys exist only in runtime memory. No generic credential-bearing proxy endpoints. */
 export class ProviderRegistry {
   static definitions = {openai: {name: 'OpenAI', env: 'OPENAI_API_KEY', type: OpenAIProvider}, anthropic: {name: 'Anthropic', env: 'ANTHROPIC_API_KEY', type: AnthropicProvider}, gemini: {name: 'Google Gemini', env: 'GEMINI_API_KEY', type: GeminiProvider}};
-  constructor({environment = process.env, transport} = {}) {
+  constructor({environment = globalThis.process?.env ?? {}, transport} = {}) {
     this.secrets = new Set(); this.providers = new Map(); this.transport = transport; this.catalogs = new Map(); this.generations = new Map(); this.pending = new Map();
     for (const [id, definition] of Object.entries(ProviderRegistry.definitions)) {
       const key = environment[definition.env] || (id === 'gemini' ? environment.GOOGLE_API_KEY : undefined);
@@ -14,7 +14,7 @@ export class ProviderRegistry {
     }
   }
   list() { return Object.entries(ProviderRegistry.definitions).map(([id, definition]) => ({id, name: definition.name, connected: this.providers.has(id), models: this.catalogs.get(id) ?? []})); }
-  get(id) { const provider = this.providers.get(id); if (!provider) throw new AgentError('PROVIDER_NOT_CONNECTED', 'Connect a provider with an API key or start the bridge with its API-key environment variable'); return provider; }
+  get(id) { const provider = this.providers.get(id); if (!provider) throw new AgentError('PROVIDER_NOT_CONNECTED', 'Sign in with a provider API key. Native mode also accepts API-key environment variables.'); return provider; }
   async connect(id, key, signal) {
     const definition = Object.hasOwn(ProviderRegistry.definitions, id) ? ProviderRegistry.definitions[id] : undefined;
     if (!definition || typeof key !== 'string' || !key.trim() || key.length > 4096 || /[\r\n\0]/.test(key)) throw new AgentError('INVALID_PROVIDER', 'Select a supported provider and enter a valid API key');

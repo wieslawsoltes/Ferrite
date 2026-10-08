@@ -20,7 +20,12 @@ export class VirtualShell {
     const push = () => { if (started) { tokens.push({word:value}); value='';started=false; } };
     for (let i=0;i<command.length;i++) {
       const ch=command[i];
-      if (ch==='\\' && quote!=="'") { if (++i>=command.length) throw Error('Trailing escape');value+=command[i];started=true;continue; }
+      if (ch==='\\' && quote!=="'") {
+        if (++i>=command.length) throw Error('Trailing escape'); const next=command[i];
+        if(next==='\n')continue;
+        if(quote==='"'&&!['$','`','"','\\'].includes(next))value+='\\';
+        value+=next;started=true;continue;
+      }
       if (quote) { if(ch===quote)quote='';else if(ch==='$'&&quote==='"'){const match=/^(\w+|\?)/.exec(command.slice(i+1));if(match){value+=this.variable(match[1]);i+=match[1].length;}else value+=ch;}else value+=ch;continue; }
       if(ch==='"'||ch==="'"){quote=ch;started=true;continue;}
       if(ch==='#'&&!started)break;

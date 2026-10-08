@@ -63,7 +63,7 @@ export class IdeApplication {
     this.palette=new CommandPalette(()=>this.commands());this.toolbar(definitions);this.events();
     this.model.subscribe(event=>this.modelChanged(event));this.renderWorkspace();this.cargo.render();this.compile('check');
     // Read-only inspection hook used by browser acceptance tests and embedders.
-    Object.defineProperty(window,'ferrite',{value:Object.freeze({version:'0.7.0',getSnapshot:()=>this.model.snapshot(),getBuild:()=>this.build,getRevision:()=>this.model.revision,getSelection:()=>this.selection.value}),configurable:true});
+    Object.defineProperty(window,'ferrite',{value:Object.freeze({version:'0.8.0',getSnapshot:()=>this.model.snapshot(),getBuild:()=>this.build,getRevision:()=>this.model.revision,getSelection:()=>this.selection.value}),configurable:true});
   }
   toolbar(definitions){
     for(const [command,title,icon] of [['check','Check','check'],['build','Build','build'],['run','Run','run'],['debug','Debug','debug'],['test','Test','test']]){

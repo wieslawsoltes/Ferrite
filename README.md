@@ -23,15 +23,19 @@ Every compiler representation uses original-file UTF-16 spans: selecting a token
 
 ## Coding agents, Rust MCP and terminals
 
-The **Coding Agent** and **Terminal** tool windows connect to an opt-in local bridge. Ferrite includes a provider-neutral streamed coding harness (OpenAI / Anthropic / Gemini API keys and model discovery), durable sessions, bounded context compaction, tool approvals, conflict-checked edit previews/checkpoints, plans, read-only child agents, an execution visualizer, and a real headless CLI.
+The **Coding Agent** now runs **inside the browser by default**, following the browser-first agent design in VB6 Studio Web. Open the hosted IDE, choose OpenAI, Anthropic or Gemini, press **API sign in**, explicitly consent to direct-browser key exposure, select a tool-capable model, and run a task. **No local bridge, Node/Python installation, token or workspace synchronization is required.** Tools edit the project already open in the IDE.
 
-A shared **28-tool MCP registry** exposes workspace operations, compiler stages/MIR execution, native Cargo/processes, PTY lifecycle, **44 rust-analyzer/LSP request methods**, and **21 revision-checked IDE commands**. Native commands use the persistent checkout and installed toolchain. A separate bounded browser shell provides editor-workspace utilities without pretending to run Cargo. API login is separate from installed coding agents' own account login.
+The same shared streamed harness supplies **21 browser tools**, actual compiler-worker/MIR execution, **13 source-aware browser Rust analysis methods**, **21 IDE commands**, live source edits and conditional checkpoints, task/run change review with hunk restoration, explicit follow-up queues, human questions, per-tool permission leases, read-only child agents, context compaction and execution visualization. Sessions and review data persist in project-scoped IndexedDB with cross-tab ownership; unavailable storage is clearly labelled memory-only. API keys remain in memory, never storage or source. Direct browser credentials are exposed to trusted page code/extensions; use a dedicated restricted key and provider spending limits.
+
+The Terminal supports workspace utilities and pipelines, browser Rust-subset `cargo check/run/test`, and the **same harness** through `agent login`, `agent task`, `agent status`, approval/question commands, stop/resume/compact/fork/export. These browser commands do not pretend to be installed native programs. See the [bridge-free browser agent guide](docs/browser-agent.md).
+
+**Optional native mode** remains available through **Connect** and the local bridge:
 
 ```sh
 npm run agent:bridge -- --workspace /absolute/path/to/project --trust-workspace
 ```
 
-Open **Coding Agent → Connect**, enter the bridge URL/token, sign in with a provider API key, choose a tool-capable model, and explicitly import the native workspace to enable source synchronization. For the deployed Pages IDE, add `--origin https://wieslawsoltes.github.io`. Native execution has host permissions and is **not sandboxed**. See the [agent workbench guide](docs/agent-workbench.md) for permissions, recovery, context limits, terminal requirements, MCP client configuration, tests and compatibility boundaries.
+Native mode adds the existing **28-tool MCP registry**, full installed Cargo/process execution, POSIX PTYs, **44 rust-analyzer/LSP request methods**, and external stdio/HTTP MCP clients. Native execution has host permissions and is **not sandboxed**. For the deployed Pages IDE, explicitly add `--origin https://wieslawsoltes.github.io`. API-key sign-in is separate from installed coding-agent account login. See the [native agent guide](docs/agent-workbench.md) for its setup and security boundary.
 
 ## Compiler pipeline
 

@@ -12,12 +12,12 @@ export class TerminalView {
     this.launch=Dom.element('select');this.launch.setAttribute('aria-label','Native terminal program');
     for(const [id,title] of [['shell','Native shell'],['codex','Codex CLI'],['claude','Claude Code CLI'],['gemini','Gemini CLI'],['codex-login','Codex sign in'],['claude-login','Claude sign in']]){const option=Dom.element('option','',title);option.value=id;this.launch.append(option);}
     controls.append(this.tabs,this.launch,Dom.button('New native',()=>this.openNative().catch(onError)),Dom.button('Connect',onConnect),Dom.button('Interrupt',()=>this.send('\x03')),Dom.button('Close',()=>this.closeActive()),Dom.button('Clear',()=>{this.current().screen.reset();this.draw();}));
-    this.status=Dom.element('div','terminal-status','Browser shell · bounded utilities · no native Cargo');
+    this.status=Dom.element('div','terminal-status','Browser shell · bounded utilities / Cargo subset · no native process');
     this.viewport=Dom.element('div','terminal-viewport');this.viewport.tabIndex=0;this.viewport.setAttribute('role','textbox');this.viewport.setAttribute('aria-label','Terminal emulator');this.viewport.setAttribute('aria-multiline','true');
     this.content=Dom.element('div','terminal-screen');this.ime=Dom.element('textarea','terminal-ime');this.ime.setAttribute('aria-label','Native terminal input');this.ime.autocomplete='off';this.ime.spellcheck=false;this.ime.setAttribute('autocapitalize','off');this.viewport.append(this.content,this.ime);this.viewport.addEventListener('click',()=>{if(this.active!=='browser'&&!window.getSelection()?.toString())this.ime.focus({preventScroll:true});});
     this.form=Dom.element('form','terminal-command');this.input=Dom.element('input');this.input.id='browser-terminal-input';this.input.placeholder='Browser shell: help';this.input.autocomplete='off';this.input.spellcheck=false;this.input.setAttribute('aria-label','Browser shell command');this.form.append(Dom.element('span','','❯'),this.input);this.form.onsubmit=event=>{event.preventDefault();this.browserCommand();};
     root.append(controls,this.status,this.viewport,this.form);this.shell=new VirtualShell(model);
-    this.sessions.set('browser',{id:'browser',title:'Browser shell',screen:new VtScreen(100,24),cursor:0,closed:false});this.current().screen.write('Ferrite browser workspace shell\r\nType help for supported utilities. Native tools require a trusted bridge.\r\n');this.updateTabs();
+    this.sessions.set('browser',{id:'browser',title:'Browser shell',screen:new VtScreen(100,24),cursor:0,closed:false});this.current().screen.write('Ferrite browser workspace shell\r\nType help, cargo help or agent help. Native tools are optional and require a trusted bridge.\r\n');this.updateTabs();
     this.historyIndex=0;this.input.onkeydown=event=>{if(event.key==='ArrowUp'||event.key==='ArrowDown'){event.preventDefault();this.historyIndex=Math.max(0,Math.min(this.shell.history.length,this.historyIndex+(event.key==='ArrowUp'?-1:1)));this.input.value=this.shell.history[this.historyIndex]??'';}};
     this.viewport.addEventListener('keydown',event=>{if(this.active==='browser'){this.input.focus();return;}if(event.isComposing)return;const data=VtScreen.key(event,this.current().screen.applicationCursor);if(data!==null){event.preventDefault();event.stopPropagation();this.send(data);}});
     this.viewport.addEventListener('paste',event=>{if(this.active==='browser')return;const text=event.clipboardData?.getData('text/plain');if(text!==undefined){event.preventDefault();event.stopPropagation();const screen=this.current().screen;this.send(screen.bracketedPaste?'\x1b[200~'+text+'\x1b[201~':text);}});
@@ -26,7 +26,16 @@ export class TerminalView {
   }
   current(){return this.sessions.get(this.active)??this.sessions.get('browser');}
   updateTabs(){const value=this.active;this.tabs.replaceChildren();for(const session of this.sessions.values()){const option=Dom.element('option','',session.title+(session.closed?' · exited '+session.exitCode:''));option.value=session.id;this.tabs.append(option);}this.tabs.value=value;}
-  async browserCommand(){const command=this.input.value;if(!command.trim())return;this.input.value='';const session=this.sessions.get('browser');session.screen.write(`\r\n/${this.shell.cwd} ❯ ${command}\r\n`);const result=await this.shell.execute(command);if(result.clear)session.screen.reset();session.screen.write(result.text.replace(/\r?\n/g,'\r\n'));this.historyIndex=this.shell.history.length;this.draw();}
+  async browserCommand(){
+    const command=this.input.value;if(!command.trim()||this.browserBusy)return;this.browserBusy=true;this.input.value='';this.input.disabled=true;
+    const session=this.sessions.get('browser');session.screen.write(`\r\n/${this.shell.cwd} ❯ ${command}\r\n`);
+    try{
+      const result=await (this.executeBrowser ? this.executeBrowser(command) : this.shell.execute(command));
+      if(this.executeBrowser){this.shell.history.push(command);if(this.shell.history.length>200)this.shell.history.shift();this.shell.cwd=result.cwd??'';}
+      if(result.clear)session.screen.reset();session.screen.write(result.text.replace(/\r?\n/g,'\r\n'));this.historyIndex=this.shell.history.length;
+    }catch(error){if(error.name!=='AbortError'){session.screen.write('Error: '+error.message+'\r\n');this.onError(error);}}
+    finally{this.browserBusy=false;this.input.disabled=false;this.draw();}
+  }
   async openNative(kind=this.launch.value){
     if(!this.client.url){this.onConnect();return;}
     const programs={shell:{executable:'/bin/sh',args:['-i']},codex:{executable:'codex',args:[]},claude:{executable:'claude',args:[]},gemini:{executable:'gemini',args:[]},'codex-login':{executable:'codex',args:['login']},'claude-login':{executable:'claude',args:['auth','login']}};

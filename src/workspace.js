@@ -1,3 +1,5 @@
+import {SourceNavigator} from "./ide/SourceNavigator.js";
+import {CallGraphView} from "./visualizers/CallGraphView.js";
 import {compileProject} from "./project.js";
 import {sampleProjects} from "./samples.js";
 import {createProject,parseManifest} from "./cargo.js";
@@ -5,7 +7,9 @@ import {createVisualizer,renderCfg,renderInstances} from "./visualizers.js";
 const $=id=>document.getElementById(id);
 const storageKey="ferrite-workspace-v2";
 let files=createProject(),file="src/main.rs",compilation=null,stage="AST",auto=true,timer=null,worker=null,diagnostic=null;
-const tree=createVisualizer($("inspector-content"),loc=>jump(loc));
+const tree=createVisualizer($("inspector-content"),loc=>navigator.jump(loc));
+const navigator=new SourceNavigator(()=>compilation,()=>files,open,()=> $("source"));
+const callGraph=new CallGraphView($("inspector-content"),loc=>navigator.jump(loc));
 function save(){try{localStorage.setItem(storageKey,JSON.stringify({files,file,auto}));}catch{}}
 function restore(){try{const v=JSON.parse(localStorage.getItem(storageKey)||"null");if(v&&v.files&&typeof v.files==="object"){files=v.files;file=v.file in files?v.file:Object.keys(files)[0];auto=v.auto!==false;}}catch{}}
 function extension(path){return path.endsWith(".rs")?"rs":path.endsWith(".toml")?"toml":"text";}
@@ -17,15 +21,7 @@ function renderProject(){
  for(const path of Object.keys(files).filter(x=>x.endsWith(".rs")||x==="Cargo.toml")){const b=document.createElement("button");b.className="tab"+(path===file?" active":"");b.textContent=path.split("/").at(-1);b.onclick=()=>{open(path);schedule();};$("open-files").append(b);}
  $("editor-file").textContent=file;$("auto").checked=auto;
 }
-function lineForMergedOffset(offset){
- const map=compilation?.unit?.sourceMap||[];
- const item=[...map].reverse().find(x=>x.start<=offset&&offset<x.start+x.length);
- if(!item)return {path:"src/main.rs",line:1,column:1};
- const original=(files[item.path]||"").slice(0,item.originalOffset+offset-item.start);
- const lines=original.split("\n");return {path:item.path,line:lines.length,column:lines.at(-1).length+1};
-}
-function fromMerged(loc){if(!loc)return null;const lines=compilation.unit.source.split("\n");let offset=0;for(let i=0;i<loc.line-1;i++)offset+=(lines[i]?.length||0)+1;offset+=loc.column-1;return lineForMergedOffset(offset);}
-function visitSelection(loc){const actual=fromMerged(loc);if(actual)jump(actual,actual.path);}
+function visitSelection(loc){navigator.jump(loc);}
 function renderStage(){
  if(!compilation)return;
  $("inspector-tabs").replaceChildren();
@@ -33,6 +29,7 @@ function renderStage(){
  const data=compilation.stages.find(s=>s.name===stage)?.data;
  const root=$("inspector-content");
  if(stage==="MIR / CFG")renderCfg(root,data,visitSelection);
+ else if(stage==="Call Graph")callGraph.render(data);
  else if(stage==="Generic Instances")renderInstances(root,data,visitSelection);
  else if(stage==="JavaScript"){const pre=document.createElement("pre");pre.className="code-view";pre.textContent=data;root.replaceChildren(pre);}
  else tree.render(data);
@@ -64,8 +61,8 @@ function removeFile(){if(file==="Cargo.toml"||file==="src/main.rs"){alert("Canno
 $("run").onclick=()=>compile(true);$("check").onclick=()=>compile(false);$("new-file").onclick=createFile;$("delete-file").onclick=removeFile;
 $("auto").onchange=e=>{auto=e.target.checked;save();if(auto)schedule();};
 $("source").addEventListener("input",()=>{files[file]=$("source").value;$("dirty").textContent="●";save();schedule();});
-$("source").addEventListener("click",()=>{if(compilation)tree.select({line:$("source").value.slice(0,$("source").selectionStart).split("\n").length});});
-$("source").addEventListener("keyup",()=>{if(compilation){const before=$("source").value.slice(0,$("source").selectionStart),line=before.split("\n").length;tree.select({line});}});
+$("source").addEventListener("click",()=>{if(compilation){const loc=navigator.sourceToMerged(file,$("source").selectionStart);if(loc)tree.select(loc);}});
+$("source").addEventListener("keyup",()=>{if(compilation){const loc=navigator.sourceToMerged(file,$("source").selectionStart);if(loc)tree.select(loc);}});
 $("source").addEventListener("keydown",e=>{if((e.ctrlKey||e.metaKey)&&e.key==="Enter"){e.preventDefault();compile(true);}if(e.key==="Tab"){e.preventDefault();const t=e.target;t.setRangeText("    ",t.selectionStart,t.selectionEnd,"end");files[file]=t.value;schedule();}});
 for(const name of Object.keys(sampleProjects)){const option=document.createElement("option");option.value=name;option.textContent=name;$("examples").append(option);}
 $("examples").onchange=e=>chooseSample(e.target.value);

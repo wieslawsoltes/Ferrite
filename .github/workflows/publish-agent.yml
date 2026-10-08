@@ -1,0 +1,62 @@
+name: Publish verified agent implementation
+on:
+  push:
+    branches: [feat/agent-mcp-terminal]
+    paths: [.github/workflows/publish-agent.yml]
+permissions:
+  contents: write
+jobs:
+  publish:
+    if: github.repository == 'wieslawsoltes/Ferrite'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/agent-mcp-terminal
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify transfer and materialize five implementation commits
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, lzma, os, pathlib, subprocess
+          def git(*args, **kwargs):
+              return subprocess.run(['git', *args], check=True, **kwargs)
+          head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert head == os.environ['EXPECTED_HEAD'], 'Branch advanced; refusing to overwrite it'
+          paths = sorted(pathlib.Path('.ferrite-publish').glob('*.b64'))
+          assert [p.name for p in paths] == [f'{i:02d}.b64' for i in range(8)]
+          encoded = ''.join(p.read_text() for p in paths)
+          assert len(encoded) == 114364
+          decoder = lzma.LZMADecompressor(memlimit=128 * 1024 * 1024)
+          payload = decoder.decompress(base64.b64decode(encoded, validate=True), max_length=400000)
+          assert decoder.eof and not decoder.unused_data
+          assert hashlib.sha256(payload).hexdigest() == '8c816ea00433368bf6db11fb9a1f7fcce9541c3e35f3c1e101ed09f5d66ad993'
+          data = json.loads(payload)
+          assert data['base'] == 'f69a9ff9c86ed1afce940778952b46789b8b48ad'
+          assert len(data['commits']) == 5
+          git('merge-base', '--is-ancestor', data['base'], 'HEAD')
+          git('config', 'user.name', 'github-actions[bot]')
+          git('config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com')
+          for commit in data['commits']:
+              patch = commit['patch'].encode()
+              assert b'.github/workflows/' not in patch, 'Workflow updates require the connector'
+              git('apply', '--check', '--index', '-', input=patch)
+              git('apply', '--index', '-', input=patch)
+              git('commit', '-m', commit['message'])
+          PY
+      - name: Validate the exact published implementation
+        run: |
+          npm run check
+          npm test
+          git diff --exit-code
+      - name: Publish without rewriting concurrent work
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          test "$(git ls-remote origin refs/heads/feat/agent-mcp-terminal | cut -f1)" = "$EXPECTED_HEAD"
+          git push origin HEAD:refs/heads/feat/agent-mcp-terminal

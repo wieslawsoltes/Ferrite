@@ -15,13 +15,14 @@ export class BrowserStore {
   }
   async initialize() {
     if (!this.indexedDB || !this.keyRange) { this.reason = 'In-memory session: persistent browser storage is unavailable'; return this; }
-    this.db = await new Promise((resolve, reject) => {
+    try { this.db = await new Promise((resolve, reject) => {
       const request = this.indexedDB.open('ferrite-agent-v1', 1); let settled = false;
       request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains('records')) request.result.createObjectStore('records', {keyPath: 'key'}); };
       request.onerror = () => { settled = true; reject(request.error); };
       request.onblocked = () => { settled = true; reject(Error('Agent storage upgrade is blocked by another Ferrite tab')); };
       request.onsuccess = () => { if (settled) request.result.close(); else { settled = true; resolve(request.result); } };
     });
+    } catch (error) { this.reason = 'In-memory session: IndexedDB unavailable (' + (error?.name ?? 'storage error') + ')'; return this; }
     this.db.onversionchange = () => { this.closed = true; this.db.close(); };
     this.persistent = true; return this;
   }
@@ -96,10 +97,12 @@ export class BrowserLease {
     if (!locks) return {persistentAllowed: false, release: async () => {}};
     let release, accept, decline;
     const ready = new Promise((resolve, reject) => { accept = resolve; decline = reject; });
-    const held = locks.request('ferrite-agent:' + scope, {ifAvailable: true}, async lock => {
+    let held;
+    try { held = locks.request('ferrite-agent:' + scope, {ifAvailable: true}, async lock => {
       if (!lock) throw new AgentError('AGENT_TAB_OWNER', 'This project’s browser agent is open in another tab. Disconnect it there before using it here.');
       await new Promise(resolve => { release = resolve; accept(); });
     });
+    } catch (error) { if (error.name === 'SecurityError' || error.name === 'NotSupportedError') return {persistentAllowed: false, release: async () => {}}; throw error; }
     held.catch(decline); await ready;
     return {persistentAllowed: true, release: async () => { release(); await held; }};
   }

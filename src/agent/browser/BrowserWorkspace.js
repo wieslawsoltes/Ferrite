@@ -4,8 +4,8 @@ import {contentHash, randomUUID} from '../core/Platform.js';
 
 /** An adapter over the LIVE editor model, not an independent or simulated filesystem. */
 export class BrowserWorkspace {
-  constructor(model, {store, events} = {}) {
-    this.model = model; this.store = store; this.events = events; this.identity = model.workspaceId;
+  constructor(model, {store, events, beforeEdit = () => {}} = {}) {
+    this.model = model; this.beforeEdit = beforeEdit; this.store = store; this.events = events; this.identity = model.workspaceId;
     this.epoch = model.workspaceEpoch; this.root = 'browser:' + this.identity; this.queue = Promise.resolve(); this.revoked = false;
   }
   assertCurrent(signal) {
@@ -45,7 +45,7 @@ export class BrowserWorkspace {
     this.assertCurrent(); const revision = this.model.revision, listing = await this.list(), files = Object.create(null), hashes = Object.create(null);
     for (const path of listing.files) { files[path] = await this.text(path); hashes[path] = await contentHash(files[path]); }
     this.assertCurrent(); if (revision !== this.model.revision) throw new AgentError('EDIT_CONFLICT', 'Workspace changed while capturing source; read again');
-    return {root: this.root, identity: this.identity, revision, files, hashes, excluded: []};
+    return {root: this.root, identity: this.identity, revision, files, hashes, excluded: Object.keys(this.model.files).filter(path => !Object.hasOwn(files, path))};
   }
   async preview(changes) {
     this.assertCurrent(); const revision = this.model.revision, seen = new Set(), edits = [];
@@ -62,11 +62,11 @@ export class BrowserWorkspace {
   }
   apply(changes, {label = 'Browser agent edit', sessionId, signal} = {}) {
     const operation = this.queue.catch(() => {}).then(async () => {
-      this.assertCurrent(signal); const revision = this.model.revision, edits = await this.preview(changes), id = randomUUID();
+      this.assertCurrent(signal); this.beforeEdit(); const revision = this.model.revision, edits = await this.preview(changes), id = randomUUID();
       const checkpoint = {id, label, sessionId, workspaceId: this.identity, at: new Date().toISOString(), status: 'prepared', edits};
       await this.store.write('checkpoints', id, checkpoint);
       try {
-        this.assertCurrent(signal);
+        this.assertCurrent(signal); this.beforeEdit();
         if (revision !== this.model.revision) throw new AgentError('EDIT_CONFLICT', 'Source changed while the checkpoint was being saved; no edits were applied');
         // No awaits between the final revision check and the atomic in-memory model mutation.
         this.model.applyWorkspaceTransaction(Object.fromEntries(edits.map(edit => [edit.path, edit.after])));
@@ -75,7 +75,7 @@ export class BrowserWorkspace {
       try { await this.store.write('checkpoints', id, checkpoint); }
       catch { throw new AgentError('CHECKPOINT_COMMIT', 'The source edit was applied but its checkpoint completion was not saved. Inspect the current source; do not replay the edit.'); }
       this.events?.emit('workspace.changed', {id, sessionId, label, paths: edits.map(edit => edit.path)});
-      return {checkpoint: id, workspaceSaved: saved, changes: edits.map(({path, beforeHash, afterHash}) => ({path, beforeHash, afterHash}))};
+      return {checkpoint: id, workspaceSaved: saved && !!this.model.storage, changes: edits.map(({path, beforeHash, afterHash}) => ({path, beforeHash, afterHash}))};
     });
     this.queue = operation; return operation;
   }

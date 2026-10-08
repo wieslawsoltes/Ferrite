@@ -26,13 +26,13 @@ Use artifact_read for paged results. On interrupted or uncertain tool outcomes, 
 
 /** Browser composition root: no Node imports, server, localhost RPC, native process or secret persistence. */
 export class BrowserRuntime {
-  static async create({model, inspect = () => ({}), command, providers, compiler, storeOptions = {}, leaseOptions = {}} = {}) {
+  static async create({model, beforeEdit, inspect = () => ({}), command, providers, compiler, storeOptions = {}, leaseOptions = {}} = {}) {
     const runtime = new BrowserRuntime(); runtime.lifetime = new AbortController();
     runtime.providers = providers ?? new ProviderRegistry({environment: {}, transport: new BrowserProviderTransport()});
     runtime.events = new EventLog({limit: 4000, maxCharacters: 4_000_000});
     const emit = runtime.events.emit.bind(runtime.events);
     runtime.events.emit = (type, value) => emit(type, JSON.parse(runtime.providers.redact(JSON.stringify(value ?? {}))));
-    runtime.workspace = new BrowserWorkspace(model, {events: runtime.events});
+    runtime.workspace = new BrowserWorkspace(model, {events: runtime.events, beforeEdit});
     try {
       runtime.lease = await BrowserLease.acquire(runtime.workspace.identity, leaseOptions);
       runtime.store = await new BrowserStore(runtime.workspace.identity, {...storeOptions,
@@ -125,7 +125,11 @@ export class BrowserRuntime {
     for (const id of this.harness?.active.keys() ?? []) void this.harness.cancel(id);
   }
   close() { this.revoke(); return this.closing ??= (async () => {
-    await this.harness?.close(); await this.compiler?.close(); await this.workspace?.queue.catch(() => {}); await this.store?.close(); await this.lease?.release();
+    try { await this.harness?.close(); }
+    finally {
+      await Promise.allSettled([this.compiler?.close(), this.workspace?.queue, this.userShell?.queue]);
+      try { await this.store?.close(); } finally { await this.lease?.release(); }
+    }
   })(); }
 }
 

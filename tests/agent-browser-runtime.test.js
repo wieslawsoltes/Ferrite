@@ -88,7 +88,7 @@ test('browser shell performs real pipeline/redirection and retains per-session w
  await r.tools.execute('browser_shell',{command:'cd src; printf "a\\nb\\n" > note.txt'},ctx);
  const result=await r.tools.execute('browser_shell',{command:'pwd; cat note.txt | wc -l'},ctx);assert.equal(result.text,'/src\n2\n');assert.equal(r.workspace.model.files['src/note.txt'],'a\nb\n');
  const other=await r.tools.execute('browser_shell',{command:'pwd'},{mode:'trusted',sessionId:'two'});assert.equal(other.text,'/\n');
- const unsupported=await r.tools.execute('browser_shell',{command:'curl https://example.com'},ctx);assert.equal(unsupported.code,1);
+ const unsupported=await r.tools.execute('browser_shell',{command:'curl https://example.com'},ctx);assert.equal(unsupported.code,127);
 });
 test('browser shell cannot read excluded credentials or write protected paths through redirection',async t=>{
  const r=await runtime(t,{model:new WorkspaceModel({...files(),'.env':'secret'})});

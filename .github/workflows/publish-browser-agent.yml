@@ -1,0 +1,65 @@
+name: Publish verified browser agent implementation
+on:
+  push:
+    branches: [feat/browser-agent-workbench]
+    paths: [.github/workflows/publish-browser-agent.yml]
+permissions:
+  contents: write
+jobs:
+  publish:
+    if: github.repository == 'wieslawsoltes/Ferrite'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/browser-agent-workbench
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify transfer and materialize four implementation commits
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, lzma, os, pathlib, subprocess
+          def git(*args, **kwargs):
+              return subprocess.run(['git', *args], check=True, **kwargs)
+          head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert head == os.environ['EXPECTED_HEAD'], 'Branch advanced; refusing to overwrite it'
+          paths = sorted(pathlib.Path('.browser-agent-publish').glob('*.b64'))
+          assert [p.name for p in paths] == [f'{i:02d}.b64' for i in range(4)]
+          encoded = ''.join(p.read_text() for p in paths)
+          assert len(encoded) == 60912
+          decoder = lzma.LZMADecompressor(memlimit=128 * 1024 * 1024)
+          payload = decoder.decompress(base64.b64decode(encoded, validate=True), max_length=400000)
+          assert decoder.eof and not decoder.unused_data
+          assert len(payload) == 209356
+          assert hashlib.sha256(payload).hexdigest() == '7950f23bc7ea564ab80495b6b19276934789c548c0f1e734ca71d60dd7ba4267'
+          data = json.loads(payload)
+          assert data['base'] == '93733ef8495e7763c452e16723908a2a5cc54e9c'
+          assert len(data['commits']) == 4
+          git('merge-base', '--is-ancestor', data['base'], 'HEAD')
+          git('config', 'user.name', 'github-actions[bot]')
+          git('config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com')
+          for commit in data['commits']:
+              patch = commit['patch'].encode()
+              assert b'.github/workflows/' not in patch, 'Workflow updates require the connector'
+              git('apply', '--unidiff-zero', '--check', '--index', '-', input=patch)
+              git('apply', '--unidiff-zero', '--index', '-', input=patch)
+              subprocess.run(['node', 'tools/bundle-workers.mjs'], check=True)
+              git('add', *[str(p) for p in pathlib.Path('src/ui/workers').glob('*.bundle.js')])
+              git('commit', '-m', commit['message'])
+          PY
+      - name: Validate the exact published implementation
+        run: |
+          npm run check
+          npm test
+          git diff --exit-code
+      - name: Publish without rewriting concurrent work
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          test "$(git ls-remote origin refs/heads/feat/browser-agent-workbench | cut -f1)" = "$EXPECTED_HEAD"
+          git push origin HEAD:refs/heads/feat/browser-agent-workbench

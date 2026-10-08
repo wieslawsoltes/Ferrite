@@ -10,7 +10,10 @@
     "test:browser": "python tools/browser-acceptance.py",
     "test:native": "node tools/native-smoke.mjs",
     "benchmark": "node tools/benchmark.mjs",
-    "cargo:bridge": "node tools/cargo-bridge.mjs"
+    "cargo:bridge": "node tools/cargo-bridge.mjs",
+    "test:repositories": "node tools/repository-smoke.mjs"
   },
-  "engines": {"node": ">=22"}
+  "engines": {
+    "node": ">=22"
+  }
 }

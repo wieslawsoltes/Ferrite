@@ -1,3 +1,4 @@
+import {NativeArtifactsView} from './views/NativeArtifactsView.js';
 import {CargoOptions} from '../cargo/CargoOptions.js';
 import {WorkspaceModel} from './model/WorkspaceModel.js';
 import {SelectionModel} from './model/SelectionModel.js';
@@ -32,13 +33,14 @@ export class IdeApplication {
     this.build=null;this.buildRevision=-1;this.requestSerial=0;this.options={};this.backend='browser';this.runMode=null;this.nativeArgs=[];
     this.settings={auto:true,optimize:true};try{Object.assign(this.settings,JSON.parse(storage?.getItem('ferrite.settings.v3')??'{}'));}catch{}
     this.settings.auto=this.settings.auto!==false;this.settings.optimize=this.settings.optimize!==false;
-    const definitions=[['project','Project','folder'],['structure','Structure','tree'],['cargo','Cargo','cargo'],['compiler','Compiler','code'],['profile','Profile','chart'],['run','Run','console'],['problems','Problems','warning'],['debugger','Debugger','debug'],['tests','Tests','test']].map(([id,title,icon])=>({id,title,icon,element:Dom.element('div','tool-panel')}));
+    const definitions=[['project','Project','folder'],['structure','Structure','tree'],['cargo','Cargo','cargo'],['compiler','Compiler','code'],['profile','Profile','chart'],['native-artifacts','Native artifacts','code'],['run','Run','console'],['problems','Problems','warning'],['debugger','Debugger','debug'],['tests','Tests','test']].map(([id,title,icon])=>({id,title,icon,element:Dom.element('div','tool-panel')}));
     this.panels=new Map(definitions.map(d=>[d.id,d.element]));
     this.dock=new DockLayout(this.$('dock-layout'),definitions,{storage});
     this.editor=new CodeEditor(this.$('editor-root'),this.model,this.selection);this.tabs=new TabStrip(this.$('document-tabs'),this.model);
     const projectHeading=Dom.element('div','project-heading');projectHeading.append(Dom.icon('folder'),Dom.element('span','','Project files'));const filter=Dom.element('input','project-filter');filter.placeholder='Filter files';filter.setAttribute('aria-label','Filter project files');const projectTree=Dom.element('div','project-tree');projectTree.id='project-tree';this.projectView=new ProjectView(projectTree,this.model);filter.oninput=()=>{this.projectView.filter=filter.value;this.projectView.render();};
     this.projectFooter=Dom.element('div','project-footer');this.panels.get('project').append(projectHeading,filter,projectTree,this.projectFooter);
     this.inspector=new InspectorView(this.panels.get('compiler'),this.selection);this.profile=new ProfileView(this.panels.get('profile'));
+    this.nativeArtifacts=new NativeArtifactsView(this.panels.get('native-artifacts'),this.selection);
     this.problems=new DiagnosticsView(this.panels.get('problems'),this.selection);this.problems.render([]);
     this.debugger=new DebuggerView(this.panels.get('debugger'),this.selection,command=>this.execution.command(command,this.model.breakpointList));
     this.tests=new TestsView(this.panels.get('tests'),this.selection);this.tests.reset();
@@ -63,7 +65,7 @@ export class IdeApplication {
     for(const [id,key] of [['auto-check','auto'],['optimize','optimize']])this.$(id).onchange=()=>{this.settings[key]=this.$(id).checked;try{this.storage?.setItem('ferrite.settings.v3',JSON.stringify(this.settings));}catch{}if(key==='optimize')this.invalidate();if(this.settings.auto)this.schedule();};
     this.$('backend-select').onchange=()=>{this.backend=this.$('backend-select').value;if(this.backend==='native'&&!this.native.capabilities)this.cargo.connect();};
     this.$('search-everywhere').onclick=()=>this.palette.open();this.$('project-menu').onclick=()=>this.palette.open();this.$('native-connect').onclick=()=>this.cargo.connect();
-    for(const id of ['project','structure','cargo','problems','debugger','tests','run','compiler','profile']){const definition=definitions.find(d=>d.id===id);const button=Dom.button('',()=>this.dock.toggle(id),{icon:definition.icon,className:'rail-button',title:`${definition.title} tool window`});button.dataset.tool=id;this.$(['compiler','profile'].includes(id)?'right-rail':'left-rail').append(button);}
+    for(const id of ['project','structure','cargo','problems','debugger','tests','run','compiler','profile','native-artifacts']){const definition=definitions.find(d=>d.id===id);const button=Dom.button('',()=>this.dock.toggle(id),{icon:definition.icon,className:'rail-button',title:`${definition.title} tool window`});button.dataset.tool=id;this.$(['compiler','profile','native-artifacts'].includes(id)?'right-rail':'left-rail').append(button);}
   }
   events(){
     document.addEventListener('keydown',event=>{
@@ -85,6 +87,7 @@ export class IdeApplication {
     ...['check','build','run','debug','test'].map(command=>({label:`${command[0].toUpperCase()+command.slice(1)} current project`,icon:command==='run'?'run':'code',execute:()=>this.compile(command)})),
     {label:'New project file',icon:'plus',execute:()=>this.createFile()},{label:'Rename current file',icon:'file',execute:()=>this.renameFile()},
     {label:'Reset docking layout',icon:'reset',execute:()=>this.dock.reset()},{label:'Connect native Cargo',icon:'connect',execute:()=>this.cargo.connect()},
+    {label:'Inspect native MIR, LLVM IR, assembly and object',icon:'code',execute:()=>this.compile('inspect')},
     {label:'Native Cargo arguments (JSON array)',icon:'cargo',execute:()=>this.configureArguments()},
     ...this.dock.definitions.map(panel=>({label:`Show ${panel.title} tool window`,icon:panel.icon,execute:()=>this.dock.open(panel.id)})),
     ...Object.keys(this.model.files).map(path=>({label:`Open ${path}`,icon:'file',execute:()=>this.model.open(path)})),
@@ -99,7 +102,7 @@ export class IdeApplication {
     else if(event.kind==='storage-error')this.status('Browser storage could not save this workspace. Export a snapshot.','error');
   }
   renderWorkspace(){this.tabs.render();this.projectView.render();this.editor.open(this.model.active);this.$('active-path').textContent=this.model.active??'No file open';this.$('editor-language').textContent=this.model.active?.endsWith('.rs')?'Rust':this.model.active?.endsWith('.toml')?'TOML':'Text';this.projectFooter.textContent=`${Object.keys(this.model.files).length} files · local browser workspace`;const manifest=this.model.files['Cargo.toml']??'';this.$('project-name').textContent=/^name\s*=\s*"([^"]+)"/m.exec(manifest)?.[1]??'Cargo workspace';}
-  invalidate(){this.buildRevision=-1;this.selection.reset(this.model.revision);if(this.build)this.inspector.invalidate();this.execution.stop(false);this.debugger.render(null);this.structureRegistry.clear();Dom.empty(this.panels.get('structure'),'Compile the current source to refresh symbols.');this.status('Modified · compiler results are stale','');}
+  invalidate(){this.nativeArtifacts.invalidate();this.buildRevision=-1;this.selection.reset(this.model.revision);if(this.build)this.inspector.invalidate();this.execution.stop(false);this.debugger.render(null);this.structureRegistry.clear();Dom.empty(this.panels.get('structure'),'Compile the current source to refresh symbols.');this.status('Modified · compiler results are stale','');}
   schedule(){clearTimeout(this.compileTimer);if(this.settings.auto)this.compileTimer=setTimeout(()=>this.compile('check'),260);}
   async chooseSample(name){const sample=SampleCatalog.projects.find(s=>s.name===name);if(!sample)return;this.stop(false);this.options={};this.cargo.options={};this.editor.clearHistory();this.model.replace(sample.files);this.model.save();this.$('sample-select').value=name;this.backend=sample.native?'native':'browser';this.$('backend-select').value=this.backend;if(sample.native){clearTimeout(this.compileTimer);this.status('This example uses full Rust; connect Native Cargo to compile it.','');this.dock.open('cargo');}else await this.compile('check');}
   async compile(command='check'){
@@ -137,6 +140,7 @@ export class IdeApplication {
       if(result.artifacts?.length){this.runOutput.textContent+='\nArtifacts:\n'+result.artifacts.map(a=>a.executable??a.filenames.join('\n')).join('\n')+'\n';}
       const changed=Object.entries(result.files??{}).filter(([path,text])=>typeof text==='string'&&text!==this.model.files[path]);
       if(changed.length){clearTimeout(this.compileTimer);this.model.applyFiles(Object.fromEntries(changed));clearTimeout(this.compileTimer);this.editor.open(this.model.active);this.model.save();this.status(`Native cargo ${command} · exit ${result.exitCode} · ${changed.length} generated/updated files synchronized`,result.exitCode===0?'success':'error');}
+      if(command==='inspect'){this.nativeArtifacts.update(result.compilerArtifacts);this.dock.open('native-artifacts');}
     }catch(error){if(error.name!=='AbortError'&&serial===this.requestSerial&&revision===this.model.revision)this.error(error);}
   }
   renderStructure(){const root=this.panels.get('structure');this.structureRegistry.clear();root.replaceChildren();for(const item of this.build.sem.symbols){const row=Dom.button(item.name,null,{icon:item.kind==='fn'?'code':'tree',className:'project-row'});row.append(Dom.element('small','muted',item.kind));this.structureRegistry.bind(row,item.span);root.append(row);}}

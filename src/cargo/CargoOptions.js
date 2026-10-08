@@ -1,6 +1,6 @@
 /** Converts shared IDE build options to literal Cargo argv; never invokes a shell. */
 export class CargoOptions {
-  static buildCommands = new Set(['check', 'build', 'run', 'test', 'clippy', 'bench', 'rustc', 'rustdoc', 'doc']);
+  static buildCommands = new Set(['inspect', 'check', 'build', 'run', 'test', 'clippy', 'bench', 'rustc', 'rustdoc', 'doc']);
   static featureCommands = new Set([...this.buildCommands, 'metadata', 'tree']);
 
   static arguments(command, options = {}) {

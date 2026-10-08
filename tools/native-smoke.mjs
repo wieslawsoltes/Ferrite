@@ -27,6 +27,13 @@ try{
   const result=await run('run',{args:['--package','smoke-app']});assert.equal(result.exitCode,0);assert.match(result.stdout,/native 42/);
   const tests=await run('test');assert.equal(tests.exitCode,0);assert.match(tests.stdout,/test_answer/);
   const meta=await run('metadata');assert.equal(meta.exitCode,0);const metadata=JSON.parse(meta.stdout);assert.equal(metadata.workspace_members.length,2);
+  const inspection=await run('inspect',{args:['--package','smoke-app','--bin','smoke-app']});
+  assert.equal(inspection.exitCode,0,inspection.stderr);
+  for(const kind of ['mir','llvm-ir','asm','obj'])assert(inspection.compilerArtifacts.some(a=>a.kind===kind&&a.size>0),'Missing native artifact '+kind);
+  assert(inspection.compilerArtifacts.find(a=>a.kind==='llvm-ir').content.includes('define '));
+  assert(inspection.compilerArtifacts.find(a=>a.kind==='llvm-ir').mappings.some(m=>m.span.file==='app/src/main.rs'));
+  assert(inspection.compilerArtifacts.find(a=>a.kind==='asm').mappings.some(m=>m.span.file==='app/src/main.rs'));
+  assert(inspection.compilerArtifacts.find(a=>a.kind==='obj').encoding==='base64');
   const formatted=await run('fmt',{args:['--all']});assert.equal(formatted.exitCode,0);assert.equal(formatted.files['app/src/main.rs'],'fn main() {\n    println!("native {}", smoke_math::answer());\n}\n');
   const browserLanguageCases=[
     ['fn apply<F: Fn(i32)->i32>(f:F,v:i32)->i32{f(v)} fn main(){let scale=6;let f=|x|x*scale;println!("{}",apply(f,7));}', '42'],

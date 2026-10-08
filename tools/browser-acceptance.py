@@ -335,6 +335,17 @@ def run():
                     expect(page.locator('#terminal')).to_contain_text('Hello, native Rust! [1, 4, 9, 16, 25]')
                     assert not page.evaluate('(token)=>JSON.stringify(localStorage).includes(token)', token)
                     assert token not in json.dumps(page.evaluate('window.ferrite.getSnapshot()'))
+                    show_tool('Cargo')
+                    page.get_by_role('button', name='Inspect MIR / LLVM / assembly', exact=True).click()
+                    expect(page.locator('#status')).to_contain_text('exit 0', timeout=60000)
+                    expect(page.locator('#native-artifact-select')).to_be_visible()
+                    page.locator('#native-artifact-select').select_option('1')
+                    expect(page.locator('.native-artifact-content')).to_contain_text('define ')
+                    assert page.locator('.native-output-line.source-link').count() > 0
+                    page.locator('.native-output-line.source-link').first.click()
+                    assert page.locator('#source').evaluate('e=>e.selectionEnd>e.selectionStart')
+                    page.get_by_label('Native artifact presentation', exact=True).select_option('cfg')
+                    assert page.locator('.native-cfg .graph-node').count() > 0
                     page.locator('#auto-check').uncheck()
                     page.locator('#source').fill('fn main() { let wrong: u32 = "no"; println!("{}",wrong); }')
                     page.locator('#check').click()

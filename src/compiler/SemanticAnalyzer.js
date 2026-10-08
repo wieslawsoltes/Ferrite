@@ -29,6 +29,20 @@ export class SemanticAnalyzer {
       if(!n)return "()";
       if(n.kind==="literal")return n.type;
       if(n.kind==="variable")return get(n.name).type;
+      if(n.kind==="structLiteral"){
+        const shape=structs.get(n.name);if(!shape)throw Error("Unknown struct "+n.name);
+        if(n.fields.length!==shape.fields.length)throw Error("Incorrect number of fields for "+n.name);
+        const seen=new Set();
+        for(const field of n.fields){
+          if(seen.has(field.name))throw Error("Duplicate field "+field.name);
+          seen.add(field.name);
+          const def=shape.fields.find(x=>x.name===field.name);
+          if(!def)throw Error("Unknown field "+n.name+"."+field.name);
+          const actual=infer(field.value);
+          if(!compatible(def.type,actual))throw Error("Field "+n.name+"."+field.name+" expects "+def.type+", got "+actual);
+        }
+        return n.name;
+      }
       if(n.kind==="array"){const types=n.items.map(infer);if(types.some(x=>x!==types[0]))throw Error("Array elements must share a type");return "["+(types[0]||"unknown")+";"+types.length+"]";}
       if(n.kind==="index"){const t=infer(n.object),i=infer(n.index);if(!isNumber(i))throw Error("Index must be integer");const m=/^\[(.+);\d+\]$/.exec(t);if(!m)throw Error("Indexing non-array "+t);return m[1];}
       if(n.kind==="field"){const t=infer(n.object),s=structs.get(t);if(!s)throw Error("Unknown field base "+t);const f=s.fields.find(x=>x.name===n.field);if(!f)throw Error("Unknown field "+n.field);return f.type;}

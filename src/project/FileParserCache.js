@@ -6,9 +6,17 @@ export class FileParserCache {
   constructor({maxEntries = 256, maxCharacters = 4_000_000} = {}) {
     this.entries = new Map(); this.maxEntries = maxEntries; this.maxCharacters = maxCharacters; this.characters = 0;
   }
+  has(file, source) { return this.entries.get(file)?.source === source; }
+  adopt(result) {
+    const old = this.entries.get(result.file); if (old) this.characters -= old.source.length;
+    this.entries.delete(result.file); this.entries.set(result.file, {...result, primed: true}); this.characters += result.source.length;
+    while (this.entries.size > this.maxEntries || this.characters > this.maxCharacters) {
+      const key = this.entries.keys().next().value; this.characters -= this.entries.get(key).source.length; this.entries.delete(key);
+    }
+  }
   parse(file, source) {
     const cached = this.entries.get(file);
-    if (cached?.source === source) { this.entries.delete(file); this.entries.set(file, cached); return {...cached, cached: true}; }
+    if (cached?.source === source) { this.entries.delete(file); this.entries.set(file, cached); const primed = cached.primed; cached.primed = false; return {...cached, cached: !primed}; }
     const start = performance.now(), tokens = Lexer.tokenize(source, {file}), lexMs = performance.now() - start;
     const parseStart = performance.now(), ast = Parser.parse(tokens), parseMs = performance.now() - parseStart;
     const result = {file, source, tokens, ast, lexMs, parseMs};

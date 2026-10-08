@@ -81,6 +81,7 @@ export class CompilerSession {
       {name: 'HIR / Symbols', kind: 'symbols', data: compilation.sem.symbols},
       {name: 'Types / Traits', kind: 'types', data: compilation.sem},
       {name: 'Ownership', kind: 'ownership', data: compilation.ownership},
+      {name: 'Pattern coverage', kind: 'patterns', data: compilation.sem.patterns},
       {name: 'Closure captures', kind:'closures',data:compilation.sem.closures??[]},
       {name: 'Generic Instances', kind: 'instances', data: compilation.sem.instances},
       {name: 'MIR / CFG', kind: 'cfg', data: compilation.mir},

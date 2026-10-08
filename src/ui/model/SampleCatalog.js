@@ -48,6 +48,36 @@ fn rectangle_area() {
     assert_eq!(r.area(), 42);
 }
 `}},
+    {name:'Pattern matrix · destructuring & coverage',expected:'left 7\nright 11\nmiddle 5\n',files:{
+      'Cargo.toml':manifest('pattern-matrix'),
+      'src/main.rs':`enum Event { Left(i32), Right(i32), Idle }
+struct Point { x: i32, y: i32 }
+
+fn handle(event: Event) -> i32 {
+    let (Event::Left(value) | Event::Right(value)) = event else { return 0; };
+    value
+}
+
+fn main() {
+    println!("left {}", handle(Event::Left(7)));
+    println!("right {}", handle(Event::Right(11)));
+    let point = Point { x: 5, y: 20 };
+    match point {
+        Point { x: 0..=3, .. } => println!("small"),
+        Point { x, y: 10..=30 } => println!("middle {}", x),
+        Point { .. } => println!("other"),
+    }
+}
+`}},
+    {name:'Let-else · queue filtering',expected:'accepted 4\naccepted 8\n',files:{'Cargo.toml':manifest('let-else'),
+      'src/main.rs':`fn main() {
+    let entries = [Some(4), None, Some(8)];
+    for entry in entries {
+        let Some(value) = entry else { continue; };
+        println!("accepted {}", value);
+    }
+}
+`}},
     {name:'Closures · capture modes & call traits',expected:'scaled 42\nstate 2 3\nowned payload\n',files:{'Cargo.toml':manifest('closures'),'src/main.rs':`fn apply<F: Fn(i32) -> i32>(operation: F, value: i32) -> i32 {
     operation(value)
 }

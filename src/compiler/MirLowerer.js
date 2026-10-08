@@ -1,7 +1,8 @@
+import {PatternLowerer} from './patterns/PatternLowerer.js';
 /** Typed register MIR with explicit control flow; this IR is executed, not illustrative AST JSON. */
 export class MirLowerer {
   constructor(instance) {
-    this.instance = instance;
+    this.instance = instance; this.patterns = new PatternLowerer(this);
     this.registers = instance.locals.map(local => ({type: local.type, name: local.name, span: local.span}));
     this.blocks = []; this.loops = []; this.sequence = 0;
     this.current = this.newBlock('entry', instance.fn);
@@ -53,36 +54,8 @@ export class MirLowerer {
     else { done.terminator = {kind: 'unreachable', span: node.span}; this.current = null; }
     return result;
   }
-  bind(pattern, value, node = pattern) {
-    if (pattern.binding) this.emit('write', {place: {slot: pattern.binding.slot, path: []}, value}, node);
-    if (pattern.kind === 'tuplePattern') pattern.items.forEach((p, i) => this.bind(p,
-      this.emit('get', {value, field: String(i), index: null, deref: false, copy: false}, p, p.type)));
-    if (pattern.kind === 'variantPattern') pattern.items.forEach((p, i) => this.bind(p,
-      this.emit('payload', {value, index: i}, p, p.type)));
-  }
-  patternTest(pattern, value) {
-    if (pattern.kind === 'wildcard' || pattern.kind === 'bindingPattern') return this.literal(true, 'bool', pattern);
-    if (pattern.kind === 'literal') {
-      const literal = this.literal(pattern.value, pattern.type, pattern);
-      return this.emit('binary', {operator: '==', left: value, right: literal, operandType: pattern.type}, pattern, 'bool');
-    }
-    if (pattern.kind === 'tuplePattern') {
-      let result = this.literal(true, 'bool', pattern);
-      pattern.items.forEach((p, i) => {
-        result = this.conditional(result, () => this.patternTest(p, this.emit('get', {value, field: String(i), index: null}, p, p.type)),
-          () => this.literal(false, 'bool', p), p, 'bool');
-      });
-      return result;
-    }
-    const tag = this.emit('tag', {value}, pattern, '&str'), expected = this.literal(pattern.variant, '&str', pattern);
-    let result = this.emit('binary', {operator: '==', left: tag, right: expected, operandType: '&str'}, pattern, 'bool');
-    for (let i = 0; i < pattern.items.length; i++) {
-      const p = pattern.items[i];
-      result = this.conditional(result, () => this.patternTest(p, this.emit('payload', {value, index: i}, p, p.type)),
-        () => this.literal(false, 'bool', p), p, 'bool');
-    }
-    return result;
-  }
+  bind(pattern, value, node = pattern) { this.patterns.bind(pattern, value, node); }
+  patternTest(pattern, value) { return this.patterns.test(pattern, value); }
   expr(node, borrowed = false) {
     if (!node) return this.unit(node);
     if (node.variant) {
@@ -206,7 +179,16 @@ export class MirLowerer {
   }
   statement(node) {
     switch (node.kind) {
-      case 'let': this.bind(node.pattern, this.expr(node.value), node); break;
+      case 'let': {
+        const value = this.expr(node.value);
+        if (node.otherwise) {
+          const success = this.newBlock('let-else success', node), failure = this.newBlock('let-else failure', node);
+          this.branch(this.patternTest(node.pattern, value), success, failure, node);
+          this.current = failure; this.block(node.otherwise);
+          this.current = success;
+        }
+        this.bind(node.pattern, value, node); break;
+      }
       case 'assign': {
         const place = this.place(node.target);
         let value;

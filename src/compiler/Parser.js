@@ -158,10 +158,11 @@ export class Parser {
       const start = this.c.peek();
       if (this.c.match(';')) continue;
       if (this.c.match('let')) {
-        const mutable = !!this.c.match('mut'), pattern = this.pattern();
+        const mutable = !!this.c.match('mut'), pattern = this.pattern(false);
         const annotation = this.c.match(':') ? this.type() : null;
-        this.c.eat('='); const value = this.expr(); this.c.eat(';');
-        body.push(this.c.node('let', start, {name: pattern.name, pattern, mutable, annotation, value}));
+        this.c.eat('='); const value = this.expr();
+        const otherwise = this.c.match('else') ? this.block() : null; this.c.eat(';');
+        body.push(this.c.node('let', start, {name: pattern.name, pattern, mutable, annotation, value, otherwise}));
         continue;
       }
       if (this.c.is('return') || this.c.is('break') || this.c.is('continue')) {
@@ -181,7 +182,7 @@ export class Parser {
         body.push(this.c.node('while', start, {condition, then})); continue;
       }
       if (this.c.match('for')) {
-        const pattern = this.pattern(); this.c.eat('in');
+        const pattern = this.pattern(false); this.c.eat('in');
         const from = this.expr(0, false);
         let to = null, inclusive = false;
         if (this.c.is('..') || this.c.is('..=')) { inclusive = this.c.take().value === '..='; to = this.expr(0, false); }
@@ -199,14 +200,45 @@ export class Parser {
     }
     this.c.eat('}'); return this.c.node('block', start, {body, tail});
   }
-  pattern() {
+  pattern(allowOr = true) {
+    const start = this.c.peek();
+    let pattern = this.patternAtom();
+    if (this.c.is('..') || this.c.is('..=')) {
+      const inclusive = this.c.take().value === '..=';
+      pattern = this.c.node('rangePattern', start, {from: pattern, to: this.patternAtom(), inclusive});
+    }
+    if (allowOr && this.c.match('|')) {
+      const items = [pattern];
+      do { items.push(this.pattern(false)); } while (this.c.match('|'));
+      return this.c.node('orPattern', start, {items});
+    }
+    return pattern;
+  }
+  patternAtom() {
     const start = this.c.peek();
     if (this.c.match('_')) return this.c.node('wildcard', start);
-    if (this.c.match('(')) return this.c.node('tuplePattern', start, {items: this.list(')', () => this.pattern())});
+    if (this.c.match('(')) {
+      if (this.c.match(')')) return this.c.node('tuplePattern', start, {items: []});
+      const first = this.pattern();
+      if (!this.c.match(',')) { this.c.eat(')'); return first; }
+      return this.c.node('tuplePattern', start, {items: [first, ...this.list(')', () => this.pattern())]});
+    }
+    if (this.c.match('mut')) return this.c.node('bindingPattern', start, {name: this.c.identifier(), mutable: true});
     if (['number', 'string', 'char'].includes(start.kind) || ['true', 'false', '-'].includes(start.value)) return this.expr(10);
     const name = this.path();
+    if (this.c.match('{')) {
+      const fields = []; let rest = false;
+      while (!this.c.is('}')) {
+        if (this.c.match('..')) { rest = true; this.c.match(','); break; }
+        const field = this.c.peek(), mutable = !!this.c.match('mut'), key = this.c.identifier();
+        const pattern = this.c.match(':') ? this.pattern() : this.c.node('bindingPattern', field, {name: key, mutable});
+        fields.push({name: key, pattern});
+        if (!this.c.match(',')) break;
+      }
+      this.c.eat('}'); return this.c.node('structPattern', start, {name, fields, rest});
+    }
     if (this.c.match('(')) return this.c.node('variantPattern', start, {name, items: this.list(')', () => this.pattern())});
-    return this.c.node(name.includes('::') || ['None'].includes(name) ? 'variantPattern' : 'bindingPattern', start, {name, items: []});
+    return this.c.node(name.includes('::') || name === 'None' ? 'variantPattern' : 'bindingPattern', start, {name, items: []});
   }
   expr(minimum = 0, allowRecord = true) {
     if (++this.depth > 256) throw new Diagnostic('F0102', 'Expression nesting limit exceeded', this.c.peek().span);

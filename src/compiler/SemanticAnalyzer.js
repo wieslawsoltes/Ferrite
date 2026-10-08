@@ -1,3 +1,5 @@
+import {PatternAnalyzer} from './patterns/PatternAnalyzer.js';
+import {PatternCoverage} from './patterns/PatternCoverage.js';
 import {Diagnostic} from './Diagnostic.js';
 import {TypeSystem as T} from './TypeSystem.js';
 import {SymbolIndex} from './SymbolIndex.js';
@@ -14,6 +16,7 @@ export class SemanticAnalyzer {
     // cached callers without their anonymous declaration/capture environment.
     if(JSON.stringify(ast).includes('"kind":"closure"'))queryCache=null;
     this.closures=new ClosureAnalyzer(this);
+    this.patterns = new PatternAnalyzer(this); this.coverage = new PatternCoverage(this.index); this.patternReports = [];
     this.queryCache = queryCache; this.environment = queryCache ? SemanticQueryCache.environment(this.index) : null;
     this.instances = new Map(); this.obligations = []; this.warnings = [];
     this.entry = entry; this.mode = mode; this.maxInstances = maxInstances; this.depth = 0;
@@ -32,7 +35,7 @@ export class SemanticAnalyzer {
       this.instantiate(fn, types, [], fn);
     }
     this.closures.finish();
-    return {closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
+    return {patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
       symbols: this.index.symbols, structures: [...this.index.structs.values()],
       enums: [...this.index.enums.values()], warnings: this.warnings, entry: this.entryKey,
       capabilities: {ownership: 'conservative whole-local analysis', traits: 'concrete impls and built-in bounds'}};
@@ -90,9 +93,9 @@ export class SemanticAnalyzer {
         if (!current) throw new Diagnostic('F_QUERY', 'A cached callee disappeared from the declaration environment', fn.span);
         this.instantiate(current, dependency.argumentTypes, dependency.explicit, {span: dependency.span});
       }
-      this.warnings.push(...structuredClone(query.value.warnings)); this.depth--; return instance;
+      this.patternReports.push(...structuredClone(query.value.patternReports ?? [])); this.warnings.push(...structuredClone(query.value.warnings)); this.depth--; return instance;
     }
-    const warningStart = this.warnings.length;
+    const warningStart = this.warnings.length, patternStart = this.patternReports.length;
     const copy = structuredClone(fn);
     const instance = {key, name: fn.name, fn: copy, substitution, typeArguments: Object.fromEntries(substitution),
       returnType: this.index.type(T.substitute(fn.returnType, substitution), fn.module, fn.owner), calls: [], locals: []};
@@ -117,7 +120,7 @@ export class SemanticAnalyzer {
       });
       query.node.dependencies = dependencies.map(d => `type:${d.key}`);
       const warnings = this.warnings.slice(warningStart).filter(w => w.span?.file === fn.span?.file && w.span.start >= fn.span.start && w.span.end <= fn.span.end);
-      this.queryCache.store(query, {instance, dependencies, warnings});
+      this.queryCache.store(query, {instance, dependencies, warnings, patternReports: this.patternReports.slice(patternStart)});
     }
     this.depth--;
     return instance;
@@ -279,22 +282,20 @@ export class SemanticAnalyzer {
       }
       case 'match': {
         const scrutinee = this.infer(node.value, ctx); let result = '!';
-        const coverage = new Set(); let wildcard = false;
+        const patterns = []; let wildcard = false;
         for (const arm of node.arms) {
           ctx.push();
-          const patternCoverage = this.pattern(arm.pattern, scrutinee, ctx, false);
+          this.pattern(arm.pattern, scrutinee, ctx, false);
           if (wildcard) this.warnings.push({severity: 'warning', code: 'W_UNREACHABLE', message: 'Unreachable match arm', span: arm.span});
           if (arm.guard) T.unify('bool', this.infer(arm.guard, ctx, 'bool'), new Map(), arm.guard);
-          else { if (patternCoverage === '*') wildcard = true; else coverage.add(patternCoverage); }
+          else { patterns.push(arm.pattern); wildcard = this.coverage.analyze(patterns, scrutinee, node).exhaustive; }
           const value = this.infer(arm.body, ctx, expected);
           try { result = T.join(result, value, arm.body); }
           catch { throw new Diagnostic('E0308', `Incompatible match arm types ${result} and ${value}`, arm.body.span); }
           ctx.pop();
         }
-        const shape = this.index.enums.get(T.application(scrutinee).name);
-        const full = wildcard || (scrutinee === 'bool' && coverage.has('true') && coverage.has('false')) ||
-          (shape && shape.variants.every(v => coverage.has(`${shape.name}::${v.name}`)));
-        if (!full) throw new Diagnostic('E0004', 'Non-exhaustive match requires wildcard arm or all variants', node.span);
+        const coverage = this.checkCoverage(patterns, scrutinee, node);
+        if (!coverage.exhaustive) throw new Diagnostic('E0004', `Non-exhaustive match: missing ${coverage.witness}`, node.span);
         type = result; break;
       }
       case 'try': {
@@ -325,29 +326,13 @@ export class SemanticAnalyzer {
     return type;
   }
   pattern(pattern, type, ctx, mutable = false) {
-    pattern.type = type;
-    if (pattern.kind === 'wildcard') return '*';
-    if (pattern.kind === 'bindingPattern') {
-      pattern.binding = ctx.declare(pattern.name, type, mutable, pattern); return '*';
-    }
-    if (pattern.kind === 'literal' || pattern.kind === 'unary') {
-      T.unify(type, this.infer(pattern, ctx, type), new Map(), pattern); return String(pattern.value);
-    }
-    if (pattern.kind === 'tuplePattern') {
-      const parts = type.startsWith('(') ? T.split(type.slice(1, -1)) : [];
-      if (parts.length !== pattern.items.length) throw new Diagnostic('E0527', 'Tuple pattern arity does not match', pattern.span);
-      pattern.items.forEach((p, i) => this.pattern(p, parts[i], ctx, mutable)); return '*';
-    }
-    if (pattern.kind === 'variantPattern') {
-      const constructor = this.index.constructorFor(pattern.name, ctx.instance.fn.module), application = T.application(type);
-      if (!constructor || constructor.owner.name !== application.name) throw new Diagnostic('E0532', `Pattern ${pattern.name} does not match ${type}`, pattern.span);
-      if (constructor.variant.fields.length !== pattern.items.length) throw new Diagnostic('E0023', 'Variant pattern arity mismatch', pattern.span);
-      const substitution = new Map(constructor.owner.generics.map((g, i) => [g.name, application.args[i]]));
-      pattern.variant = constructor.tag;
-      pattern.items.forEach((p, i) => this.pattern(p, T.substitute(constructor.variant.fields[i], substitution), ctx, mutable));
-      return pattern.variant;
-    }
-    throw new Diagnostic('F_PATTERN', `Pattern ${pattern.kind} is not implemented`, pattern.span);
+    this.patterns.analyze(pattern, type, ctx, mutable);
+  }
+  checkCoverage(patterns, type, node, required = false) {
+    const report = {...this.coverage.analyze(patterns, type, node), type, span: node.span};
+    this.patternReports.push(report);
+    if (required && !report.exhaustive) throw new Diagnostic('E0005', `Refutable pattern in local binding; missing ${report.witness}. Use 'let ... else', 'if let', or 'match'`, node.span);
+    return report;
   }
   place(node, ctx, mutable) {
     if (node.kind === 'variable' && node.binding) {
@@ -501,7 +486,9 @@ export class SemanticAnalyzer {
         const annotation = node.annotation ? this.normalize(node.annotation, ctx) : null;
         const actual = this.infer(node.value, ctx, annotation);
         if (annotation) T.unify(annotation, actual, new Map(), node);
+        if (node.otherwise && this.block(node.otherwise, ctx) !== '!') throw new Diagnostic('E0308', 'The else branch of let-else must diverge', node.otherwise.span);
         this.pattern(node.pattern, annotation ?? actual, ctx, node.mutable);
+        this.checkCoverage([node.pattern], annotation ?? actual, node, !node.otherwise);
         node.binding = node.pattern.binding; break;
       }
       case 'assign': {
@@ -551,7 +538,7 @@ export class SemanticAnalyzer {
           element = /^\[(.+);\d+\]$/.exec(from)?.[1] ?? (T.application(from).name === 'Vec' ? T.application(from).args[0] : null);
           if (!element) throw new Diagnostic('E0277', `Cannot iterate ${from}`, node.span);
         }
-        ctx.push(); this.pattern(node.pattern, element, ctx, false); node.binding = node.pattern.binding;
+        ctx.push(); this.pattern(node.pattern, element, ctx, false); this.checkCoverage([node.pattern], element, node, true); node.binding = node.pattern.binding;
         ctx.loops.push({kind: 'for', type: '!', breaks: []});
         T.unify('()', this.block(node.then, ctx, '()'), new Map(), node.then);
         ctx.loops.pop(); ctx.pop(); break;

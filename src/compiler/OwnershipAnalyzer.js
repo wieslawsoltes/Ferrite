@@ -127,6 +127,7 @@ export class OwnershipAnalyzer {
     for (const node of block.body) {
       this.expire(node);
       if (node.kind === 'let') {
+        if (node.otherwise) { const moved = new Set(this.moved); this.block(node.otherwise); this.moved = moved; }
         this.value(node.value, true, node.binding?.slot);
         if (node.binding) { this.moved.delete(node.binding.slot); this.event('initialize', node, node.binding.slot, node.binding.type); }
       } else if (node.kind === 'assign') {

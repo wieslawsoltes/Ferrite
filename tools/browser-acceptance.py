@@ -112,12 +112,12 @@ def run():
 
             def stages():
                 names = page.locator('#stage-select option').all_text_contents()
-                assert len(names) == 20, names
+                assert len(names) == 21 and 'Pattern coverage' in names, names
                 for name in names:
                     page.locator('#stage-select').select_option(label=name)
                     expect(page.locator('#inspector-content')).not_to_be_empty()
                 assert page.locator('#inspector-content .generated-line').count() > 100
-            case('all 20 compiler stage adapters render', stages)
+            case('all 21 compiler stage adapters render', stages)
 
             def source_navigation():
                 page.locator('#stage-select').select_option(label='Tokens')
@@ -309,6 +309,19 @@ def run():
                 run_program('baseline false\n')
                 select_sample('Geometry lab · traits & modules')
             case('Cargo feature toggles update actual cfg lowering and source-linked decisions', cargo_configuration)
+
+            def pattern_proofs():
+                select_sample('Pattern matrix · destructuring & coverage')
+                run_program('left 7\nright 11\nmiddle 5\n')
+                page.locator('#stage-select').select_option(label='Pattern coverage')
+                expect(page.locator('#inspector-content')).to_contain_text('proof states')
+                expect(page.locator('#inspector-content')).to_contain_text('exhaustive')
+                page.locator('#inspector-content .source-link').first.click()
+                assert page.locator('#source').evaluate('e => e.selectionEnd > e.selectionStart')
+                select_sample('Let-else · queue filtering')
+                run_program('accepted 4\naccepted 8\n')
+                select_sample('Geometry lab · traits & modules')
+            case('pattern matrix witnesses, source links and let-else control flow', pattern_proofs)
 
             if os.environ.get('FERRITE_NATIVE_TEST') == '1' and not MEMORY:
                 native_process = subprocess.Popen(['node', 'tools/cargo-bridge.mjs', '--trust-projects', '--origin', base.rstrip('/'), '--port', '0'], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

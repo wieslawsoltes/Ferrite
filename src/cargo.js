@@ -1,3 +1,4 @@
+import {TomlParser} from "./cargo/TomlParser.js";
 import {ModuleAssembler} from "./cargo/ModuleAssembler.js";
 // Browser-side Cargo workspace model. Cargo.toml parsing is intentionally a supported subset.
 export const starterFiles = {
@@ -5,23 +6,7 @@ export const starterFiles = {
 "src/main.rs": 'fn greet<T: Display>(value: T) { println!("Hello, {}!", value); }\nfn main() { greet("Ferrite"); greet(42u32); }\n',
 "src/math.rs": 'pub fn square(x: u32) -> u32 { x * x }\n'
 };
-export function parseManifest(source) {
- const sections={}, errors=[];let section="";
- for(const [index,line] of source.split(/\r?\n/).entries()){
-  const text=line.trim();if(!text||text.startsWith("#"))continue;
-  const heading=/^\[([A-Za-z0-9_.-]+)\]$/.exec(text);
-  if(heading){section=heading[1];sections[section]??={};continue;}
-  const assignment=/^([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*(?:#.*)?$/.exec(text);
-  if(!assignment){errors.push({line:index+1,message:"Unsupported TOML syntax"});continue;}
-  const [,key,raw]=assignment;let value;
-  if(/^"(?:\\.|[^"\\])*"$/.test(raw)){try{value=JSON.parse(raw);}catch{errors.push({line:index+1,message:"Invalid string"});continue;}}
-  else if(/^(true|false)$/.test(raw))value=raw==="true";
-  else if(/^\d+$/.test(raw))value=Number(raw);
-  else value=raw;
-  (sections[section]??={})[key]=value;
- }
- return {package:sections.package??{},dependencies:sections.dependencies??{},sections,errors};
-}
+export function parseManifest(source){return new TomlParser().parse(source);}
 export function cargoPlan(files,command="check"){
  const manifest=parseManifest(files["Cargo.toml"]??"");
  const errors=[...manifest.errors];

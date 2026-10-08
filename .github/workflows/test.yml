@@ -46,7 +46,7 @@ jobs:
       - name: Exercise agent API login, approvals, MCP commands and native PTY in Chromium
         run: npm run test:agent:browser
       - name: Exercise bridge-free browser agents, persistence, review and terminal harness
-        run: npm run test:browser-agent
+        run: npm run test:browser-agent 2>&1 | tee artifacts/browser-agent.log
       - name: Record environment-dependent compiler timings
         run: |
           mkdir -p artifacts/performance

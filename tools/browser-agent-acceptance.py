@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import threading
+import traceback
 from functools import partial
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -106,7 +107,7 @@ def run():
                 page.expose_function('ferriteTestProvider',fixture.response)
                 page.evaluate('''() => {
                   if(!crypto.subtle)Object.defineProperty(crypto,'subtle',{value:{digest:async(name,bytes)=>{if(name!=='SHA-256')throw Error('Unexpected test algorithm');return new Uint8Array(await window.ferriteTestDigest([...new Uint8Array(bytes)])).buffer;}}});
-                  const native=window.fetch;window.fetch=async(url,options={})=>{if(/^https:\\/\\/(api.openai.com|api.anthropic.com|generativelanguage.googleapis.com)\\//.test(String(url))){options.signal?.throwIfAborted();const result=await window.ferriteTestProvider(String(url),{method:options.method,headers:options.headers,body:options.body});options.signal?.throwIfAborted();return new Response(result.text,{status:result.status,headers:{'content-type':result.contentType}});}return native(url,options);};
+                  const native=window.fetch;window.fetch=async(url,options={})=>{if(/^https:\/\/(api.openai.com|api.anthropic.com|generativelanguage.googleapis.com)\//.test(String(url))){options.signal?.throwIfAborted();const result=await window.ferriteTestProvider(String(url),{method:options.method,headers:options.headers,body:options.body});options.signal?.throwIfAborted();return new Response(result.text,{status:result.status,headers:{'content-type':result.contentType}});}return native(url,options);};
                 }''')
                 base_module.memory_document(page);page.add_style_tag(path=str(ROOT/'styles/agent.css'))
             else:page.goto(origin+'/',wait_until='networkidle')
@@ -158,21 +159,38 @@ def run():
                 page.reload(wait_until='networkidle');show_agent();expect(page.locator('#agent-model')).to_have_attribute('placeholder','API sign in required');expect(page.locator('#agent-session-select option')).not_to_have_count(1)
                 page.locator('#agent-session-select').select_option(session_id);expect(page.locator('#agent-chat')).to_contain_text('No local bridge was used')
                 page.locator('[data-agent-tab="followups"]').click();expect(page.locator('.agent-followup')).to_have_count(1)
-                second=context.new_page();second.goto(origin+'/',wait_until='networkidle');second.locator('[data-tool="agent"]').click();expect(second.locator('.agent-error').filter(has_text='another tab')).to_be_visible();second.close()
+                second=context.new_page();second.goto(origin+'/',wait_until='networkidle')
+                # Dock layout survives reload: clicking an already-open tool would hide the ownership error.
+                if not second.locator('.agent-workbench').is_visible():second.locator('[data-tool="agent"]').click()
+                expect(second.locator('.agent-workbench .agent-error')).to_contain_text('another tab')
+                expect(second.locator('.agent-workbench .agent-error')).to_be_visible();second.close()
                 passed('real IndexedDB reload recovery, queue retention, memory-only keys and exclusive cross-tab journal ownership')
                 login('openai')
             fixture.mode='deny';page.locator('[data-agent-tab="permissions"]').click();page.get_by_role('combobox',name='Permission for workspace_read',exact=True).select_option('deny')
             page.locator('#agent-prompt').fill('Check the permission policy.');page.locator('#agent-run').click();expect(page.locator('.agent-badge')).to_have_text('cancelled');passed('per-tool denial stops the task instead of trying an alternative route')
             page.locator('[data-agent-tab="permissions"]').click();page.get_by_role('combobox',name='Permission for workspace_read',exact=True).select_option('default')
+            page.locator('[data-agent-tab="context"]').click();page.get_by_role('textbox',name='Pinned context',exact=True).fill('private-project-only-constraint')
+            page.locator('[data-agent-tab="followups"]').click();page.get_by_role('textbox',name='Queued follow-up',exact=True).fill('private-project-only-draft')
             fixture.mode='pending';page.locator('#agent-prompt').fill('Prepare a task to be revoked.');page.locator('#agent-run').click();expect(page.locator('.agent-question')).to_contain_text('project-switch')
             page.locator('#sample-select').select_option(label='Generics & modules');show_agent();expect(page.locator('.agent-badge')).to_have_text('Ready · browser');expect(page.locator('.agent-question')).to_have_count(0);expect(page.locator('#agent-model')).to_have_attribute('placeholder','API sign in required');expect(page.locator('#agent-session-select option')).to_have_count(1)
-            passed('project replacement revokes active requests/questions/credentials and isolates new task history')
+            expect(page.locator('[aria-label="Pinned context"]')).to_have_value('')
+            expect(page.locator('[aria-label="Queued follow-up"]')).to_have_value('')
+            expect(page.locator('#agent-prompt')).to_have_value('')
+            expect(page.get_by_role('button',name='Import native workspace',exact=True)).not_to_be_visible()
+            expect(page.locator('.agent-plan')).to_be_empty();expect(page.locator('.agent-metrics')).to_have_text('No session')
+            passed('project replacement revokes active requests/questions/credentials and clears private task drafts, constraints and history')
             assert not errors,errors
             assert not any('/v1/' in url and '127.0.0.1' in url for url in network), network
             assert all(any(host in item['url'] for host in ['api.openai.com','api.anthropic.com','generativelanguage.googleapis.com']) for item in fixture.calls)
             (OUTPUT/'results.json').write_text(json.dumps({'passed':len(results),'cases':results,'mode':'memory-modules-and-test-hash' if MEMORY else 'http-real-browser-storage','agentBridgeStarted':False,'nativeProcessStarted':False,'paidProviderAccountsTested':False,'providerRequests':fixture.calls,'errors':errors},indent=2))
         except Exception:
-            page.screenshot(path=str(OUTPUT/'failure.png'));(OUTPUT/'errors.json').write_text(json.dumps({'errors':errors,'body':page.locator('body').inner_text()[-18000:],'providerRequests':fixture.calls},indent=2));raise
+            diagnostics={'traceback':traceback.format_exc(),'passed':results,'errors':errors,'providerRequests':fixture.calls,'pages':[]}
+            for index,open_page in enumerate(context.pages):
+                try:
+                    open_page.screenshot(path=str(OUTPUT/f'failure-{index}.png'))
+                    diagnostics['pages'].append({'url':open_page.url,'body':open_page.locator('body').inner_text()[-18000:],'agentVisible':open_page.locator('.agent-workbench').is_visible(),'agentErrors':open_page.locator('.agent-error').all_text_contents()})
+                except Exception as capture_error:diagnostics['pages'].append({'captureError':str(capture_error)})
+            (OUTPUT/'errors.json').write_text(json.dumps(diagnostics,indent=2).replace(KEY,'[REDACTED]'));raise
         finally:context.close();browser.close();server.shutdown()
 
 if __name__=='__main__':run()

@@ -4,11 +4,16 @@ import {SymbolIndex} from './SymbolIndex.js';
 import {FunctionContext} from './FunctionContext.js';
 import {FormatParser} from './FormatParser.js';
 import {SemanticQueryCache} from './SemanticQueryCache.js';
+import {ClosureAnalyzer} from './closures/ClosureAnalyzer.js';
 
 /** Monomorphized typed HIR. Every local has an identity independent of its spelling. */
 export class SemanticAnalyzer {
   constructor(ast, {entry = 'main', mode = 'run', maxInstances = 2048, queryCache = null} = {}) {
     this.index = new SymbolIndex(ast);
+    // Synthesized closure declarations belong to this analysis session. Never replay
+    // cached callers without their anonymous declaration/capture environment.
+    if(JSON.stringify(ast).includes('"kind":"closure"'))queryCache=null;
+    this.closures=new ClosureAnalyzer(this);
     this.queryCache = queryCache; this.environment = queryCache ? SemanticQueryCache.environment(this.index) : null;
     this.instances = new Map(); this.obligations = []; this.warnings = [];
     this.entry = entry; this.mode = mode; this.maxInstances = maxInstances; this.depth = 0;
@@ -26,7 +31,8 @@ export class SemanticAnalyzer {
       const types = fn.params.map(p => this.index.type(p.type, fn.module, fn.owner));
       this.instantiate(fn, types, [], fn);
     }
-    return {instances: [...this.instances.values()], obligations: this.obligations,
+    this.closures.finish();
+    return {closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
       symbols: this.index.symbols, structures: [...this.index.structs.values()],
       enums: [...this.index.enums.values()], warnings: this.warnings, entry: this.entryKey,
       capabilities: {ownership: 'conservative whole-local analysis', traits: 'concrete impls and built-in bounds'}};
@@ -35,6 +41,9 @@ export class SemanticAnalyzer {
   normalize(type, ctx) { return this.index.type(T.substitute(type, ctx.instance.substitution), ctx.instance.fn.module, ctx.instance.fn.owner); }
   hasTrait(type, bound, depth = 0) {
     if (depth > 32) return false;
+    const closure=this.closures.get(type);
+    if(ClosureAnalyzer.bound(bound))return this.closures.satisfies(type,bound);
+    if(closure&&['Copy','Clone'].includes(bound))return this.closures.copy(closure);
     bound = bound.split('::').at(-1);
     if (bound === 'Display') return T.numeric(type) || ['bool', 'char', '&str', 'String'].includes(type);
     if (bound === 'Copy' && T.primitiveCopy(type)) return true;
@@ -60,8 +69,9 @@ export class SemanticAnalyzer {
     fn.params.forEach((p, i) => T.unify(this.index.type(p.type, fn.module, fn.owner), argumentTypes[i], substitution, node));
     for (const parameter of fn.generics) {
       const type = substitution.get(parameter.name);
-      if (!type || type.includes('_')) throw new Diagnostic('E0282', `Cannot infer ${parameter.name} in ${fn.name}`, node.span);
-      for (const bound of parameter.bounds) {
+      if (!type || /\b_\b/.test(type)) throw new Diagnostic('E0282', `Cannot infer ${parameter.name} in ${fn.name}`, node.span);
+      for (const rawBound of parameter.bounds) {
+        const bound=this.index.type(T.substitute(rawBound,substitution),fn.module,fn.owner);
         if (!this.hasTrait(type, bound)) throw new Diagnostic('E0277', `Trait obligation failed: ${type}: ${bound}`, node.span);
         this.obligations.push({type, trait: bound, status: 'satisfied', span: node.span});
       }
@@ -89,8 +99,14 @@ export class SemanticAnalyzer {
     this.instances.set(key, instance);
     const ctx = new FunctionContext(instance);
     copy.params.forEach((p, i) => { p.type = argumentTypes[i]; p.binding = ctx.declare(p.name, p.type, p.mutable, p, true); });
-    const actual = this.block(copy.body, ctx, instance.returnType);
-    T.unify(instance.returnType, actual, new Map(), copy.body);
+    ctx.inferredReturns=[];
+    const abstractReturn=instance.returnType.startsWith('impl ')?instance.returnType.slice(5):null;
+    const actual = this.block(copy.body, ctx, instance.returnType==='_'||abstractReturn?null:instance.returnType);
+    if(instance.returnType==='_'||abstractReturn){
+      const inferred=ctx.inferredReturns.reduce((type,next)=>T.join(type,next,copy.body),actual);
+      if(abstractReturn&&!this.hasTrait(inferred,abstractReturn))throw new Diagnostic('E0277',`Returned type does not implement ${abstractReturn}`,copy.body.span);
+      instance.returnType=inferred;
+    }else T.unify(instance.returnType, actual, new Map(), copy.body);
     instance.locals = ctx.locals;
     delete instance.substitution;
     if (query) {
@@ -110,6 +126,7 @@ export class SemanticAnalyzer {
     if (!node) return '()';
     let type;
     switch (node.kind) {
+      case 'closure': type=this.closures.create(node,ctx);break;
       case 'literal': {
         type = node.type;
         if (type === '{integer}') type = expected && T.numeric(expected) ? expected : 'i32';
@@ -292,6 +309,7 @@ export class SemanticAnalyzer {
       default: throw new Diagnostic('F0203', `No type rule for '${node.kind}'`, node.span);
     }
     node.copy = this.hasTrait(type, 'Copy');
+    if(this.closures.get(type)?.node.borrowCarrier)node.borrowCarrier=true;
     return this.annotate(node, type);
   }
   construct(node, constructor, args, ctx, expected) {
@@ -384,6 +402,11 @@ export class SemanticAnalyzer {
     return name === 'format' ? 'String' : name === 'panic' ? '!' : '()';
   }
   call(node, ctx, expected) {
+    if(!['variable','field'].includes(node.callee.kind)||(node.callee.kind==='variable'&&ctx.lookup(node.callee.name,node.callee,false))){
+      const type=this.infer(node.callee,ctx),closure=this.closures.get(type);
+      if(closure)return this.closures.call(node,ctx,type);
+      if(node.callee.kind!=='field')throw new Diagnostic('E0618',`${type} is not callable`,node.callee.span);
+    }
     const callee = node.callee;
     if (callee.kind === 'field') return this.method(node, ctx, expected);
     if (callee.kind !== 'variable') throw new Diagnostic('F_CALL', 'This callee is not yet callable', node.span);
@@ -488,7 +511,10 @@ export class SemanticAnalyzer {
         break;
       }
       case 'return': {
-        T.unify(ctx.instance.returnType, this.infer(node.value, ctx, ctx.instance.returnType), new Map(), node);
+        const expected=ctx.instance.returnType;
+        const actual=this.infer(node.value,ctx,expected==='_'||expected.startsWith('impl ')?null:expected);
+        if(expected==='_'||expected.startsWith('impl '))ctx.inferredReturns.push(actual);
+        else T.unify(expected,actual,new Map(),node);
         type = '!'; break;
       }
       case 'break': case 'continue': {

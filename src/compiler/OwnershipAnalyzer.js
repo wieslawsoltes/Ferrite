@@ -44,6 +44,11 @@ export class OwnershipAnalyzer {
     if (!node) return [];
     this.expire(node);
     if (node.kind === 'literal') return [];
+    if (node.kind === 'closure') {
+      const roots=node.fields.flatMap(field=>this.value(field.value,true,destination));
+      if(destination!=null&&roots.length)this.references.set(destination,roots);
+      return roots;
+    }
     if (node.kind === 'variable') {
       if (node.constant || node.variant) return [];
       this.access(node, consume && !node.copy ? 'move' : 'read');
@@ -99,6 +104,7 @@ export class OwnershipAnalyzer {
     }
     if (node.kind === 'loopExpr') { this.block(node.then); return []; }
     if (node.kind === 'intrinsic' || node.kind === 'call') {
+      if(node.temporaryCallee)this.value(node.temporaryCallee.value,true,node.temporaryCallee.binding.slot);
       const name = node.builtin ?? node.name;
       if (node.receiver) {
         const consumes = name === 'method::unwrap';
@@ -134,7 +140,7 @@ export class OwnershipAnalyzer {
         this.roots(node.target).forEach(root => { this.moved.delete(root); this.event('assign', node, root); });
       } else if (node.kind === 'return') {
         const roots = this.value(node.value);
-        if (T.reference(node.value?.type) && node.value?.type !== '&str' && roots.some(root => !this.instance.locals[root]?.parameter))
+        if ((T.reference(node.value?.type) && node.value?.type !== '&str' || node.value?.borrowCarrier) && roots.some(root => node.value?.borrowCarrier || !this.instance.locals[root]?.parameter || !T.reference(this.instance.locals[root]?.type)))
           throw new Diagnostic('E0515', 'Cannot return a reference to a local value', node.span);
       } else if (['while', 'whileLet', 'for'].includes(node.kind)) {
         if (node.kind === 'whileLet') this.value(node.value);
@@ -148,7 +154,7 @@ export class OwnershipAnalyzer {
     }
     if (block.tail) {
       const roots = this.value(block.tail);
-      if (block === this.instance.fn.body && T.reference(block.tail.type) && block.tail.type !== '&str' && roots.some(root => !this.instance.locals[root]?.parameter))
+      if (block === this.instance.fn.body && (T.reference(block.tail.type) && block.tail.type !== '&str' || block.tail.borrowCarrier) && roots.some(root => block.tail.borrowCarrier || !this.instance.locals[root]?.parameter || !T.reference(this.instance.locals[root]?.type)))
         throw new Diagnostic('E0515', 'Cannot return a reference to a local value', block.tail.span);
     }
   }

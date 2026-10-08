@@ -126,7 +126,9 @@ export class MirLowerer {
           this.terminate('return', {value}, node); return value;
         }, node);
       }
+      case 'closure': return this.emit('aggregate',{form:'struct',names:node.fields.map(f=>f.name),values:node.fields.map(f=>this.expr(f.value))},node,node.type);
       case 'intrinsic': case 'call': {
+        if(node.temporaryCallee){const temporary=node.temporaryCallee;this.emit('write',{place:{slot:temporary.binding.slot,path:[]},value:this.expr(temporary.value)},node);}
         const mutates = ['method::push', 'method::pop', 'method::push_str'].includes(node.builtin);
         const receiverPlace = mutates ? this.place(node.receiver) : null;
         const receiver = node.receiver && !mutates ? this.expr(node.receiver, true) : null;

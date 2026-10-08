@@ -28,6 +28,12 @@ try{
   const tests=await run('test');assert.equal(tests.exitCode,0);assert.match(tests.stdout,/test_answer/);
   const meta=await run('metadata');assert.equal(meta.exitCode,0);const metadata=JSON.parse(meta.stdout);assert.equal(metadata.workspace_members.length,2);
   const formatted=await run('fmt',{args:['--all']});assert.equal(formatted.exitCode,0);assert.equal(formatted.files['app/src/main.rs'],'fn main() {\n    println!("native {}", smoke_math::answer());\n}\n');
+  const browserLanguageCases=[
+    ['fn apply<F: Fn(i32)->i32>(f:F,v:i32)->i32{f(v)} fn main(){let scale=6;let f=|x|x*scale;println!("{}",apply(f,7));}', '42'],
+    ['fn make(x:i32)->impl Fn(i32)->i32{move|y:i32|x+y} fn main(){let f=make(40);println!("{}",f(2));}', '42'],
+    ['fn main(){let mut n=1;let mut f=||{n+=1;n};println!("{} {}",f(),f());}', '2 3']
+  ];
+  for(const [source,expected] of browserLanguageCases){files['app/src/main.rs']=source;const actual=await run('run',{args:['--package','smoke-app']});assert.equal(actual.exitCode,0);assert(actual.stdout.includes(expected));}
   files['app/src/main.rs']='fn main() { let value: u32 = "type error"; println!("{}",value); }\n';
   const invalid=await run('check');assert.notEqual(invalid.exitCode,0);assert(invalid.diagnostics.some(d=>d.code==='E0308'));
   const output=process.env.FERRITE_NATIVE_OUTPUT??'artifacts/native';await mkdir(output,{recursive:true});await writeFile(`${output}/results.json`,JSON.stringify({backend:'installed-cargo',cases},null,2));

@@ -32,10 +32,18 @@ export class Parser {
     return this.list('>', () => {
       const name = this.c.identifier(), bounds = [];
       if (this.c.match(':')) {
-        do { bounds.push(this.path()); } while (this.c.match('+'));
+        do { bounds.push(this.bound()); } while (this.c.match('+'));
       }
       return {name, bounds};
     });
+  }
+  bound() {
+    const name=this.path();
+    if(['Fn','FnMut','FnOnce'].includes(name)&&this.c.match('(')) {
+      const params=this.list(')',()=>this.type());
+      const result=this.c.match('->')?this.type():'()';return `${name}(${params.join(',')})->${result}`;
+    }
+    return name;
   }
   path() {
     let path = this.c.identifier();
@@ -45,6 +53,7 @@ export class Parser {
     return path;
   }
   type() {
+    if(this.c.match('impl'))return 'impl '+this.bound();
     if (this.c.match('&')) {
       if (this.c.peek().kind === 'lifetime') this.c.take();
       const mutable = !!this.c.match('mut');
@@ -305,7 +314,20 @@ export class Parser {
       const floating = !/^0[xbo]/i.test(value) && /[.eE]/.test(value);
       return this.c.node('literal', start, {value, type: suffix ?? (floating ? 'f64' : '{integer}'), suffix});
     }
-    if (start.value === 'async' || start.value === 'unsafe' || start.value === '|')
+    if (['move','|','||'].includes(start.value)) {
+      const move=!!this.c.match('move'),params=[];
+      if(!this.c.match('||')){
+        this.c.eat('|');while(!this.c.is('|')){
+          const at=this.c.peek(),mutable=!!this.c.match('mut'),name=this.c.identifier();
+          params.push(this.c.node('param',at,{name,mutable,type:this.c.match(':')?this.type():null}));
+          if(!this.c.match(','))break;
+        }this.c.eat('|');
+      }
+      const returnType=this.c.match('->')?this.type():null;
+      const body=returnType?this.block():this.expr();
+      return this.c.node('closure',start,{move,params,returnType,body});
+    }
+    if (start.value === 'async' || start.value === 'unsafe')
       throw new Diagnostic('F0103', `${start.value} is not supported by the browser backend yet; use native Cargo`, start.span);
     return this.c.node('variable', start, {name: this.path()});
   }

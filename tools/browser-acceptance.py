@@ -112,12 +112,12 @@ def run():
 
             def stages():
                 names = page.locator('#stage-select option').all_text_contents()
-                assert len(names) == 18, names
+                assert len(names) == 19, names
                 for name in names:
                     page.locator('#stage-select').select_option(label=name)
                     expect(page.locator('#inspector-content')).not_to_be_empty()
                 assert page.locator('#inspector-content .generated-line').count() > 100
-            case('all 18 compiler stage adapters render', stages)
+            case('all 19 compiler stage adapters render', stages)
 
             def source_navigation():
                 page.locator('#stage-select').select_option(label='Tokens')
@@ -268,6 +268,18 @@ def run():
                 select_sample('Geometry lab · traits & modules')
                 run_program('rectangle area = 42\ntriangle area = 20\n')
             case('cancel and recover without obsolete worker output', cancellation)
+
+            def closure_capture_view():
+                select_sample('Closures · capture modes & call traits')
+                run_program('scaled 42\nstate 2 3\nowned payload\n')
+                page.locator('#stage-select').select_option(label='Closure captures')
+                for text in ['FnMut', 'FnOnce', 'shared borrow', 'mutable borrow', 'move']:
+                    expect(page.locator('#inspector-content')).to_contain_text(text)
+                page.locator('#inspector-content .source-link').first.click()
+                start, end = page.locator('#source').evaluate('e=>[e.selectionStart,e.selectionEnd]')
+                assert end > start
+                select_sample('Geometry lab · traits & modules')
+            case('closure captures execute and navigate explicit callable environments', closure_capture_view)
 
             def cargo_configuration():
                 select_sample('Conditional build · Cargo features & cfg')

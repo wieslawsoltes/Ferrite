@@ -48,6 +48,24 @@ fn rectangle_area() {
     assert_eq!(r.area(), 42);
 }
 `}},
+    {name:'Closures · capture modes & call traits',expected:'scaled 42\nstate 2 3\nowned payload\n',files:{'Cargo.toml':manifest('closures'),'src/main.rs':`fn apply<F: Fn(i32) -> i32>(operation: F, value: i32) -> i32 {
+    operation(value)
+}
+
+fn main() {
+    let scale = 6;
+    let multiply = |value| value * scale;
+    println!("scaled {}", apply(multiply, 7));
+
+    let mut count = 1;
+    let mut increment = || { count += 1; count };
+    println!("state {} {}", increment(), increment());
+
+    let payload = String::from("payload");
+    let consume = move || payload;
+    println!("owned {}", consume());
+}
+`}},
     {name:'Conditional build · Cargo features & cfg',expected:'baseline false\n',files:{
       'Cargo.toml':manifest('conditional-build')+'\n[features]\ndefault=[]\nfast=[]\n',
       'src/main.rs':`// Toggle "fast" in the Cargo tool window, then Run.

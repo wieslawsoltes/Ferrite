@@ -1,91 +1,305 @@
+import {Diagnostic} from './Diagnostic.js';
+import {Lexer} from './Lexer.js';
+import {TokenCursor} from './TokenCursor.js';
+
+const PRECEDENCE = {'||': 1, '&&': 2, '|': 3, '^': 4, '&': 5, '==': 6, '!=': 6,
+  '<': 7, '>': 7, '<=': 7, '>=': 7, '+': 8, '-': 8, '*': 9, '/': 9, '%': 9};
+const BLOCK_EXPRESSIONS = new Set(['ifExpr', 'match', 'block', 'loopExpr']);
+
+/** Recursive-descent items/statements and Pratt expressions with complete source spans. */
 export class Parser {
- static parse(tokens) {
-  let i=0;
-  const peek=(n=0)=>tokens[i+n]?.value||"EOF",take=()=>tokens[i++],eat=value=>{
-    const token=take();if(token.value!==value)throw new Error("Expected '"+value+"', got '"+token.value+"' at "+token.line+":"+token.column);return token;
-  },node=(kind,fields,token)=>({kind,...fields,loc:{line:token.line,column:token.column,offset:token.offset}});
-  function type() {
-    let prefix="";
-    if(peek()==="&"){take();prefix="&";if(peek()==="mut"){take();prefix+="mut ";}}
-    const t=take();if(!/^[A-Za-z_]/.test(t.value))throw Error("Expected type at "+t.line+":"+t.column);
-    let result=prefix+t.value;
-    if(peek()==="<"){take();const args=[];while(peek()!==">"){args.push(type());if(peek()!==",")break;take();}eat(">");result+="<"+args.join(",")+">";}
+  constructor(tokens) { this.c = new TokenCursor(tokens); this.depth = 0; }
+  static parse(tokens) { return new Parser(tokens).parse(); }
+  parse() {
+    const items = [];
+    while (!this.c.is('EOF')) items.push(...this.item());
+    return {kind: 'crate', items};
+  }
+  list(close, parse) {
+    const result = [];
+    while (!this.c.is(close)) {
+      if (this.c.is('EOF')) this.c.eat(close);
+      result.push(parse());
+      if (!this.c.match(',')) break;
+    }
+    this.c.eat(close);
     return result;
   }
-  function block() {
-    const start=eat("{"),body=[];let tail=null;
-    while(peek()!=="}"){
-      if(peek()==="EOF")throw Error("Unclosed block at "+start.line+":"+start.column);
-      if(peek()==="let"){const t=take(),mutable=peek()==="mut"?!!take():false,name=take().value;let annotation=null;if(peek()===":"){take();annotation=type();}eat("=");const value=expr();eat(";");body.push(node("let",{name,mutable,annotation,value},t));continue;}
-      if(peek()==="return"){const t=take(),value=peek()===";"?null:expr();eat(";");body.push(node("return",{value},t));continue;}
-      if(peek()==="for"){const t=take(),name=take().value;eat("in");const from=expr();const inclusive=peek()==="..=";if(peek()!==".."&&peek()!=="..=")throw Error("Expected range .. or ..= after for iterator");take();const to=expr(),then=block();body.push(node("for",{name,from,to,inclusive,then},t));continue;}
-      if(peek()==="while"){const t=take(),condition=expr(),then=block();body.push(node("while",{condition,then},t));continue;}
-      if(peek()==="loop"){const t=take(),then=block();body.push(node("loop",{then},t));continue;}
-      if(peek()==="break"||peek()==="continue"){const t=take();eat(";");body.push(node(t.value,{},t));continue;}
-      if(peek()==="if"){const t=take(),condition=expr(),then=block();let otherwise=null;if(peek()==="else"){take();otherwise=peek()==="if"?conditional():block();}body.push(node("if",{condition,then,otherwise},t));continue;}
-      if(peek()==="{"){body.push(node("blockStatement",{block:block()},tokens[i]));continue;}
-      const value=expr();
-      if(peek()==="="||peek()==="+="||peek()==="-="){const op=take().value,right=expr();eat(";");body.push(node("assign",{target:value,op,value:right},tokens[i-1]));}
-      else if(peek()===";"){take();body.push(node("expression",{value},tokens[i-1]));}
-      else if(peek()==="}"){tail=value;break;}
-      else throw Error("Expected ';' or '}' at "+tokens[i].line+":"+tokens[i].column);
+  attributes() {
+    const attrs = [];
+    while (this.c.match('#')) {
+      this.c.eat('[');
+      const name = this.c.identifier();
+      const args = this.c.match('(') ? this.list(')', () => this.c.identifier()) : [];
+      this.c.eat(']'); attrs.push({name, args});
     }
-    eat("}");return node("block",{body,tail},start);
+    return attrs;
   }
-  function conditional(){const t=eat("if"),condition=expr(),then=block();let otherwise=null;if(peek()==="else"){take();otherwise=peek()==="if"?conditional():block();}return node("ifExpr",{condition,then,otherwise},t);}
-  const precedence={"||":1,"&&":2,"==":3,"!=":3,"<":4,">":4,"<=":4,">=":4,"+":5,"-":5,"*":6,"/":6,"%":6};
-  function expr(min=0) {
-    const start=tokens[i];let left;
-    if(peek()==="if"){left=conditional();}
-    else if(peek()==="match"){
-      take();const value=expr();eat("{");const arms=[];
-      while(peek()!=="}"){
-        const patternToken=tokens[i];let pattern;
-        if(peek()==="_"){take();pattern={kind:"wildcard",loc:{line:patternToken.line,column:patternToken.column,offset:patternToken.offset}};}
-        else{pattern=expr(7);if(pattern.kind!=="literal")throw Error("Only literal and wildcard match patterns are supported");}
-        eat("=>");const body=peek()==="{"?block():expr();arms.push({pattern,body,loc:{line:patternToken.line,column:patternToken.column,offset:patternToken.offset}});
-        if(peek()===",")take();else if(peek()!=="}")throw Error("Expected ',' after match arm");
+  generics() {
+    if (!this.c.match('<')) return [];
+    return this.list('>', () => {
+      const name = this.c.identifier(), bounds = [];
+      if (this.c.match(':')) {
+        do { bounds.push(this.path()); } while (this.c.match('+'));
       }
-      eat("}");left=node("match",{value,arms},start);
+      return {name, bounds};
+    });
+  }
+  path() {
+    let path = this.c.identifier();
+    while (this.c.is('::') && this.c.peek(1).value !== '<' && this.c.peek(1).value !== '{') {
+      this.c.take(); path += '::' + this.c.identifier();
     }
-    else if(peek()==="("){take();if(peek()===")"){take();left=node("literal",{value:null,type:"()"},start);}else{left=expr();eat(")");}}
-    else if(peek()==="- "||peek()==="-"||peek()==="!"||peek()==="&"||peek()==="*"){const op=take().value;let mutable=false;if(op==="&"&&peek()==="mut"){take();mutable=true;}left=node("unary",{op,mutable,value:expr(7)},start);}
-    else if(peek()==="["){take();const items=[];while(peek()!=="]"){items.push(expr());if(peek()!==",")break;take();}eat("]");left=node("array",{items},start);}
-    else if(peek()==="true"||peek()==="false"){left=node("literal",{value:take().value==="true",type:"bool"},start);}
-    else if(peek().startsWith('"')){const t=take().value;left=node("literal",{value:JSON.parse(t),type:"&str"},start);}
-    else if(peek().startsWith("'")){const t=take().value;left=node("literal",{value:t.slice(1,-1),type:"char"},start);}
-    else if(/^\d/.test(peek())){const t=take().value;const ty=t.endsWith("f64")||t.includes(".")?"f64":t.endsWith("i32")?"i32":t.endsWith("usize")?"usize":"u32";left=node("literal",{value:Number(t.replace(/(u32|i32|usize|f64)$/,"")),type:ty},start);}
-    else {let name=take().value;if(!/^[A-Za-z_]/.test(name))throw Error("Expected expression at "+start.line+":"+start.column);
-      while(peek()==="::"){take();name+="::"+take().value;}left=node("variable",{name},start);}
-    for(;;){
-      if(peek()==="{"&&left.kind==="variable"&&/^[A-Za-z_]\w*$/.test(peek(1))&&peek(2)===":"){
-        take();const fields=[];
-        while(peek()!=="}"){const field=take().value;eat(":");fields.push({name:field,value:expr()});if(peek()!==",")break;take();}
-        eat("}");left=node("structLiteral",{name:left.name,fields},start);continue;
+    return path;
+  }
+  type() {
+    if (this.c.match('&')) {
+      if (this.c.peek().kind === 'lifetime') this.c.take();
+      const mutable = !!this.c.match('mut');
+      return '&' + (mutable ? 'mut ' : '') + this.type();
+    }
+    if (this.c.match('(')) return '(' + this.list(')', () => this.type()).join(',') + ')';
+    if (this.c.match('[')) {
+      const type = this.type();
+      this.c.eat(';');
+      const length = this.c.take().value;
+      if (!/^\d+$/.test(length)) throw new Diagnostic('F0100', 'Array sizes must currently be integer literals', this.c.peek().span);
+      this.c.eat(']'); return `[${type};${length}]`;
+    }
+    let type = this.path();
+    if (this.c.match('<')) type += '<' + this.list('>', () => this.type()).join(',') + '>';
+    return type;
+  }
+  item(owner = null, trait = null) {
+    const start = this.c.peek(), attributes = this.attributes();
+    const visibility = this.c.match('pub') ? 'pub' : 'private';
+    if (this.c.match('fn')) return [this.fn(start, {owner, trait, attributes, visibility})];
+    if (this.c.match('struct')) {
+      const name = this.c.identifier(), generics = this.generics();
+      this.c.eat('{');
+      const fields = this.list('}', () => {
+        this.c.match('pub'); const name = this.c.identifier(); this.c.eat(':'); return {name, type: this.type()};
+      });
+      return [this.c.node('struct', start, {name, generics, fields, attributes, visibility})];
+    }
+    if (this.c.match('enum')) {
+      const name = this.c.identifier(), generics = this.generics();
+      this.c.eat('{');
+      const variants = this.list('}', () => {
+        const name = this.c.identifier();
+        const fields = this.c.match('(') ? this.list(')', () => this.type()) : [];
+        return {name, fields};
+      });
+      return [this.c.node('enum', start, {name, generics, variants, attributes, visibility})];
+    }
+    if (this.c.match('impl')) {
+      const first = this.type();
+      const forTrait = this.c.match('for') ? first : null;
+      const target = forTrait ? this.type() : first;
+      this.c.eat('{'); const methods = [];
+      while (!this.c.is('}')) methods.push(...this.item(target, forTrait));
+      this.c.eat('}');
+      return [this.c.node('impl', start, {target, trait: forTrait, methods})];
+    }
+    if (this.c.match('trait')) {
+      const name = this.c.identifier(); this.c.eat('{'); const methods = [];
+      while (!this.c.is('}')) methods.push(...this.item('Self', name));
+      this.c.eat('}'); return [this.c.node('trait', start, {name, methods, visibility})];
+    }
+    if (this.c.match('const')) {
+      const name = this.c.identifier(); this.c.eat(':'); const type = this.type(); this.c.eat('=');
+      const value = this.expr(); this.c.eat(';');
+      return [this.c.node('const', start, {name, type, value, visibility})];
+    }
+    if (this.c.match('mod')) {
+      const name = this.c.identifier();
+      if (this.c.match(';')) return [this.c.node('mod', start, {name, external: true, visibility})];
+      this.c.eat('{'); const items = [];
+      while (!this.c.is('}')) items.push(...this.item());
+      this.c.eat('}'); return [this.c.node('mod', start, {name, items, external: false, visibility})];
+    }
+    if (this.c.match('use')) {
+      const path = this.path(), imports = [];
+      if (this.c.match('::')) {
+        this.c.eat('{');
+        imports.push(...this.list('}', () => {
+          const name = this.c.identifier();
+          return {path: `${path}::${name}`, alias: this.c.match('as') ? this.c.identifier() : name};
+        }));
+      } else imports.push({path, alias: this.c.match('as') ? this.c.identifier() : path.split('::').at(-1)});
+      this.c.eat(';'); return [this.c.node('use', start, {imports, visibility})];
+    }
+    throw new Diagnostic('F0101', `Unsupported item '${this.c.peek().value}'`, this.c.peek().span);
+  }
+  fn(start, details) {
+    const localName = this.c.identifier(), generics = this.generics();
+    this.c.eat('(');
+    const params = this.list(')', () => {
+      const start = this.c.peek();
+      if (this.c.is('&') && ['self', 'mut'].includes(this.c.peek(1).value)) {
+        this.c.take(); const mutable = !!this.c.match('mut'); this.c.eat('self');
+        return this.c.node('param', start, {name: 'self', type: '&' + (mutable ? 'mut ' : '') + details.owner, mutable: false});
       }
-      if(peek()==="!"&&left.kind==="variable"){take();left={...left,macro:true};continue;}
-      if(peek()==="("){take();const args=[];while(peek()!==")"){args.push(expr());if(peek()!==",")break;take();}eat(")");left=node("call",{callee:left,args,macro:!!left.macro},start);continue;}
-      if(peek()==="["){take();const index=expr();eat("]");left=node("index",{object:left,index},start);continue;}
-      if(peek()==="."){take();const field=take().value;left=node("field",{object:left,field},start);continue;}
-      const p=precedence[peek()];if(p===undefined||p<min)break;
-      const op=take().value;left=node("binary",{op,left,right:expr(p+1)},start);
-    }
-    return left;
+      const mutable = !!this.c.match('mut'); const name = this.c.identifier();
+      const type = name === 'self' && !this.c.is(':') ? details.owner : (this.c.eat(':'), this.type());
+      return this.c.node('param', start, {name, type, mutable});
+    });
+    const returnType = this.c.match('->') ? this.type() : '()';
+    const body = this.c.match(';') ? null : this.block();
+    return this.c.node('fn', start, {name: details.owner ? `${details.owner}::${localName}` : localName,
+      localName, generics, params, returnType, body, ...details});
   }
-  const items=[];
-  while(peek()!=="EOF"){
-    const start=tokens[i];if(peek()==="pub")take();
-    if(peek()==="fn"){
-      take();const name=take().value,generics=[];
-      if(peek()==="<"){take();while(peek()!==">"){const id=take().value,bounds=[];if(peek()===":"){take();bounds.push(type());while(peek()==="+"){take();bounds.push(type());}}generics.push({name:id,bounds});if(peek()!==",")break;take();}eat(">");}
-      eat("(");const params=[];while(peek()!==")"){const name=take().value;eat(":");params.push({name,type:type()});if(peek()!==",")break;take();}eat(")");
-      let returnType="()";if(peek()==="->"){take();returnType=type();}
-      items.push(node("fn",{name,generics,params,returnType,body:block()},start));continue;
+  block() {
+    const start = this.c.eat('{');
+    const body = []; let tail = null;
+    while (!this.c.is('}')) {
+      if (this.c.is('EOF')) this.c.eat('}');
+      const start = this.c.peek();
+      if (this.c.match(';')) continue;
+      if (this.c.match('let')) {
+        const mutable = !!this.c.match('mut'), pattern = this.pattern();
+        const annotation = this.c.match(':') ? this.type() : null;
+        this.c.eat('='); const value = this.expr(); this.c.eat(';');
+        body.push(this.c.node('let', start, {name: pattern.name, pattern, mutable, annotation, value}));
+        continue;
+      }
+      if (this.c.is('return') || this.c.is('break') || this.c.is('continue')) {
+        const kind = this.c.take().value;
+        const value = this.c.is(';') || this.c.is('}') ? null : this.expr();
+        if (kind === 'continue' && value) throw new Diagnostic('E0571', 'continue does not take a value', start.span);
+        if (!this.c.is('}')) this.c.eat(';');
+        body.push(this.c.node(kind, start, {value})); continue;
+      }
+      if (this.c.match('while')) {
+        const condition = this.expr(0, false), then = this.block();
+        body.push(this.c.node('while', start, {condition, then})); continue;
+      }
+      if (this.c.match('for')) {
+        const pattern = this.pattern(); this.c.eat('in');
+        const from = this.expr(0, false);
+        let to = null, inclusive = false;
+        if (this.c.is('..') || this.c.is('..=')) { inclusive = this.c.take().value === '..='; to = this.expr(0, false); }
+        const then = this.block();
+        body.push(this.c.node('for', start, {name: pattern.name, pattern, from, to, inclusive, then})); continue;
+      }
+      const value = this.expr();
+      if (['=', '+=', '-=', '*=', '/=', '%='].includes(this.c.peek().value)) {
+        const op = this.c.take().value, rhs = this.expr(); this.c.eat(';');
+        body.push(this.c.node('assign', start, {target: value, op, value: rhs}));
+      } else if (this.c.match(';')) body.push(this.c.node('expression', start, {value}));
+      else if (this.c.is('}')) { tail = value; break; }
+      else if (BLOCK_EXPRESSIONS.has(value.kind)) body.push(this.c.node('expression', start, {value}));
+      else this.c.eat(';');
     }
-    if(peek()==="struct"){take();const name=take().value;eat("{");const fields=[];while(peek()!=="}"){const field=take().value;eat(":");fields.push({name:field,type:type()});if(peek()!==",")break;take();}eat("}");items.push(node("struct",{name,fields},start));continue;}
-    throw Error("Unsupported top-level item '"+peek()+"' at "+start.line+":"+start.column);
+    this.c.eat('}'); return this.c.node('block', start, {body, tail});
   }
-  return {kind:"crate",items};
-}
-
+  pattern() {
+    const start = this.c.peek();
+    if (this.c.match('_')) return this.c.node('wildcard', start);
+    if (this.c.match('(')) return this.c.node('tuplePattern', start, {items: this.list(')', () => this.pattern())});
+    if (['number', 'string', 'char'].includes(start.kind) || ['true', 'false', '-'].includes(start.value)) return this.expr(10);
+    const name = this.path();
+    if (this.c.match('(')) return this.c.node('variantPattern', start, {name, items: this.list(')', () => this.pattern())});
+    return this.c.node(name.includes('::') || ['None'].includes(name) ? 'variantPattern' : 'bindingPattern', start, {name, items: []});
+  }
+  expr(minimum = 0, allowRecord = true) {
+    if (++this.depth > 256) throw new Diagnostic('F0102', 'Expression nesting limit exceeded', this.c.peek().span);
+    try {
+      let left = this.prefix(allowRecord);
+      while (true) {
+        const start = left;
+        if (allowRecord && this.c.is('{') && left.kind === 'variable' && (this.c.peek(2).value === ':' || this.c.peek(1).value === '}')) {
+          this.c.take(); const fields = this.list('}', () => {
+            const start = this.c.peek(), name = this.c.identifier();
+            const value = this.c.match(':') ? this.expr() : this.c.node('variable', start, {name});
+            return {name, value};
+          });
+          left = this.c.node('structLiteral', start, {name: left.name, fields}); continue;
+        }
+        if (this.c.match('::')) {
+          this.c.eat('<'); const typeArguments = this.list('>', () => this.type());
+          left.typeArguments = typeArguments; continue;
+        }
+        if (this.c.match('!')) {
+          if (left.kind !== 'variable') throw new Diagnostic('E0005', 'Expected a macro name', left.span);
+          const opening = this.c.take().value, closing = {'(': ')', '[': ']', '{': '}'}[opening];
+          if (!closing) throw new Diagnostic('E0005', 'Expected macro delimiter', left.span);
+          const args = this.list(closing, () => this.expr());
+          left = this.c.node('call', start, {callee: left, args, macro: true}); continue;
+        }
+        if (this.c.match('(')) { left = this.c.node('call', start, {callee: left, args: this.list(')', () => this.expr()), macro: false}); continue; }
+        if (this.c.match('[')) { const index = this.expr(); this.c.eat(']'); left = this.c.node('index', start, {object: left, index}); continue; }
+        if (this.c.match('.')) {
+          const field = this.c.peek().kind === 'number' ? this.c.take().value : this.c.identifier();
+          left = this.c.node('field', start, {object: left, field}); continue;
+        }
+        if (this.c.is('as') && minimum <= 10) { this.c.take(); left = this.c.node('cast', start, {value: left, target: this.type()}); continue; }
+        if (this.c.match('?')) { left = this.c.node('try', start, {value: left}); continue; }
+        const precedence = PRECEDENCE[this.c.peek().value];
+        if (precedence == null || precedence < minimum) break;
+        const op = this.c.take().value;
+        left = this.c.node('binary', start, {left, op, right: this.expr(precedence + 1, allowRecord)});
+      }
+      return left;
+    } finally { this.depth--; }
+  }
+  prefix(allowRecord) {
+    const start = this.c.peek();
+    if (this.c.is('{')) return this.block();
+    if (this.c.match('if')) {
+      const condition = this.expr(0, false), then = this.block();
+      const otherwise = this.c.match('else') ? (this.c.is('if') ? this.expr() : this.block()) : null;
+      return this.c.node('ifExpr', start, {condition, then, otherwise});
+    }
+    if (this.c.match('loop')) return this.c.node('loopExpr', start, {then: this.block()});
+    if (this.c.match('match')) {
+      const value = this.expr(0, false); this.c.eat('{'); const arms = [];
+      while (!this.c.is('}')) {
+        const start = this.c.peek(), pattern = this.pattern();
+        const guard = this.c.match('if') ? this.expr(0, false) : null;
+        this.c.eat('=>'); const body = this.expr();
+        arms.push(this.c.node('arm', start, {pattern, guard, body}));
+        if (!this.c.match(',') && !this.c.is('}') && !BLOCK_EXPRESSIONS.has(body.kind)) this.c.eat(',');
+      }
+      this.c.eat('}'); return this.c.node('match', start, {value, arms});
+    }
+    if (['-', '!', '&', '*'].includes(start.value)) {
+      const op = this.c.take().value, mutable = op === '&' && !!this.c.match('mut');
+      return this.c.node('unary', start, {op, mutable, value: this.expr(10, allowRecord)});
+    }
+    if (this.c.match('(')) {
+      if (this.c.match(')')) return this.c.node('literal', start, {value: null, type: '()'});
+      const first = this.expr();
+      if (!this.c.match(',')) { this.c.eat(')'); return first; }
+      const rest = this.list(')', () => this.expr());
+      return this.c.node('tuple', start, {items: [first, ...rest]});
+    }
+    if (this.c.match('[')) {
+      if (this.c.match(']')) return this.c.node('array', start, {items: []});
+      const first = this.expr();
+      if (this.c.match(';')) {
+        const count = this.expr(); this.c.eat(']'); return this.c.node('repeatArray', start, {value: first, count});
+      }
+      const items = [first];
+      if (this.c.match(',')) items.push(...this.list(']', () => this.expr())); else this.c.eat(']');
+      return this.c.node('array', start, {items});
+    }
+    if (['true', 'false'].includes(start.value)) { this.c.take(); return this.c.node('literal', start, {value: start.value === 'true', type: 'bool'}); }
+    if (start.kind === 'string' || start.kind === 'char') {
+      this.c.take(); const value = Lexer.decode(start.value);
+      if (start.kind === 'char' && [...value].length !== 1) throw new Diagnostic('E0762', 'A char must contain one Unicode scalar', start.span);
+      return this.c.node('literal', start, {value, type: start.kind === 'char' ? 'char' : '&str'});
+    }
+    if (start.kind === 'number') {
+      this.c.take();
+      const raw = start.value.replaceAll('_', '');
+      const suffix = /([ui](?:8|16|32|64|128|size)|f(?:32|64))$/.exec(raw)?.[1] ?? null;
+      const value = suffix ? raw.slice(0, -suffix.length) : raw;
+      const floating = !/^0[xbo]/i.test(value) && /[.eE]/.test(value);
+      return this.c.node('literal', start, {value, type: suffix ?? (floating ? 'f64' : '{integer}'), suffix});
+    }
+    if (start.value === 'async' || start.value === 'unsafe' || start.value === '|')
+      throw new Diagnostic('F0103', `${start.value} is not supported by the browser backend yet; use native Cargo`, start.span);
+    return this.c.node('variable', start, {name: this.path()});
+  }
 }

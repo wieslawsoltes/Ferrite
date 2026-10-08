@@ -40,8 +40,8 @@ export function renderCfg(root,mir,onSelect){
   const title=document.createElement("strong");title.textContent=fn.instance;section.append(title);
   for(const block of fn.blocks){
    const el=document.createElement("button");el.className="cfg-block";el.type="button";
-   const term=block.terminator;el.textContent=block.id+" · "+block.statements.length+" stmt · "+(term?.kind||"end");
-   const loc=block.statements.find(x=>x.loc)?.loc||term?.condition?.loc;
+   const term=block.terminator;el.textContent=block.id+" · "+(block.instructions??block.statements).length+" stmt · "+(term?.kind||"end");
+   const loc=(block.instructions??block.statements).find(x=>x.loc)?.loc||term?.condition?.loc||(block.span?{file:block.span.file,line:block.span.line,column:block.span.column,offset:block.span.start}:null);
    if(loc)el.onclick=()=>onSelect(loc);
    section.append(el);
    if(term?.kind==="switch"){const edge=document.createElement("div");edge.className="cfg-edge";edge.textContent="↳ true: "+term.true+" · false: "+term.false;section.append(edge);}

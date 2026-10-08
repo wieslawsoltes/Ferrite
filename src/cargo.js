@@ -40,7 +40,7 @@ export function mergeCrateSources(files,entry="src/main.rs"){
   let cursor=0;
   const pattern=/\b(?:pub\s+)?mod\s+([A-Za-z_]\w*)\s*;/g;
   let match;while((match=pattern.exec(source))){
-   const before=source.slice(cursor,match.index);if(before.trim()){map.push({path,start:segments.join("\n").length,originalOffset:cursor,length:before.length});segments.push(before);}
+   const before=source.slice(cursor,match.index);if(before.trim()){map.push({path,start:segments.reduce((n,segment)=>n+segment.length+1,0),originalOffset:cursor,length:before.length});segments.push(before);}
    const dir=path.slice(0,path.lastIndexOf("/")+1);
    let target=dir+match[1]+".rs";
    if(!(target in files))target=dir+match[1]+"/mod.rs";

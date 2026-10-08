@@ -21,7 +21,7 @@ export class SemanticAnalyzer {
     const key=name+"<"+fn.generics.map(g=>subst.get(g.name)).join(",")+">";
     if(instances.has(key))return {key,returnType:subst.get(fn.returnType)||fn.returnType};
     if(++recursionDepth>80)throw Error("Generic instantiation recursion limit exceeded");
-    const entry={key,name,fn,typeArguments:Object.fromEntries(subst),returnType:subst.get(fn.returnType)||fn.returnType};
+    const entry={key,name,fn:{...fn,body:structuredClone(fn.body)},calls:[],typeArguments:Object.fromEntries(subst),returnType:subst.get(fn.returnType)||fn.returnType};
     instances.set(key,entry);
     const scopes=[new Map(fn.params.map((p,i)=>[p.name,{type:argTypes[i],mutable:false,initialized:true}]))];
     const get=n=>{for(let j=scopes.length-1;j>=0;j--)if(scopes[j].has(n))return scopes[j].get(n);throw Error("Unresolved identifier "+n);};
@@ -69,7 +69,7 @@ export class SemanticAnalyzer {
       if(n.kind==="call"){if(n.macro){if(!["println","print","format"].includes(n.callee.name))throw Error("Unsupported macro "+n.callee.name);if(n.args[0]?.kind!=="literal"||n.args[0].type!=="&str")throw Error("Formatting requires a string literal");const count=(n.args[0].value.match(/\{\}/g)||[]).length;if(count!==n.args.length-1)throw Error("Format argument count mismatch");n.args.slice(1).forEach(infer);return n.callee.name==="format"?"&str":"()";}
         const name=n.callee.name;
         if(name==="clone"){if(n.args.length!==1)throw Error("clone expects one argument");return infer(n.args[0]);}
-        const result=instantiate(name,n.args.map(infer));n.resolved=result.key;return result.returnType;
+        const result=instantiate(name,n.args.map(infer));n.resolved=result.key;entry.calls.push({to:result.key,loc:n.loc});return result.returnType;
       }
       throw Error("Unhandled expression "+n.kind);
     }
@@ -83,8 +83,8 @@ export class SemanticAnalyzer {
       else if(stmt.kind==="loop"||stmt.kind==="blockStatement")checkBlock(stmt.then||stmt.block);
       else if(stmt.kind==="break"||stmt.kind==="continue"){}
     }const type=block.tail?infer(block.tail):"()";scopes.pop();return type;}
-    const actualReturn=checkBlock(fn.body);
-    if(fn.body.tail&&!compatible(entry.returnType,actualReturn))throw Error("Function "+name+" returns "+actualReturn+", expected "+entry.returnType);
+    const actualReturn=checkBlock(entry.fn.body);
+    if(entry.fn.body.tail&&!compatible(entry.returnType,actualReturn))throw Error("Function "+name+" returns "+actualReturn+", expected "+entry.returnType);
     recursionDepth--;return {key,returnType:entry.returnType};
   }
   instantiate("main",[]);

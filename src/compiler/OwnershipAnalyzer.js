@@ -43,7 +43,7 @@ export class OwnershipAnalyzer {
   value(node, consume = true, destination = null) {
     if (!node) return [];
     this.expire(node);
-    if (node.kind === 'literal') return [];
+    if (node.kind === 'literal' || node.kind === 'constValue') return [];
     if (node.kind === 'closure') {
       const roots=node.fields.flatMap(field=>this.value(field.value,true,destination));
       if(destination!=null&&roots.length)this.references.set(destination,roots);

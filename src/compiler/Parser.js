@@ -85,8 +85,10 @@ export class Parser {
     if (this.c.match('[')) {
       const type = this.type();
       this.c.eat(';');
-      const length = this.c.take().value;
-      if (!/^\d+$/.test(length)) throw new Diagnostic('F0100', 'Array sizes must currently be integer literals', this.c.peek().span);
+      const begin = this.c.index; this.expr();
+      const tokens = this.c.tokens.slice(begin, this.c.index);
+      const source = tokens.map(token => token.raw ? 'r#' + token.value : token.value).join(' ');
+      const length = tokens.length === 1 ? source : `{ ${source} }`;
       this.c.eat(']'); return `[${type};${length}]`;
     }
     let type = this.path();
@@ -96,6 +98,7 @@ export class Parser {
   item(owner = null, trait = null) {
     const start = this.c.peek(), attributes = this.attributes();
     const visibility = this.c.match('pub') ? 'pub' : 'private';
+    if (this.c.is('const') && this.c.peek(1).value === 'fn') { this.c.take(); this.c.take(); return [this.fn(start, {owner, trait, attributes, visibility, isConst: true})]; }
     if (this.c.match('fn')) return [this.fn(start, {owner, trait, attributes, visibility})];
     if (this.c.match('type')) {
       const name = this.c.identifier(), generics = this.generics(), predicates = this.whereClause();
@@ -344,6 +347,7 @@ export class Parser {
   prefix(allowRecord) {
     const start = this.c.peek();
     if (this.c.is('{')) return this.block();
+    if (this.c.match('const')) return this.c.node('constBlock', start, {value: this.block()});
     if (this.c.match('if')) {
       if (this.c.match('let')) {
         const pattern = this.pattern(); this.c.eat('=');

@@ -7,6 +7,14 @@ export class PatternAnalyzer {
 
   analyze(pattern, type, context, mutable = false, bindings = new Map(), names = new Set(), reuse = false) {
     pattern.type = type;
+    if (pattern.kind === 'variantPattern' && !pattern.items.length) {
+      const constant = this.analyzer.index.resolve(this.analyzer.index.constants, pattern.name, context.instance.fn.module, pattern, false);
+      if (constant) {
+        const literal = this.analyzer.constants.constant(constant, pattern).expression;
+        if (literal.kind !== 'literal') throw new Diagnostic('F_PATTERN_CONST', 'Aggregate constant patterns require structural equality support', pattern.span);
+        pattern.kind = 'literal'; pattern.value = literal.value; pattern.type = literal.type;
+      }
+    }
     switch (pattern.kind) {
       case 'wildcard': return;
       case 'restPattern': throw new Diagnostic('E0797', "'..' is only valid within an array, tuple or tuple-variant pattern", pattern.span);
@@ -30,9 +38,8 @@ export class PatternAnalyzer {
           if (constructor) {
             pattern.kind = 'variantPattern'; pattern.items = [];
           } else {
-            const literal = structuredClone(constant.value);
-            this.analyzer.infer(literal, context, index.type(constant.type, constant.module));
-            if (literal.kind !== 'literal') throw new Diagnostic('F_PATTERN_CONST', 'Computed constant patterns require native Cargo', pattern.span);
+            const literal = structuredClone(this.analyzer.constants.constant(constant, pattern).expression);
+            if (literal.kind !== 'literal') throw new Diagnostic('F_PATTERN_CONST', 'Aggregate constant patterns require structural equality support', pattern.span);
             pattern.kind = 'literal'; pattern.value = literal.value; pattern.type = literal.type;
           }
           return this.analyze(pattern, type, context, mutable, bindings, names, reuse);
@@ -65,9 +72,14 @@ export class PatternAnalyzer {
         const max = type === 'char' ? String.fromCodePoint(0x10ffff) : String((1n << BigInt(bits - (signed ? 1 : 0))) - 1n);
         if (!pattern.from) pattern.from = {kind: 'literal', value: min, type, span: pattern.span};
         if (!pattern.to) { pattern.to = {kind: 'literal', value: max, type, span: pattern.span}; pattern.inclusive = true; }
-        for (const endpoint of [pattern.from, pattern.to]) {
-          T.unify(type, this.analyzer.infer(endpoint, context, type), new Map(), endpoint);
-          if (endpoint.kind !== 'literal') throw new Diagnostic('F_PATTERN_CONST', 'Range endpoints currently require literal constants', endpoint.span);
+        for (const key of ['from', 'to']) {
+          const endpoint = pattern[key];
+          if (endpoint.kind === 'bindingPattern' || endpoint.kind === 'variantPattern') {
+            const constant = this.analyzer.index.resolve(this.analyzer.index.constants, endpoint.name, context.instance.fn.module, endpoint);
+            pattern[key] = structuredClone(this.analyzer.constants.constant(constant, endpoint).expression);
+          }
+          T.unify(type, this.analyzer.infer(pattern[key], context, type), new Map(), pattern[key]);
+          if (pattern[key].kind !== 'literal') throw new Diagnostic('E0158', 'Range endpoint must be a scalar constant', endpoint.span);
         }
         const scalar = p => type === 'char' ? BigInt(p.value.codePointAt(0)) : BigInt(p.value);
         if (pattern.inclusive ? scalar(pattern.from) > scalar(pattern.to) : scalar(pattern.from) >= scalar(pattern.to)) {

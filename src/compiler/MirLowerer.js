@@ -62,6 +62,7 @@ export class MirLowerer {
       return this.emit('aggregate', {form: 'enum', values: (node.args ?? []).map(n => this.expr(n)), tag: node.variant}, node, node.type);
     }
     switch (node.kind) {
+      case 'constValue': return this.expr(node.value);
       case 'literal': return this.literal(node.value, node.type, node);
       case 'variable': return node.constant ? this.expr(node.constant) : this.emit('read', {place: this.place(node), copy: !borrowed && node.copy}, node, node.type);
       case 'tuple': case 'array': return this.emit('aggregate', {form: node.kind, values: node.items.map(n => this.expr(n))}, node, node.type);

@@ -103,7 +103,12 @@ export class BrowserLease {
       await new Promise(resolve => { release = resolve; accept(); });
     });
     } catch (error) { if (error.name === 'SecurityError' || error.name === 'NotSupportedError') return {persistentAllowed: false, release: async () => {}}; throw error; }
-    held.catch(decline); await ready;
+    held.catch(decline);
+    try { await ready; }
+    catch (error) {
+      if (error.name === 'SecurityError' || error.name === 'NotSupportedError') return {persistentAllowed: false, release: async () => {}};
+      throw error;
+    }
     return {persistentAllowed: true, release: async () => { release(); await held; }};
   }
 }

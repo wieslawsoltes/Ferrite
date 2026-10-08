@@ -176,3 +176,56 @@ test('shared harness runs an entire browser read-edit-compile task with real too
  await r.route('/v1/sessions/'+session.id+'/start',{prompt:'Fix value and run it',fullAccessConfirmed:true});await r.harness.wait(session.id);
  assert.equal(session.status,'completed');assert.match(r.workspace.model.read('src/main.rs'),/= 9/);assert.equal(turn,4);assert.equal(session.usage.input,200);assert.equal((await r.store.list('checkpoints')).length,1);
 });
+
+test('browser storage and lock restrictions degrade explicitly to memory, not shared journals',async()=>{
+ const blocked=new DOMException('Blocked','SecurityError');
+ const store=await new BrowserStore('workspace',{indexedDB:{open(){throw blocked;}},keyRange:{}}).initialize();
+ assert.equal(store.persistent,false);assert.match(store.reason,/SecurityError/);await store.write('sessions','one',{});await store.close();
+ for(const locks of [{request(){throw blocked;}},{request(){return Promise.reject(blocked);}}]){
+   const lease=await BrowserLease.acquire('workspace',{locks});assert.equal(lease.persistentAllowed,false);await lease.release();
+ }
+ await assert.rejects(BrowserLease.acquire('workspace',{locks:{request:(_name,_options,callback)=>Promise.resolve().then(()=>callback(null))}}),{code:'AGENT_TAB_OWNER'});
+});
+test('browser lock remains exclusive until asynchronous teardown releases it',async()=>{
+ let held=false;
+ const locks={request:async(_name,_options,callback)=>{if(held)return callback(null);held=true;try{return await callback({name:'workspace'});}finally{held=false;}}};
+ const first=await BrowserLease.acquire('workspace',{locks});assert.equal(first.persistentAllowed,true);
+ await assert.rejects(BrowserLease.acquire('workspace',{locks}),{code:'AGENT_TAB_OWNER'});await first.release();
+ const second=await BrowserLease.acquire('workspace',{locks});await second.release();assert.equal(held,false);
+});
+test('browser shutdown releases its journal lease even after a storage-close failure',async()=>{
+ let released=false;const r=await BrowserRuntime.create({model:new WorkspaceModel(files()),compiler:pureCompiler(),storeOptions:{indexedDB:null},leaseOptions:{locks:null}});
+ r.store.close=async()=>{throw Error('storage close failure');};r.lease.release=async()=>{released=true;};
+ await assert.rejects(r.close(),/storage close failure/);assert.equal(released,true);assert.equal(r.lifetime.signal.aborted,true);
+});
+test('literal workspace replacements preserve dollar metacharacters and reject amplification before mutation',async t=>{
+ const r=await runtime(t);let source=await r.workspace.read('src/main.rs');const replacement='// $& $$ $` $\'\n';
+ await r.tools.execute('workspace_replace',{path:source.path,expectedHash:source.hash,oldText:'fn main()',newText:replacement},{mode:'trusted'});
+ assert.equal(r.workspace.model.read(source.path),replacement+source.text.slice('fn main()'.length));
+ await r.workspace.apply([{path:'repeat.txt',expectedHash:null,text:'x'.repeat(1000)}]);source=await r.workspace.read('repeat.txt');
+ await assert.rejects(r.tools.execute('workspace_replace',{path:source.path,expectedHash:source.hash,oldText:'x',newText:'y'.repeat(10000),replaceAll:true},{mode:'trusted'}),{code:'EDIT_LIMIT'});
+ assert.equal(r.workspace.model.read(source.path),source.text);
+ await r.tools.execute('workspace_replace',{path:source.path,expectedHash:source.hash,oldText:'x',newText:'$&',replaceAll:true},{mode:'trusted'});
+ assert.equal(r.workspace.model.read(source.path),'$&'.repeat(1000));
+});
+test('browser parameter rename includes the declaration and all resolved uses',async t=>{
+ const source='fn twice(value: i32) -> i32 { value + value } fn main() { println!("{}", twice(2)); }';
+ const r=await runtime(t,{model:new WorkspaceModel({...files(),'src/main.rs':source})});
+ const params={position:{line:0,character:source.indexOf('value')}};
+ const refs=await r.language.request('textDocument/references',{path:'src/main.rs',params});assert.equal(refs.length,3);
+ const uses=await r.language.request('textDocument/references',{path:'src/main.rs',params:{...params,context:{includeDeclaration:false}}});assert.equal(uses.length,2);
+ const rename=await r.language.request('textDocument/rename',{path:'src/main.rs',params:{...params,newName:'input'}});assert.equal(Object.values(rename.changes)[0].length,3);
+});
+test('browser edits cannot indirectly authorize a configured native auto-check backend',async t=>{
+ const r=await runtime(t,{beforeEdit:()=>{throw Error('Native auto-check is not authorized');}}),source=await r.workspace.read('src/main.rs');
+ await assert.rejects(r.workspace.apply([{path:source.path,expectedHash:source.hash,text:'fn main() {}'}]),/not authorized/);
+ assert.equal(r.workspace.model.read(source.path),source.text);assert.equal((await r.store.list('checkpoints')).length,0);
+});
+test('switching task selection while creation awaits cannot start the new selection or discard its composer',async()=>{
+ const {AgentWorkbench}=await import('../src/ui/agent/AgentWorkbench.js');let complete,calls=[];
+ const w=Object.create(AgentWorkbench.prototype);Object.assign(w,{environment:'browser',generation:1,selectionGeneration:1,selected:null,
+   view:{prompt:{value:'Original task'},config:()=>config,status(){throw Error('must not start');}},browserPanels:{config:()=>({})},
+   request:async(path)=>{calls.push(path);return await new Promise(resolve=>{complete=resolve;});}});
+ const operation=w.run();w.selectionGeneration++;w.selected='another-task';w.view.prompt.value='New task composer';complete({id:'created-task'});
+ await assert.rejects(operation,{name:'AbortError'});assert.deepEqual(calls,['/v1/sessions/create']);assert.equal(w.selected,'another-task');assert.equal(w.view.prompt.value,'New task composer');
+});

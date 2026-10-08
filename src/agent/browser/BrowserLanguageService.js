@@ -31,6 +31,14 @@ export class BrowserLanguageService {
       symbols.push({...symbol, name, selection, key}); declarations.set(key, selection);
       occurrences.push({key, name, span: selection, definition: selection, type: symbol.kind, declaration: true});
     }
+    // Parameters (including unused ones) have semantic locals but no bindingPattern in the body.
+    for (const instance of build.sem?.instances ?? []) for (const binding of instance.locals ?? []) {
+      if (!Object.hasOwn(files, binding.span?.file)) continue;
+      const definition = tokenName(binding.span, binding.name); if (!definition) continue;
+      const key = `binding:${definition.file}:${definition.start}:${binding.slot}`;
+      declarations.set(key, definition);
+      occurrences.push({key, name: binding.name, span: definition, definition, type: binding.type, declaration: true});
+    }
     const seen = new WeakSet();
     const visit = (node, instance) => {
       if (!node || typeof node !== 'object' || seen.has(node)) return; seen.add(node);

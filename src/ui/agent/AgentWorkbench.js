@@ -57,6 +57,7 @@ export class AgentWorkbench {
     this.modeOperation = task; return task;
   }
   resetView() {
+    this.selectionGeneration = (this.selectionGeneration ?? 0) + 1;
     this.browserTerminal?.dispose(); this.browserTerminal = null; this.terminal.executeBrowser = null; this.terminal.interruptBrowser = null; this.selected = null; this.view.setSession(null); this.view.approvals.replaceChildren(); this.view.approvalCards.clear();
     this.view.connected(false); this.view.prompt.disabled = false; this.browserPanels?.reset();
   }
@@ -122,21 +123,43 @@ export class AgentWorkbench {
   async refreshApprovals() { const approvals = await this.request('/v1/approvals'), ids = new Set(approvals.map(item => item.id)); for (const [id,card] of this.view.approvalCards) if (!ids.has(id)) { card.remove(); this.view.approvalCards.delete(id); } for (const item of approvals) this.view.approval(item); }
   async loadSession(id) { if (!id) return this.newSession(); const selection = this.selectionGeneration = (this.selectionGeneration ?? 0) + 1; const session = await this.request('/v1/sessions/' + encodeURIComponent(id)); if(selection !== this.selectionGeneration) return; this.selected = session.id; this.view.setSession(session); this.view.sessionSelect.value = session.id; this.browserPanels.sessionChanged(session); }
   newSession() { this.selectionGeneration = (this.selectionGeneration ?? 0) + 1; this.selected = null; this.view.setSession(null); this.view.sessionSelect.value = ''; this.view.status('idle'); this.view.prompt.value = ''; this.browserPanels.sessionChanged(null); }
-  async fork() { if (!this.selected) throw Error('Select a session to fork.'); const session = await this.request('/v1/sessions/' + this.selected + '/fork',{}); await this.loadSession(session.id); await this.refreshSessions(); }
+  async fork() {
+    if (!this.selected) throw Error('Select a session to fork.');
+    const id = this.selected, selection = this.selectionGeneration;
+    const session = await this.request('/v1/sessions/' + id + '/fork',{});
+    if (selection === this.selectionGeneration && this.selected === id) await this.loadSession(session.id);
+    await this.refreshSessions();
+  }
   async exportSession() { if (!this.selected) throw Error('Select a session to export.'); const session = await this.request('/v1/sessions/' + this.selected); this.app.download('ferrite-agent-' + session.id + '.json',JSON.stringify(session,null,2)); }
-  async compact() { if (!this.selected) throw Error('Select a session to compact.'); await this.request('/v1/sessions/' + this.selected + '/compact',{}); await this.loadSession(this.selected); }
+  async compact() {
+    if (!this.selected) throw Error('Select a session to compact.');
+    const id = this.selected, selection = this.selectionGeneration;
+    await this.request('/v1/sessions/' + id + '/compact',{});
+    if (selection === this.selectionGeneration && this.selected === id) await this.loadSession(id);
+  }
   async run(resume = false) {
     if (this.starting) return; this.starting = true;
+    const generation = this.generation, selection = this.selectionGeneration, browser = this.environment === 'browser';
+    let id = this.selected;
+    const current = () => generation === this.generation && selection === this.selectionGeneration && id === this.selected && !this.disposed;
+    const assertCurrent = () => { if (!current()) throw new DOMException('The selected agent task changed; no new task was started', 'AbortError'); };
     try {
-      const prompt = this.view.prompt.value.trim(), config = {...this.view.config(), ...(this.environment === 'browser' ? this.browserPanels.config() : {})}; if (!resume && !prompt) throw Error('Enter a coding task.');
-      if (this.environment === 'native') await this.sync.sync();
-      if (!this.selected) { const session = await this.request('/v1/sessions/create',{config}); this.selected = session.id; this.view.setSession(session); await this.refreshSessions(); }
-      const browser = this.environment === 'browser';
+      const composer = this.view.prompt.value, prompt = composer.trim(), config = {...this.view.config(), ...(browser ? this.browserPanels.config() : {})};
+      if (!resume && !prompt) throw Error('Enter a coding task.');
+      if (this.environment === 'native') { await this.sync.sync(); assertCurrent(); }
+      if (!id) {
+        const session = await this.request('/v1/sessions/create',{config}); assertCurrent();
+        this.selected = id = session.id; this.view.setSession(session); this.browserPanels.sessionChanged(session);
+        await this.refreshSessions(); assertCurrent();
+      }
       if (browser && config.mode === 'trusted' && !confirm('Allow all enabled browser project tools for this run? This includes edits and bounded compiler/shell execution, NOT host filesystem, native processes or unrestricted network.')) return;
-      if (browser) { await this.tasks.begin(this.selected); this.browserPanels.sessionChanged(this.view.session); }
-      this.view.status('running');
-      try { await this.request('/v1/sessions/' + this.selected + '/start',{...(resume ? {} : {prompt}),config,...(browser ? {fullAccessConfirmed: config.mode === 'trusted'} : {})}); this.view.prompt.value = ''; }
-      catch (error) { this.view.status('idle'); throw error; }
+      if (browser) { await this.tasks.begin(id); assertCurrent(); this.browserPanels.sessionChanged(this.view.session); }
+      assertCurrent(); this.view.status('running');
+      try {
+        await this.request('/v1/sessions/' + id + '/start',{...(resume ? {} : {prompt}),config,...(browser ? {fullAccessConfirmed: config.mode === 'trusted'} : {})});
+        // Preserve a follow-up typed while the start request was in flight.
+        if (current() && this.view.prompt.value === composer) this.view.prompt.value = '';
+      } catch (error) { if (current()) this.view.status('idle'); throw error; }
     } finally { this.starting = false; }
   }
   resume() { return this.run(true); }
@@ -191,7 +214,7 @@ export class AgentWorkbench {
       if (!app.panels.has(args.id)) throw Error('Unknown panel ID.'); const action = command.slice(6); if (action === 'move') { if (!['left','right','bottom'].includes(args.side)) throw Error('Invalid docking side.'); app.dock.move(args.id,args.side); } else if (action === 'open' || action === 'float') app.dock[action](args.id); else throw Error('Unknown panel operation.');
     } else if (command === 'layout.reset') app.dock.reset();
     else if (command.startsWith('compiler.')) {
-      const action = command.slice(9); if (action === 'stop') app.stop(); else { await app.compile(action); if (app.$('status').dataset.kind === 'error') throw Error(app.$('status').textContent); if (['run','test','debug'].includes(action) && app.backend !== 'native') { const deadline = Date.now() + 12000; while (app.execution.worker && Date.now() < deadline && (app.lastExecutionEvent?.generation !== app.execution.generation || !['paused','done','tests-done','error'].includes(app.lastExecutionEvent.type))) await new Promise(resolve=>setTimeout(resolve,25)); if (app.lastExecutionEvent?.type === 'error') throw Error(app.lastExecutionEvent.message); } }
+      const action = command.slice(9); if (action === 'stop') app.stop(); else { await app.compile(action); if (app.$('status').dataset.kind === 'error') throw Error(app.$('status').textContent); if (['run','test','debug'].includes(action) && app.backend !== 'native') { const deadline = Date.now() + 12000; while (app.execution.worker && Date.now() < deadline && (app.lastExecutionEvent?.generation !== app.execution.generation || !['paused','done','tests-done','error'].includes(app.lastExecutionEvent.type))) { signal?.throwIfAborted(); await new Promise(resolve=>setTimeout(resolve,25)); } if (app.lastExecutionEvent?.type === 'error') throw Error(app.lastExecutionEvent.message); } }
     } else if (command === 'visualizer.stage' || command === 'visualizer.instance') {
       if (app.buildRevision !== app.model.revision) throw Error('Compiler visualizers are stale; check the current source first.');
       if (command === 'visualizer.stage') { if (!app.build.stages.some(stage=>stage.name===args.name)) throw Error('Unknown compiler stage.'); app.inspector.showStage(args.name); }
@@ -201,7 +224,7 @@ export class AgentWorkbench {
       for (const {file,line} of args.breakpoints) if (!Object.hasOwn(app.model.files,file)||!Number.isSafeInteger(line)||line<1||line>app.model.files[file].split('\n').length) throw Error('Invalid breakpoint location.');
       app.model.breakpoints.clear(); for (const {file,line} of args.breakpoints) { const set = app.model.breakpoints.get(file)??new Set(); set.add(line); app.model.breakpoints.set(file,set); } app.model.emit('breakpoint');
     } else if (command.startsWith('debug.')) {
-      if (!app.execution.worker) throw Error('Start an executable MIR debug session first.'); const before = app.executionEventSerial ?? 0; app.execution.command(command.slice(6),app.model.breakpointList); const deadline = Date.now()+4000; while ((app.executionEventSerial??0)===before&&app.execution.worker&&Date.now()<deadline) await new Promise(resolve=>setTimeout(resolve,20));
+      if (!app.execution.worker) throw Error('Start an executable MIR debug session first.'); const before = app.executionEventSerial ?? 0; app.execution.command(command.slice(6),app.model.breakpointList); const deadline = Date.now()+4000; while ((app.executionEventSerial??0)===before&&app.execution.worker&&Date.now()<deadline) { signal?.throwIfAborted(); await new Promise(resolve=>setTimeout(resolve,20)); }
     } else if (command === 'search.query') { if (typeof args.query!=='string'||args.query.length>1024) throw Error('Search requires a query up to 1024 characters.'); app.dock.open('search'); app.search.query.value=args.query; app.search.currentFile.checked=args.currentFile===true; await app.search.find(); return {revision:app.model.revision,result:app.search.result}; }
     else throw Error('Unsupported IDE command.');
     signal?.throwIfAborted(); await this.heartbeat(); return this.state();

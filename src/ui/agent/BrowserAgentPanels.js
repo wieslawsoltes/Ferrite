@@ -92,6 +92,7 @@ export class BrowserAgentPanels {
       bar.append(Dom.button('Load into composer',()=>this.workbench.guard(async()=>{
         this.current(tasks); if (this.workbench.selected !== id) throw Error('Task changed; refresh the queue');
         const latest=(await tasks.items(id)).find(value=>value.id===item.id); this.current(tasks);
+        if (this.workbench.selected !== id) throw Error('Task changed; refresh the queue');
         if (!latest || latest.version!==item.version) throw Error('Queued message changed; refresh it');
         this.view.prompt.value=latest.text; this.view.tab('chat'); this.view.prompt.focus();
       })),Dom.button('Save message',()=>act('edit')),Dom.button('Move up',()=>act('up')),Dom.button('Move down',()=>act('down')),Dom.button('Remove message',()=>act('remove')));

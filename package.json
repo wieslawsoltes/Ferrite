@@ -1,6 +1,6 @@
 {
   "name": "ferrite-compiler",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,7 +16,8 @@
     "agent": "node tools/agent.mjs",
     "test:agent": "node --test tests/agent-*.test.js",
     "test:agent:browser": "python tools/agent-browser-acceptance.py",
-    "test:repositories": "node tools/repository-smoke.mjs"
+    "test:repositories": "node tools/repository-smoke.mjs",
+    "test:browser-agent": "python tools/browser-agent-acceptance.py"
   },
   "engines": {
     "node": ">=22"

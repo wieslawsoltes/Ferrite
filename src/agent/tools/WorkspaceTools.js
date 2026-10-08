@@ -31,9 +31,13 @@ export function registerWorkspaceTools(registry, workspace, store) {
   const replaceSchema = object({path, expectedHash: hash, oldText: {...text(2 * 1024 * 1024), minLength: 1}, newText: text(2 * 1024 * 1024), replaceAll: {type: 'boolean'}}, ['path', 'expectedHash', 'oldText', 'newText']);
   const replacement = async args => {
     const before = await workspace.text(args.path); if (await contentHash(before) !== args.expectedHash) throw new AgentError('EDIT_CONFLICT', 'The file changed; read it again', {status: 409});
-    const occurrences = before.split(args.oldText).length - 1;
+    let occurrences = 0, offset = 0, found;
+    while ((found = before.indexOf(args.oldText, offset)) !== -1) { occurrences++; offset = found + args.oldText.length; }
+    const replacements = args.replaceAll ? occurrences : Math.min(1, occurrences);
+    if (before.length + replacements * (args.newText.length - args.oldText.length) > 2 * 1024 * 1024)
+      throw new AgentError('EDIT_LIMIT', 'Replacement exceeds the file-size budget; no source was allocated or changed');
     if (!occurrences || occurrences !== 1 && !args.replaceAll) throw new AgentError('EDIT_AMBIGUOUS', `Expected a unique match; found ${occurrences}. Supply more context or explicitly set replaceAll.`);
-    return [{path: args.path, expectedHash: args.expectedHash, text: args.replaceAll ? before.replaceAll(args.oldText, args.newText) : before.replace(args.oldText, args.newText)}];
+    return [{path: args.path, expectedHash: args.expectedHash, text: args.replaceAll ? before.replaceAll(args.oldText, () => args.newText) : before.replace(args.oldText, () => args.newText)}];
   };
   add('workspace_replace', 'Apply an exact, unique text replacement against the expected content hash. No regex or fuzzy matching.', replaceSchema, 'edit', async (args, context) => workspace.apply(await replacement(args), {sessionId: context.sessionId, label: 'Replace text', signal: context.signal}), async args => workspace.preview(await replacement(args)));
   const patchChanges = async ({path, expectedHash, patch}) => {

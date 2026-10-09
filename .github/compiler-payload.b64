@@ -1,1 +1,1 @@
-{"chunks":[".github/compiler-payload-01-1.b64",".github/compiler-payload-01-2.b64",".github/compiler-payload-01-3.b64"],"sha256":"4c8d44cb63710b5f27d914b7c0feb5503f292443e1a4ee7debed68f4000be216","repairs":[{"old":"Berdxcxc2Oz","new":"Berdxc2Oz"}]}
+{"inline":{"base":"47042847584a167d7e9c1a5ffd211277688c1674","commits":[{"merge":"8d3c924ad7cad18cfc27787f131fd8053e52cfd9","tree":"6ab3d9800cede2a2b5cd1e38d8804e246a527b49","message":"Merge latest main while preserving compiler features and browser agent integration"}]}}

@@ -66,7 +66,8 @@ export class UIStudio {
     this.viewport = this.selectInput('Preview width', [['100%', 'Responsive'], ['375px', 'Phone · 375'], ['768px', 'Tablet · 768'], ['1280px', 'Desktop · 1280']]);
     this.viewport.onchange = () => { this.frame.style.width = this.viewport.value; this.saveProject(); };
     this.layoutMode = this.selectInput('Canvas editing', [['off', 'Run application'], ['move', 'Move element'], ['resize', 'Resize element']]);
-    this.layoutMode.onchange = () => { try { this.assertLive(); this.preview.request('layout', {mode: this.layoutMode.value, grid: this.project?.settings.grid ?? 8, snap: this.project?.settings.snap ?? true}).catch(error => this.error(error)); } catch (error) { this.error(error); } };
+    this.layoutMode.dataset.activeMode = 'off';
+    this.layoutMode.onchange = () => this.configureLayout().catch(error => this.error(error));
     previewBar.append(this.pickButton, this.layoutMode, this.viewport, this.button('Inspect', () => this.inspect(), 'tree'));
     const canvas = Dom.element('div', 'studio-canvas'); this.frame = Dom.element('iframe', 'studio-preview'); this.frame.title = 'Sandboxed Rust UI preview'; canvas.append(this.frame);
     previewArea.append(previewBar, canvas);
@@ -152,7 +153,7 @@ export class UIStudio {
     this.nativeAsset = null; this.saveProject(); const source = this.model.files[this.entryFile]; if (typeof source !== 'string') throw Error('Create an example or select an existing UI source');
     this.active?.abort(); this.active = new AbortController(); const combined = AbortSignal.any([this.active.signal, signal].filter(Boolean));
     const generation = ++this.generation, file = this.entryFile, channel = this.preview.reset();
-    this.layoutMode.value = 'off'; this.picking = false; this.pickButton.setAttribute('aria-pressed', 'false'); this.artifact = null;
+    this.layoutMode.value = 'off'; this.layoutMode.dataset.activeMode = 'off'; this.frame.style.pointerEvents = ''; this.layoutMode.removeAttribute('aria-busy'); this.picking = false; this.pickButton.setAttribute('aria-pressed', 'false'); this.artifact = null;
     this.status.textContent = 'Compiling typed Rust UI in a worker…'; this.status.dataset.kind = 'building';
     const {artifact, html} = await this.compiler.compile({...this.model.files}, 'ui-compile', {file, entry: this.entry, backend: this.backend, css: this.css.value, channel}, combined);
     combined.throwIfAborted(); if (generation !== this.generation || source !== this.model.files[file]) throw new DOMException('Stale UI build', 'AbortError');
@@ -168,7 +169,7 @@ export class UIStudio {
     this.active?.abort(); const generation = ++this.generation;
     this.nativeAsset = {bytes: bytes.slice(), name}; this.compiledGeneration = generation;
     this.artifact = {format: 'ferrite-native-ui-v1', nodes: []}; this.snapshot = null;
-    this.selected = null; this.picking = false; this.layoutMode.value = 'off'; this.pickButton.setAttribute('aria-pressed', 'false');
+    this.selected = null; this.picking = false; this.layoutMode.value = 'off'; this.layoutMode.dataset.activeMode = 'off'; this.frame.style.pointerEvents = ''; this.layoutMode.removeAttribute('aria-busy'); this.pickButton.setAttribute('aria-pressed', 'false');
     this.outline.replaceChildren(); this.properties.replaceChildren();
     this.app.dock.open('ui-studio'); this.preview.load(html, channel); this.renderState();
     this.status.dataset.kind = 'building'; this.status.textContent = 'Loading trusted rustc Wasm in an isolated origin…';
@@ -206,6 +207,28 @@ export class UIStudio {
     }
     if (reveal) { this.model.open(this.file); this.app.selection.select(node.span, 'ui-studio', this.model.revision); }
     return {id, span: node.span};
+  }
+  async configureLayout() {
+    this.assertLive(); this.assertSourcePreview();
+    const generation = this.generation, epoch = this.layoutEpoch = (this.layoutEpoch ?? 0) + 1;
+    const mode = this.layoutMode.value;
+    this.layoutMode.setAttribute('aria-busy', 'true'); this.frame.style.pointerEvents = 'none';
+    try {
+      const result = await this.preview.request('layout', {mode, grid: this.project?.settings.grid ?? 8, snap: this.project?.settings.snap ?? true});
+      if (epoch !== this.layoutEpoch || generation !== this.generation) return;
+      if (result?.mode !== mode) throw Error('Preview did not acknowledge the requested canvas mode');
+      this.layoutMode.dataset.activeMode = mode;
+      this.layoutMode.removeAttribute('aria-busy'); this.frame.style.pointerEvents = '';
+      return result;
+    } catch (error) {
+      // Old replies must not re-enable a newer preview or overwrite its status.
+      if (epoch !== this.layoutEpoch || generation !== this.generation) return;
+      this.layoutMode.removeAttribute('aria-busy');
+      this.layoutMode.dataset.activeMode = 'unknown';
+      // An uncertain mode must not turn a design gesture into an application click.
+      // Another explicit mode selection or a new preview restores interaction.
+      throw error;
+    }
   }
   async pick() {
     this.assertLive(); this.assertSourcePreview(); this.picking = !this.picking; await this.preview.request('pick', {value: this.picking});

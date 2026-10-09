@@ -1,3 +1,4 @@
+import {genericTraitCases,genericTraitCompileFailCases} from './generic-traits.js';
 import {uiGenericCases, uiGenericCompileFailCases} from './ui-generic-integration.js';
 import {genericImplCases, genericImplCompileFailCases} from './generic-impls.js';
 import {callableCases,callableCompileFailCases,callablePanicCases} from './callable-items.js';
@@ -130,3 +131,5 @@ export const languageCases = [
   [...uiGenericCompileFailCases, ...genericImplCompileFailCases, ...compileFailCases, ...floatCompileFailCases, ...destructuringCompileFailCases, ...nominalCompileFailCases, ...enumRecordCompileFailCases, ...callableCompileFailCases, ...discriminantCompileFailCases].map(([name,source])=>({name,source,kind:'compile-fail'})),
   [...runtimePanicCases, ...floatPanicCases, ...destructuringPanicCases, ...nominalPanicCases, ...enumRecordPanicCases, ...callablePanicCases].map(([name,source,code,output])=>({name,source,code,output,kind:'panic'})),
 );
+
+languageCases.push(...genericTraitCases.map(([name,source,output])=>({name,source,output,kind:'run'})),...genericTraitCompileFailCases.map(([name,source])=>({name,source,kind:'compile-fail'})));

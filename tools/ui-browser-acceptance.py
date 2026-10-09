@@ -155,7 +155,10 @@ def run():
             expect(studio.get_by_label('UI source file', exact=True)).to_have_value('src/card.rs')
             assert page.evaluate('window.ferrite.getUIState().entryFile') == 'src/app.rs'
             studio.get_by_role('button', name='Pick element', exact=True).click()
+            expect(studio.get_by_role('button', name='Pick element', exact=True)).to_have_attribute('aria-pressed', 'false')
             studio.get_by_label('Canvas editing', exact=True).select_option('move')
+            expect(studio.get_by_label('Canvas editing', exact=True)).to_have_attribute('data-active-mode', 'move')
+            frame.locator('button').scroll_into_view_if_needed()
             rect = frame.locator('button').bounding_box()
             page.mouse.move(rect['x'] + 20, rect['y'] + 20); page.mouse.down()
             page.mouse.move(rect['x'] + 44, rect['y'] + 36, steps=4); page.mouse.up()

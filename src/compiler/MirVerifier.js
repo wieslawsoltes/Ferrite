@@ -1,3 +1,4 @@
+import {TypeSystem as T} from './TypeSystem.js';
 import {Diagnostic} from './Diagnostic.js';
 
 /** Verifies edges, registers and definite initialization before either backend runs. */
@@ -28,17 +29,17 @@ export class MirVerifier {
     if (instruction.op === 'write' && !instruction.place.path.length) result.push(instruction.place.slot);
     return result;
   }
-  static verify(functions) {
+  static verify(functions, {allowDeferredDiscriminants = false} = {}) {
     const names = new Map(functions.map(fn => [fn.instance, fn]));
     if (names.size !== functions.length) throw new Diagnostic('F_MIR', 'Duplicate MIR function identity');
-    for (const fn of functions) this.function(fn, names);
+    for (const fn of functions) this.function(fn, names, {allowDeferredDiscriminants});
     return {functions: functions.length, blocks: functions.reduce((n, f) => n + f.blocks.length, 0), status: 'verified'};
   }
-  static function(fn, names) {
+  static function(fn, names, {allowDeferredDiscriminants = false} = {}) {
     const map = new Map(fn.blocks.map(block => [block.id, block]));
     const fail = (message, span) => { throw new Diagnostic('F_MIR', `${fn.instance}: ${message}`, span ?? fn.span); };
     if (map.size !== fn.blocks.length || !map.has(fn.entry)) fail('Invalid block identities');
-    const operations = new Set(['const', 'read', 'borrow', 'write', 'copy', 'binary', 'unary', 'cast', 'aggregate', 'repeat', 'get', 'tag', 'payload', 'builtin', 'call']);
+    const operations = new Set(['const', 'read', 'borrow', 'write', 'copy', 'binary', 'unary', 'cast', 'aggregate', 'repeat', 'get', 'tag', 'payload', 'discriminant', 'builtin', 'call']);
     const terms = new Set(['goto', 'branch', 'rangeSwitch', 'return', 'unreachable']);
     const register = (slot, span) => {
       if (!Number.isInteger(slot) || slot < 0 || slot >= fn.registers.length) fail(`Invalid register ${slot}`, span);
@@ -59,6 +60,20 @@ export class MirVerifier {
         }
         for (const slot of this.definitions(instruction)) register(slot, instruction.span);
         for (const slot of this.uses(instruction)) register(slot, instruction.span);
+        if (instruction.op === 'discriminant') {
+          if (!T.integer(instruction.type) || typeof instruction.enumName !== 'string' || !instruction.enumName ||
+              T.application(register(instruction.value).type).name !== instruction.enumName) fail('Invalid enum discriminant types', instruction.span);
+          const table = instruction.table;
+          if (!(table === null && allowDeferredDiscriminants)) {
+            if (!table || typeof table !== 'object' || Array.isArray(table)) fail('Unresolved enum discriminants', instruction.span);
+            const bits = instruction.type.endsWith('size') ? 32 : Number(instruction.type.slice(1));
+            const signed = instruction.type[0] === 'i', min = signed ? -(1n << BigInt(bits - 1)) : 0n, max = (1n << BigInt(bits - Number(signed))) - 1n;
+            for (const [tag, value] of Object.entries(table)) {
+              if (!tag.startsWith(instruction.enumName + '::') || typeof value !== 'string' || !/^-?\d+$/.test(value) || value.length > 40 ||
+                  BigInt(value) < min || BigInt(value) > max) fail('Invalid enum discriminant table', instruction.span);
+            }
+          }
+        }
         if (instruction.op === 'call') {
           const target = names.get(instruction.callee);
           if (!target) fail(`Unresolved call ${instruction.callee}`, instruction.span);

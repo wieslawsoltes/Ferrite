@@ -10,7 +10,8 @@ import {MirVirtualMachine} from '../runtime/MirVirtualMachine.js';
 
 /**
  * Bounded, declaration-scoped constant evaluation on the production typed MIR.
- * No eval, host callbacks, alternative arithmetic engine, or execution of user IO.
+ * No eval, user callbacks, alternative arithmetic engine, or execution of user IO.
+ * A compiler-owned resolver links lazy enum constants only during const evaluation.
  * Temporary evaluation roots never escape into runtime code or incremental caches.
  */
 export class ConstantEvaluator {
@@ -21,6 +22,7 @@ export class ConstantEvaluator {
     this.analyzer = analyzer; this.index = analyzer.index;
     this.maxSteps = maxSteps; this.maxExpressionSteps = maxExpressionSteps; this.maxExpressions = maxExpressions; this.maxValues = maxValues;
     this.cache = new Map(); this.active = new Set(); this.reports = [];
+    this.running = new Set();
     this.steps = 0; this.evaluations = 0; this.hits = 0; this.sequence = 0;
   }
 
@@ -56,12 +58,12 @@ export class ConstantEvaluator {
     for (const [key, value] of Object.entries(node)) if (!['span', 'loc'].includes(key)) this.reanchor(value, span);
   }
 
-  evaluate(expression, module, expected, origin, key = null, use = origin) {
+  evaluate(expression, module, expected, origin, key = null, use = origin, owner = null) {
     if (key && this.cache.has(key)) { this.hits++; return this.cache.get(key); }
     if (key && this.active.has(key)) throw new Diagnostic('E0391', 'Cycle in constant evaluation', use?.span, [{message: [...this.active, key].join(' → '), span: origin?.span}]);
     if (++this.evaluations > this.maxExpressions || this.active.size >= 128) throw new Diagnostic('F_CONST_BUDGET', 'Constant evaluation expression/dependency budget exceeded', origin?.span);
     const name = `$const$${this.sequence++}`, rootKey = `${name}<>`;
-    const fn = {kind: 'fn', name, localName: name, module, isConst: true, constRoot: true,
+    const fn = {kind: 'fn', name, localName: name, module, isConst: true, constRoot: true, owner,
       generics: [], predicates: [], params: [], returnType: expected, attributes: [], visibility: 'private',
       span: origin?.span ?? expression.span, id: `${expression.id}:const-root`,
       body: {kind: 'block', id: `${expression.id}:const-body`, span: expression.span, body: [], tail: structuredClone(expression)}};
@@ -74,17 +76,26 @@ export class ConstantEvaluator {
       for (const current of reachable) this.validate(current);
       OwnershipAnalyzer.analyze({instances: reachable});
       const functions = MirLowerer.lower({instances: reachable});
-      MirVerifier.verify(functions);
-      const remaining = Math.min(this.maxExpressionSteps, this.maxSteps - this.steps);
+      this.analyzer.discriminants.requireLayouts(functions);
+      MirVerifier.verify(functions, {allowDeferredDiscriminants: true});
+      const remaining = Math.min(this.maxExpressionSteps, this.remainingSteps());
       if (remaining <= 0) throw new Diagnostic('F_CONST_BUDGET', 'Compilation-wide constant evaluation instruction budget exceeded', origin?.span);
-      const machine = new MirVirtualMachine(functions, {entry: instance.key, maxSteps: remaining, maxDepth: 128, maxTrace: 0, maxOutput: 0, overflow: 'checked'});
+      const machine = new MirVirtualMachine(functions, {entry: instance.key, maxSteps: remaining, maxDepth: 128, maxTrace: 0, maxOutput: 0, overflow: 'checked',
+        resolveDiscriminant: (name, tag) => {
+          const result = this.analyzer.discriminants.resolveTag(name, tag);
+          const available = this.remainingSteps();
+          for (const runtime of this.running) runtime.maxSteps = Math.min(runtime.maxSteps, runtime.steps + available);
+          return result;
+        }});
+      this.running.add(machine.runtime);
       try {
         while (!machine.done) machine.step({capture: false});
       } catch (error) {
+        if (error instanceof Diagnostic) throw error;
         throw new Diagnostic(error.code === 'R_BUDGET' || error.code === 'R_STACK' ? 'F_CONST_BUDGET' : 'E0080',
           `Constant evaluation failed: ${error.message}`, error.span ?? origin?.span,
           [{message: 'Required by this constant context', span: origin?.span}]);
-      } finally { this.steps += machine.runtime.steps; }
+      } finally { this.running.delete(machine.runtime); this.steps += machine.runtime.steps; }
       const result = {type: instance.returnType, expression: this.materialize(machine.result, instance.returnType, origin ?? expression)};
       if (key) this.cache.set(key, result);
       if (this.reports.length < 512) this.reports.push({name: key ?? 'const expression', type: result.type, steps: machine.runtime.steps,
@@ -95,6 +106,12 @@ export class ConstantEvaluator {
       this.analyzer.instances.delete(rootKey);
       if (key) this.active.delete(key);
     }
+  }
+
+  remainingSteps() {
+    let used = this.steps;
+    for (const runtime of this.running) used += runtime.steps;
+    return Math.max(0, this.maxSteps - used);
   }
 
   reachable(root) {

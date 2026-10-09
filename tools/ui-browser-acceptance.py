@@ -56,6 +56,9 @@ def run():
             frame.locator('h1').click()
             expect(studio.get_by_label('Element tag', exact=True)).to_have_value('h1')
             studio.get_by_label('New attribute name').fill('data-design')
+            # Reselecting the same source node must preserve unsaved inspector input.
+            studio.locator('.studio-outline [aria-selected="true"]').click()
+            expect(studio.get_by_label('New attribute name')).to_have_value('data-design')
             studio.get_by_label('New attribute value').fill('edited')
             studio.get_by_role('button', name='Add attribute', exact=True).click()
             expect(studio.locator('.studio-status')).to_have_attribute('data-kind', 'ready')

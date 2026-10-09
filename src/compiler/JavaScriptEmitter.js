@@ -8,6 +8,7 @@ export class JavaScriptEmitter {
   constructor(functions, options = {}) {
     this.functions = functions; this.options = options; this.lines = []; this.map = [];
     this.names = new Map(functions.map((fn, index) => [fn.instance, `f${index}`]));
+    this.discriminants = new WeakMap();
   }
   static emit(semantic, options = {}) {
     const functions = Array.isArray(semantic) ? semantic : MirLowerer.lower(semantic);
@@ -31,6 +32,7 @@ export class JavaScriptEmitter {
       case 'borrow': return this.place(i.place);
       case 'binary': return `r.binary(${j(i.operator)},${v(i.left)},${v(i.right)},${j(i.operandType)})`;
       case 'unary': return `r.unary(${j(i.operator)},${v(i.value)},${j(i.type)})`;
+      case 'discriminant': return `r.discriminant(${v(i.value)},${this.discriminants.get(i.table)})`;
       case 'cast': return `r.cast(${v(i.value)},${j(i.targetType)})`;
       case 'aggregate': return `r.aggregate(${j(i.form)},[${i.values.map(v)}],${j(i.names ?? [])},${j(i.tag)})`;
       case 'repeat': return `Array.from({length:${i.count}},()=>r.clone(${v(i.value)}))`;
@@ -47,6 +49,19 @@ export class JavaScriptEmitter {
     this.add('"use strict";');
     this.add(`const FerriteRuntime = ${Runtime.toString()};`);
     this.add(`const r = new FerriteRuntime(${this.json(this.options.runtime ?? {})});`);
+    // A table is immutable module data, not an allocation in a hot loop. Content
+    // deduplication also handles serialized MIR with distinct object identities.
+    const tables = new Map();
+    for (const fn of this.functions) for (const block of fn.blocks) for (const i of block.instructions) {
+      if (i.op !== 'discriminant' || this.discriminants.has(i.table)) continue;
+      const encoded = this.json(i.table);
+      let name = tables.get(encoded);
+      if (name === undefined) {
+        name = `d${tables.size}`; tables.set(encoded, name);
+        this.add(`const ${name}=Object.freeze(${encoded});`);
+      }
+      this.discriminants.set(i.table, name);
+    }
     for (const fn of this.functions) {
       const name = this.names.get(fn.instance), args = fn.params.map((_, i) => `a${i}`);
       this.add(`function ${name}(${args.join(',')}) { // ${fn.instance}`, fn.span);

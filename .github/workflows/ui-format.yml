@@ -1,0 +1,24 @@
+name: Prepare pinned Rust formatter
+on:
+  push:
+    branches: [automation/ui-compatibility-publish]
+    paths: [.github/workflows/ui-format.yml]
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Prepare rustfmt for the same verified native toolchain
+        run: |
+          rustup toolchain install 1.90.0 --profile minimal --component rustfmt
+          mkdir -p inputs
+          SYSROOT=$(rustc +1.90.0 --print sysroot)
+          tar -C "$SYSROOT" -czf inputs/rustfmt.tar.gz bin/rustfmt bin/cargo-fmt
+          sha256sum inputs/rustfmt.tar.gz > inputs/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-rustfmt
+          path: inputs/
+          retention-days: 3

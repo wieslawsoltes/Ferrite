@@ -39,7 +39,7 @@ A wildcard or Copy-only projection does not consume an existing non-Copy contain
 
 Scalar stores **through** mutable references work. Transferring reference-carrying values **as** tuple/array/record assignment leaves is explicitly diagnosed as `F_ASSIGN_REFERENCE`, including references nested in aggregates or captured by closures. Such transfers need projection-sensitive loan/provenance tracking; silently accepting them would miss lifetime and aliasing errors. Static string values (`&str`) remain supported. Use supported individual assignments or the installed native Cargo backend for unsupported forms.
 
-Tuple-struct/enum-constructor assignees, destructuring slices, `ref` binding patterns, user-defined `Drop` semantics and general backwards type inference are not added here. Locals must already be declared/initialized under the existing browser compiler rules. Explicit numeric annotations may be necessary where the compiler would otherwise default an earlier local to `i32`. The feature does not claim complete Rust pattern, lifetime or standard-library parity.
+Destructuring slices, `ref` binding patterns, user-defined `Drop` semantics and general backwards type inference are not added here. Locals must already be declared/initialized under the existing browser compiler rules. Explicit numeric annotations may be necessary where the compiler would otherwise default an earlier local to `i32`. The feature does not claim complete Rust pattern, lifetime or standard-library parity.
 
 Assignee nesting is bounded at 128 and assignee nodes at 16,384. Source spans are retained on each leaf store; cached typed trees are immutable snapshots with fresh copies for readers.
 
@@ -65,3 +65,5 @@ supported.
 A bare never-typed index (`array[return value]`) is rejected rather than
 assuming that `!` implements indexing. A conditional index with a typed
 nondiverging branch can still return early, and that control flow is preserved.
+
+Tuple-struct and single-variant tuple-enum constructor assignees are now supported by the follow-on [nominal constructor implementation](nominal-constructors.md). Multi-variant enum assignees remain rejected as refutable, rather than interpreted as runtime-checked assignments.

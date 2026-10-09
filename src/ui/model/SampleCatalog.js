@@ -217,6 +217,28 @@ fn main() {
     let _future = future_value();
 }
 `}},
+    {name:'Nominal values · tuple/unit structs & assignments',expected:'port=443 swap=2/1 event=9\n',files:{
+      'Cargo.toml':manifest('nominal-values'),
+      'src/main.rs':`#[derive(Clone, Copy)]
+struct Port(u16);
+struct Ready;
+struct Pair<T>(T, T);
+enum Event { Value(i32) }
+
+const fn secure_port() -> Port { Port(443) }
+const HTTPS: Port = secure_port();
+
+fn main() {
+    let Ready = Ready;
+    let Port(port) = HTTPS;
+    let mut left = 1;
+    let mut right = 2;
+    Pair(left, right) = Pair(right, left);
+    let mut event = 0;
+    Event::Value(event) = Event::Value(9);
+    println!("port={} swap={}/{} event={}", port, left, right, event);
+}
+`}},
     ...Object.entries(sampleProjects).map(([name,files])=>({name,files,error:name==='Compiler diagnostic'?'E0308':null}))
   ];
 }

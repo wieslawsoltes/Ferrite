@@ -162,7 +162,9 @@ export class ConstantEvaluator {
     const fieldType = t => this.index.type(T.substitute(t, substitution), shape.module);
     if (structure) return {...node, kind: 'structLiteral', name: shape.name,
       fields: shape.fields.map(field => ({name: field.name, value: child(value[field.name], fieldType(field.type), field.name)}))};
-    const variant = shape.variants.find(v => `${shape.name}::${v.name}` === value.tag);
+    const prefix = shape.name + '::';
+    const variant = typeof value.tag === 'string' && value.tag.startsWith(prefix)
+      ? this.index.variant(shape, value.tag.slice(prefix.length)) : null;
     if (!variant) throw new Diagnostic('F_CONST_VALUE', 'Invalid evaluated enum discriminant', origin?.span);
     return {...node, kind: 'call', variant: value.tag, args: variant.fields.map((t, i) => child(value.values[i], fieldType(t), i))};
   }

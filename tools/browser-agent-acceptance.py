@@ -105,7 +105,7 @@ def run():
             if MEMORY:
                 page.expose_function('ferriteTestDigest',lambda value:list(hashlib.sha256(bytes(value)).digest()))
                 page.expose_function('ferriteTestProvider',fixture.response)
-                page.evaluate('''() => {
+                page.evaluate(r'''() => {
                   if(!crypto.subtle)Object.defineProperty(crypto,'subtle',{value:{digest:async(name,bytes)=>{if(name!=='SHA-256')throw Error('Unexpected test algorithm');return new Uint8Array(await window.ferriteTestDigest([...new Uint8Array(bytes)])).buffer;}}});
                   const native=window.fetch;window.fetch=async(url,options={})=>{if(/^https:\/\/(api.openai.com|api.anthropic.com|generativelanguage.googleapis.com)\//.test(String(url))){options.signal?.throwIfAborted();const result=await window.ferriteTestProvider(String(url),{method:options.method,headers:options.headers,body:options.body});options.signal?.throwIfAborted();return new Response(result.text,{status:result.status,headers:{'content-type':result.contentType}});}return native(url,options);};
                 }''')
@@ -135,7 +135,10 @@ def run():
             page.locator('[data-agent-tab="followups"]').click();page.get_by_role('textbox',name='Queued follow-up',exact=True).fill('Describe next steps without changing source.');page.get_by_role('button',name='Queue message',exact=True).click()
             expect(page.locator('.agent-followup')).to_have_count(1);before=len(fixture.calls)
             page.get_by_role('button',name='Load into composer',exact=True).click();expect(page.locator('#agent-prompt')).to_have_value('Describe next steps without changing source.');assert len(fixture.calls)==before
-            fixture.mode='answer';page.locator('#agent-run').click();expect(page.locator('.agent-badge')).to_have_text('completed')
+            fixture.mode='answer';page.locator('#agent-run').click()
+            # A previous run already has a completed badge. Await this response, not stale UI.
+            expect(page.locator('#agent-chat')).to_contain_text('Explicit follow-up completed in the browser.')
+            expect(page.locator('.agent-badge')).to_have_text('completed')
             page.locator('[data-agent-tab="context"]').click();page.get_by_role('button',name='Compact now',exact=True).click();expect(page.locator('[data-agent-content="context"] .agent-json')).to_contain_text('Preserved task')
             passed('explicit queued follow-up with no automatic send, continued session and model-assisted compaction')
             page.locator('[data-tool="terminal"]').click()

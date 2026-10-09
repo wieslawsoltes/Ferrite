@@ -34,6 +34,10 @@ jobs:
               raise SystemExit('Invalid publication payload paths')
           encoded = ''.join(Path(p).read_text().strip() for p in chunks)
           (evidence / 'transport.b64').write_text(encoded)
+          for correction in manifest.get('repairs', []):
+              if not correction['old'] or encoded.count(correction['old']) != 1:
+                  raise SystemExit('Transport correction must match exactly once')
+              encoded = encoded.replace(correction['old'], correction['new'], 1)
           data = base64.b64decode(encoded, validate=True)
           if hashlib.sha256(data).hexdigest() != manifest['sha256']:
               raise SystemExit('Publication digest mismatch')

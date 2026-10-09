@@ -1,0 +1,138 @@
+diff --git a/docs/generic-traits.md b/docs/generic-traits.md
+index 8499aa2..6c9e256 100644
+--- a/docs/generic-traits.md
++++ b/docs/generic-traits.md
+@@ -39,2 +39,9 @@ Omitted method bounds retain the trait contract when a method is instantiated.
+ 
++Trait `Self` is not implicitly `Sized`. Default bodies with by-value `Self`
++parameters or results require `where Self: Sized`; required methods can keep
++abstract by-value signatures. Checked `Sized` obligations apply to supported
++concrete primitives and aggregates. A user trait named `Sized` is not the
++builtin marker, and the `core::marker::Sized` path retains that distinction.
++This does not add dynamically sized value layout or `?Sized` parameters.
++
+ Defaults are cloned into implementation-specific function descriptors. Default
+@@ -43,4 +50,5 @@ trait methods before similarly named inherent methods on the concrete type.
+ Implementation and default-method type parameters cannot accidentally capture
+-one another: default type syntax is alpha-renamed, not string literals or local
+-value/field names. Ordinary external calls retain inherent-method precedence.
++one another: default type syntax and generic associated-path prefixes are
++alpha-renamed, not string literals or local value/field names. Substituted
++primitive/structural implementors support associated calls and method pointers. Ordinary external calls retain inherent-method precedence.
+ 
+diff --git a/src/compiler/ImplObligations.js b/src/compiler/ImplObligations.js
+index 0413c69..fed3ab3 100644
+--- a/src/compiler/ImplObligations.js
++++ b/src/compiler/ImplObligations.js
+@@ -30,3 +30,3 @@ export class ImplObligations {
+     const name=raw.split('::').at(-1);
+-    if(builtin.has(name) && (raw===name || /^(std|core)::/.test(raw)))return name;
++    if(builtin.has(name) && (raw===name || /^(std|core)::/.test(raw)))return name==='Sized'?'core::marker::Sized':name;
+     if(/^(Fn|FnMut|FnOnce)\(/.test(raw))return this.normalize(raw,node);
+@@ -53,5 +53,14 @@ export class ImplObligations {
+     if(this.assumptions.get(type)?.has(bound))return true;
+-    // All parsed type parameters are implicitly Sized; ?Sized is not parsed.
++    // Ordinary parameters are implicitly Sized, unlike Self in a trait.
+     if(this.index.traits.has(bound))return this.symbolic(type)?this.a.implementations.traits.prove(type,bound,this,depth):this.a.hasBound(type,bound);
+-    if(bound==='Sized')return type!=='str';
++    if(bound==='Sized'||bound==='core::marker::Sized'||bound==='std::marker::Sized') {
++      if(this.parameters.has(type))return !(type==='Self'&&this.declaration.unsizedSelf);
++      if(T.reference(type)||T.function(type))return true;
++      const tuple=T.tuple(type),array=T.array(type);
++      if(tuple||array)return (tuple??[array.element]).every(t=>this.prove(t,'core::marker::Sized',depth+1));
++      const {name,args}=T.application(type);
++      if(name==='Vec'||this.index.structs.has(name)||this.index.enums.has(name))
++        return args.every(t=>this.prove(t,'core::marker::Sized',depth+1));
++      return this.a.hasTrait(type,'core::marker::Sized');
++    }
+     if(!this.symbolic(type))return this.a.hasTrait(type,bound);
+@@ -89,2 +98,4 @@ export class ImplObligations {
+     if(!shape)return;
++    for(const argument of args)if(!this.prove(argument,'core::marker::Sized'))
++      throw new Diagnostic('E0277',`Type argument ${argument} must be Sized`,node.span??this.declaration.span);
+     const substitution=new Map(shape.generics.map((g,i)=>[g.name,args[i]]));
+diff --git a/src/compiler/ImplementationResolver.js b/src/compiler/ImplementationResolver.js
+index 491f777..f30a6be 100644
+--- a/src/compiler/ImplementationResolver.js
++++ b/src/compiler/ImplementationResolver.js
+@@ -156,3 +156,10 @@ export class ImplementationResolver {
+       this.index.typeResolver.find(this.index.enums, app.name, module, node) ?? this.index.typeResolver.find(this.index.aliases, app.name, module, node);
+-    if (!declaration) return null;
++    if (!declaration) {
++      // A substituted method binder can name a primitive/structural implementor,
++      // not just an item in the nominal declaration tables.
++      if(!T.numeric(owner)&&!['bool','char','str','String'].includes(owner)&&
++        !T.reference(owner)&&!T.tuple(owner)&&!T.array(owner)&&!T.function(owner))return null;
++      if(node.ownerTypeArguments?.length)throw new Diagnostic('E0107','This implementing type has no type arguments',node.span);
++      return this.lookup(owner,method,module,node,context.instance.fn);
++    }
+     const explicit = node.ownerTypeArguments?.map(type => this.a.normalize(type, context, node));
+diff --git a/src/compiler/SemanticAnalyzer.js b/src/compiler/SemanticAnalyzer.js
+index e1b3677..f3bdbc4 100644
+--- a/src/compiler/SemanticAnalyzer.js
++++ b/src/compiler/SemanticAnalyzer.js
+@@ -66,2 +66,10 @@ export class SemanticAnalyzer {
+     const closure=this.closures.get(type);
++    if(['Sized','core::marker::Sized','std::marker::Sized'].includes(bound)) {
++      if(T.reference(type)||T.function(type)||this.functionValues.get(type)||closure)return true;
++      if(T.numeric(type)||['bool','char','String','!'].includes(type))return true;
++      const tuple=T.tuple(type),array=T.array(type);
++      if(tuple||array)return (tuple??[array.element]).every(t=>this.hasTrait(t,'Sized',depth+1));
++      const {name,args}=T.application(type);
++      return (name==='Vec'||this.index.structs.has(name)||this.index.enums.has(name))&&args.every(t=>this.hasTrait(t,'Sized',depth+1));
++    }
+     if(ClosureAnalyzer.bound(bound))return (this.functionValues.get(type)||this.functionValues.pointer(type))?this.functionValues.satisfies(type,bound):this.closures.satisfies(type,bound);
+diff --git a/src/compiler/TraitImplementationResolver.js b/src/compiler/TraitImplementationResolver.js
+index 68ddcce..6a1383c 100644
+--- a/src/compiler/TraitImplementationResolver.js
++++ b/src/compiler/TraitImplementationResolver.js
+@@ -38,3 +38,3 @@ export class TraitImplementationResolver {
+         if(parameters.size!==method.generics.length+1)throw new Diagnostic('E0403','Duplicate trait method parameter',method.span);
+-        const declaration={...method,module:trait.module,generics:[{name:'Self',bounds:[trait.name]},...method.generics]};
++        const declaration={...method,module:trait.module,unsizedSelf:true,generics:[{name:'Self',bounds:[trait.name]},...method.generics]};
+         const requirements=new ImplObligations(this.a,{target:'Self',impl:declaration},declaration);
+@@ -46,2 +46,6 @@ export class TraitImplementationResolver {
+           requirements.validate(type,method);
++          // Required methods may mention unsized Self by value, but a default
++          // body must have a Sized proof before materializing parameters/results.
++          if(method.body && !requirements.prove(type,'core::marker::Sized'))
++            throw new Diagnostic('E0277',`Default method ${method.localName} needs a Sized bound for ${type}`,method.span);
+         }
+@@ -136,3 +140,8 @@ export class TraitImplementationResolver {
+         if(typeof value==='string' && ['type','returnType','target','annotation','to'].includes(key))node[key]=rewrite(value);
+-        else if(typeof value==='string' && key==='name' && value.includes('::') && rename.has(value.split('::')[0]))node[key]=rewrite(value);
++        else if(typeof value==='string' && key==='name' && value.includes('::') && rename.has(value.split('::')[0])) {
++          // TypeSystem.substitute intentionally treats qualified names atomically.
++          // A generic associated path instead needs only its binder prefix changed.
++          const separator=value.indexOf('::');
++          node[key]=rename.get(value.slice(0,separator))+value.slice(separator);
++        }
+         else if(Array.isArray(value) && ['bounds','typeArguments','ownerTypeArguments'].includes(key))node[key]=value.map(rewrite);
+diff --git a/tests/fixtures/generic-traits.js b/tests/fixtures/generic-traits.js
+index 6ff0982..988a3a3 100644
+--- a/tests/fixtures/generic-traits.js
++++ b/tests/fixtures/generic-traits.js
+@@ -59,3 +59,3 @@ genericTraitCases.push(
+  ['default binder renaming does not change strings or fields','trait Identity{fn identity<T>(&self,value:T)->T{println!("T::value");value}}struct C<T>{value:T}impl<T>Identity for C<T>{}fn main(){println!("{}",C{value:true}.identity(34));}','T::value\n34\n'],
+- ['default contextual Self construction','trait Create{fn create()->Self;fn other()->Self{Self::create()}}struct C<T>(T);impl Create for C<i32>{fn create()->Self{Self(35)}}fn main(){println!("{}",C::other().0);}','35\n'],
++ ['default contextual Self construction','trait Create{fn create()->Self;fn other()->Self where Self:Sized{Self::create()}}struct C<T>(T);impl Create for C<i32>{fn create()->Self{Self(35)}}fn main(){println!("{}",C::other().0);}','35\n'],
+  ['multiple traits selected by local scope','mod one{pub trait Value{fn value(&self)->i32;}}mod two{pub trait Value{fn value(&self)->i32;}}struct C;impl one::Value for C{fn value(&self)->i32{36}}impl two::Value for C{fn value(&self)->i32{37}}use one::Value;fn main(){println!("{}",C.value());}','36\n'],
+@@ -76 +76,18 @@ genericTraitCompileFailCases.push(
+ );
++
++// Native-oracle regressions: never reclassify an invalid Rust default as a success.
++genericTraitCases.push(
++ ['default method binder in associated call','trait Factory{fn make()->Self;}impl Factory for i32{fn make()->Self{41}}trait Make{fn make_value<T:Factory>(&self)->T{T::make()}}struct Cell<T>(T);impl<T>Make for Cell<T>{}fn main(){println!("{}",Cell(true).make_value::<i32>());}','41\n'],
++ ['default method binder in associated pointer','trait Factory{fn make()->Self;}impl Factory for i32{fn make()->Self{42}}trait Make{fn make_value<T:Factory>(&self)->T{let f:fn()->T=T::make;f()}}struct Cell<T>(T);impl<T>Make for Cell<T>{}fn main(){println!("{}",Cell(true).make_value::<i32>());}','42\n'],
++ ['explicit Sized bound accepts scalars and aggregates','fn accept<T:Sized>(value:T)->T{value}struct Cell(i32);fn main(){let c=accept(Cell(43));println!("{} {}",c.0,accept([1,2])[1]);}','43 2\n'],
++ ['default method Sized receiver','trait Take{fn take(self)->Self where Self:Sized{self}}struct Cell<T>(T);impl<T>Take for Cell<T>{}fn main(){println!("{}",Cell(44).take().0);}','44\n'],
++ ['required method can return Self without Sized','trait Make{fn make()->Self;}struct Cell;impl Make for Cell{fn make()->Self{Cell}}fn main(){let _:Cell=Cell::make();}',''],
++ ['default shared receiver does not require Sized','trait Use{fn run(&self)->i32{45}}struct Cell;impl Use for Cell{}fn main(){println!("{}",Cell.run());}','45\n']
++);
++genericTraitCompileFailCases.push(
++ ['default return Self needs Sized even when unused','trait Create{fn create()->Self;fn other()->Self{Self::create()}}fn main(){}','E0277'],
++ ['default tuple Self needs Sized','trait Create{fn create()->Self;fn other()->(Self,){(Self::create(),)}}fn main(){}','E0277'],
++ ['default owned Self parameter needs Sized','trait Use{fn run(self){}}fn main(){}','E0277'],
++ ['default additional Self parameter needs Sized','trait Use{fn run(&self,other:Self){}}fn main(){}','E0277'],
++ ['a local Sized trait does not prove builtin Sized','trait Sized{}trait Use{fn run(self) where Self:Sized{}}fn main(){}','E0277']
++);

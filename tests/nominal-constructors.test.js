@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {compile, tokenize} from '../src/engine.js';
 import {Parser} from '../src/compiler/Parser.js';
-import {CompilerSession} from '../src/project/CompilerSession.js';
 import {MirVirtualMachine} from '../src/runtime/MirVirtualMachine.js';
 import {WebAssemblyRuntime} from '../src/runtime/WebAssemblyRuntime.js';
 import {nominalCases, nominalCompileFailCases, nominalPanicCases} from './fixtures/nominal-constructors.js';

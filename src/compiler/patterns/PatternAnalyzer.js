@@ -124,7 +124,7 @@ export class PatternAnalyzer {
         const substitution = new Map(shape.generics.map((g, i) => [g.name, app.args[i]]));
         const fields = new Set();
         for (const field of pattern.fields) {
-          const definition = shape.fields.find(f => f.name === field.name);
+          const definition = this.analyzer.index.field(shape, field.name);
           if (!definition || fields.has(field.name)) throw new Diagnostic('E0025', `Unknown or duplicate field ${field.name}`, pattern.span);
           fields.add(field.name);
           this.analyzer.index.fieldVisible(shape, definition, context.instance.fn.module, field.pattern);

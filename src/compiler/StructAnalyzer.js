@@ -39,7 +39,7 @@ export class StructAnalyzer {
       throw new Diagnostic('E0063', `Incorrect number of fields for ${shape.name}`, node.span);
     const seen = new Set();
     for (const field of node.fields) {
-      const definition = shape.fields.find(entry => entry.name === field.name);
+      const definition = this.index.field(shape, field.name);
       if (!definition || seen.has(field.name)) throw new Diagnostic('E0062', `Unknown or duplicate field ${field.name}`, node.span);
       seen.add(field.name); this.index.fieldVisible(shape, definition, module, field.value);
       const formal = this.index.type(T.substitute(definition.type, substitution), shape.module, shape.name, new Set(substitution.keys()), node);

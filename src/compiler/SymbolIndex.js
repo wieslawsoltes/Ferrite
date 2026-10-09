@@ -8,6 +8,8 @@ export class SymbolIndex {
     this.functions = new Map(); this.structs = new Map(); this.enums = new Map();
     this.aliases = new Map(); this.constants = new Map(); this.traits = new Map(); this.imports = new Map(); this.impls = [];
     this.symbols = []; this.moduleRoots = new Map(); this.moduleVisibility = new Map();
+    // Side tables are declaration-index-local, never attached to reusable AST/HIR.
+    this.fieldIndexes = new WeakMap(); this.variantIndexes = new WeakMap(); this.structConstructors = new WeakMap();
     this.enums.set('Option', {kind: 'enum', name: 'Option', generics: [{name: 'T', bounds: []}],
       variants: [{name: 'Some', fields: ['T']}, {name: 'None', fields: []}], attributes: []});
     this.enums.set('Result', {kind: 'enum', name: 'Result', generics: [{name: 'T', bounds: []}, {name: 'E', bounds: []}],
@@ -94,14 +96,19 @@ export class SymbolIndex {
       const structure = this.structs.get(candidate);
       if (structure && ['tuple', 'unit'].includes(structure.form)) {
         this.visible(structure, module, node);
-        return {owner: structure, form: structure.form, kind: 'struct', tag: structure.name,
-          variant: {name: structure.name, fields: structure.fields.map(field => field.type)}};
+        let descriptor = this.structConstructors.get(structure);
+        if (!descriptor) {
+          descriptor = Object.freeze({owner: structure, form: structure.form, kind: 'struct', tag: structure.name,
+            variant: Object.freeze({name: structure.name, fields: Object.freeze(structure.fields.map(field => field.type))})});
+          this.structConstructors.set(structure, descriptor);
+        }
+        return descriptor;
       }
       const parts = candidate.split('::'), variantName = parts.pop(), typeName = parts.join('::');
       const alias = this.aliases.has(typeName) ? this.type(typeName, module) : null;
       const application = alias ? T.application(alias) : null;
       const owner = this.enums.get(application?.name ?? typeName);
-      const variant = owner?.variants.find(v => v.name === variantName);
+      const variant = this.variant(owner, variantName);
       if (variant) {
         this.visible(owner, module, node);
         return {owner, variant, form: variant.form ?? (variant.fields.length ? 'tuple' : 'unit'),
@@ -110,6 +117,21 @@ export class SymbolIndex {
     }
     return null;
   }
+  /** Resolve a member once in O(width), then in expected O(1) per use. Retain
+   * first-match semantics even for a malformed declaration awaiting diagnostics. */
+  member(table, owner, entries, name) {
+    if (!owner) return undefined;
+    let members = table.get(owner);
+    if (!members) {
+      members = new Map();
+      for (const entry of entries) if (!members.has(entry.name)) members.set(entry.name, entry);
+      table.set(owner, members);
+    }
+    return members.get(name);
+  }
+  field(shape, name) { return this.member(this.fieldIndexes, shape, shape?.fields, name); }
+  variant(shape, name) { return this.member(this.variantIndexes, shape, shape?.variants, name); }
+
   visible(item, module = '', node = null) {
     if (item.visibility === 'private' && item.module && module !== item.module && !module.startsWith(item.module + '::'))
       throw new Diagnostic('E0603', `Item '${item.name}' is private`, node?.span ?? item.span);

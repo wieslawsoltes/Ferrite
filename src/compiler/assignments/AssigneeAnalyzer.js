@@ -112,7 +112,7 @@ export class AssigneeAnalyzer {
         supplied[i] ? this.a.normalize(supplied[i], this.ctx, node) : null]));
       const seen = new Set();
       for (const field of node.fields) {
-        const definition = shape.fields.find(entry => entry.name === field.name);
+        const definition = this.a.index.field(shape, field.name);
         if (!definition || seen.has(field.name)) throw new Diagnostic('E0062', `Unknown or duplicate field ${field.name}`, field.value.span);
         seen.add(field.name);
         this.a.index.fieldVisible(shape, definition, module, field.value);
@@ -180,7 +180,7 @@ export class AssigneeAnalyzer {
       const app = T.application(actual), shape = this.a.index.structs.get(app.name);
       const substitution = new Map(shape.generics.map((g, i) => [g.name, app.args[i]]));
       for (const field of node.fields) {
-        const definition = shape.fields.find(entry => entry.name === field.name);
+        const definition = this.a.index.field(shape, field.name);
         this.check(field.value, this.a.index.type(T.substitute(definition.type, substitution), shape.module));
       }
       return;

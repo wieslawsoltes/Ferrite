@@ -207,7 +207,7 @@ export class SemanticAnalyzer {
           if (!type || !/^\d+$/.test(node.field)) throw new Diagnostic('E0609', `Unknown tuple field ${node.field}`, node.span);
         } else {
           const application = T.application(base), shape = this.index.structs.get(application.name);
-          const field = shape?.fields.find(f => f.name === node.field);
+          const field = this.index.field(shape, node.field);
           if (!field) throw new Diagnostic('E0609', `Unknown field ${base}.${node.field}`, node.span);
           this.index.fieldVisible(shape, field, ctx.instance.fn.module, node);
           type = this.index.type(T.substitute(field.type, new Map(shape.generics.map((g, i) => [g.name, application.args[i]]))), shape.module);

@@ -24,12 +24,20 @@ jobs:
         id: publish
         run: |
           python3 - <<'PY'
-          import base64, gzip, hashlib, json, os, subprocess, tempfile
+          import base64, gzip, hashlib, json, os, re, subprocess, tempfile
           from pathlib import Path
           evidence = Path(os.environ['RUNNER_TEMP']) / 'compiler-continuation'
           evidence.mkdir()
           manifest = json.loads(Path('.github/continuation-payload.json').read_text())
-          compressed = base64.b64decode(manifest['data'], validate=True)
+          if 'chunks' in manifest:
+              chunks = manifest['chunks']
+              if not 1 <= len(chunks) <= 64 or any(not re.fullmatch(r'\.github/continuation-[a-z0-9-]+\.b64', p) for p in chunks):
+                  raise SystemExit('Invalid publication chunks')
+              encoded = ''.join(Path(p).read_text().strip() for p in chunks)
+          else:
+              encoded = manifest['data']
+          (evidence / 'transport.b64').write_text(encoded)
+          compressed = base64.b64decode(encoded, validate=True)
           if hashlib.sha256(compressed).hexdigest() != manifest['sha256']:
               raise SystemExit('Publication digest mismatch')
           payload = json.loads(gzip.decompress(compressed))

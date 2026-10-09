@@ -1,0 +1,78 @@
+name: Refresh PR11 generated bundles
+on:
+  push:
+    branches: [build/pr11-generated-bundles]
+    paths: [.github/workflows/refresh-pr11-bundles.yml]
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: ferrite-pr11-generated-bundles
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.repository == 'wieslawsoltes/Ferrite' && github.actor == 'wieslawsoltes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 68cb567fbbe831c0282ed703b390957090155e2e
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Require the exact committed source and unchanged target branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 68cb567fbbe831c0282ed703b390957090155e2e
+          test "$(git rev-parse HEAD^{tree})" = 126abdd63d81a20febecf23610bc7f5e408873f6
+          test "$(git ls-remote origin refs/heads/feat/ui-compatibility | cut -f1)" = 68cb567fbbe831c0282ed703b390957090155e2e
+      - name: Build using the repository's existing deterministic generators
+        run: |
+          npm run build:workers
+          npm run build:sdk
+      - name: Verify generated files and the complete recovered source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum --check <<'HASHES'
+          782fbdc96f5ccddcd882239f805287dd7928aeb1ef5d6aaf01b2e84f16fa53c6  src/sdk/ferrite.bundle.js
+          c4a1dd196f4e447e4e3d0c82aebb01160db93da874e5b5daf274046a804c5da5  src/ui/workers/agent-compiler-worker.bundle.js
+          5cb73f420b9708d4d23e4e9ad8315990f4195a6510f65abc3b95bd9f8c391036  src/ui/workers/compile-worker.bundle.js
+          HASHES
+          git add -- src/sdk/ferrite.bundle.js src/ui/workers/agent-compiler-worker.bundle.js src/ui/workers/compile-worker.bundle.js
+          git diff --exit-code
+          test "$(git write-tree)" = 9e9c8758d09cb2c8cf6aed173e9e7be614c01d9f
+      - name: Validate the generated checkout before committing
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/bundle-refresh
+          npm run check 2>&1 | tee artifacts/bundle-refresh/check.log
+          npm test 2>&1 | tee artifacts/bundle-refresh/tests.log
+      - name: Commit only generated bundles and fast-forward the PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git write-tree)" = 9e9c8758d09cb2c8cf6aed173e9e7be614c01d9f
+          test "$(git ls-remote origin refs/heads/feat/ui-compatibility | cut -f1)" = 68cb567fbbe831c0282ed703b390957090155e2e
+          git config user.name 'Wiesław Šoltés'
+          git config user.email 'wieslawsoltes@users.noreply.github.com'
+          git commit -m 'build(ui): regenerate compiler workers and standalone SDK for main integration'
+          git push origin HEAD:refs/heads/feat/ui-compatibility
+          git rev-parse HEAD > artifacts/bundle-refresh/commit.txt
+          git rev-parse HEAD^{tree} > artifacts/bundle-refresh/tree.txt
+          git archive --format=zip HEAD -o artifacts/bundle-refresh/checkout.zip
+          printf 'Committed generated bundles as `%s`; exact tree `%s`.\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" >> "$GITHUB_STEP_SUMMARY"
+      - name: Run the unchanged full compiler and IDE validation workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run test.yml --ref feat/ui-compatibility
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr11-bundle-refresh
+          path: artifacts/bundle-refresh/
+          retention-days: 7

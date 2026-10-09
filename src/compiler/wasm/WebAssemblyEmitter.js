@@ -1,3 +1,4 @@
+import {LiteralValue} from '../LiteralValue.js';
 import {WasmBinaryWriter as Writer} from './WasmBinaryWriter.js';
 import {MirVerifier} from '../MirVerifier.js';
 
@@ -33,7 +34,7 @@ export class WebAssemblyEmitter {
   }
   descriptor(i) {
     switch (i.op) {
-      case 'const': return [{op:'literal', value:i.value, type:i.type},0];
+      case 'const': return [{op:'literal', value:LiteralValue.encode(i.value), type:i.type},0];
       case 'read': case 'borrow': return [{op:i.op,place:this.place(i.place),copy:!!i.copy},1+i.place.path.filter(p=>p.kind==='index').length];
       case 'write': return [{op:'write',place:this.place(i.place)},2+i.place.path.filter(p=>p.kind==='index').length,null];
       case 'binary': return [{op:'binary',operator:i.operator,type:i.operandType},2];

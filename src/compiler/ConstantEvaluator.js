@@ -1,3 +1,4 @@
+import {LiteralValue} from './LiteralValue.js';
 import {Diagnostic} from './Diagnostic.js';
 import {TypeSystem as T} from './TypeSystem.js';
 import {Lexer} from './Lexer.js';
@@ -141,12 +142,12 @@ export class ConstantEvaluator {
   materialize(value, type, origin, path = 'value', budget = {count: 0}) {
     if (++budget.count > this.maxValues) throw new Diagnostic('F_CONST_BUDGET', 'Constant value exceeds the materialization budget', origin?.span);
     const node = {kind: 'literal', id: `${origin?.id}:const:${path}`, span: origin?.span, type, copy: this.analyzer.hasTrait(type, 'Copy')};
-    if (T.numeric(type) || ['bool', 'char', '&str', '()'].includes(type)) return {...node, value: typeof value === 'bigint' ? String(value) : value};
+    if (T.numeric(type) || ['bool', 'char', '&str', '()'].includes(type)) return {...node, value: LiteralValue.encode(value)};
     const child = (v, t, key) => this.materialize(v, t, origin, `${path}.${key}`, budget);
     const array = T.array(type);
     if (array) {
       if (value.length > this.maxValues) throw new Diagnostic('F_CONST_BUDGET', 'Constant array exceeds the materialization budget', origin?.span);
-      if (value.length > 1 && value.every(v => v === value[0]) && (T.numeric(array.element) || ['bool', 'char', '&str'].includes(array.element))) {
+      if (value.length > 1 && value.every(v => Object.is(v, value[0])) && (T.numeric(array.element) || ['bool', 'char', '&str'].includes(array.element))) {
         return {...node, kind: 'repeatArray', length: value.length, value: child(value[0], array.element, 0)};
       }
       return {...node, kind: 'array', items: value.map((v, i) => child(v, array.element, i))};

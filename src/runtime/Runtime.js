@@ -98,6 +98,18 @@ export class Runtime {
     for (const key of Object.keys(value)) result[key] = this.clone(value[key], depth + 1);
     return result;
   }
+  equal(a, b, depth = 0) {
+    if (depth > 128) this.fail('Equality nesting limit exceeded', 'R_COMPARE');
+    if (a?.__ref) return this.equal(this.read(a), b?.__ref ? this.read(b) : b, depth + 1);
+    if (b?.__ref) return this.equal(a, this.read(b), depth + 1);
+    // Do not shortcut aggregate identity: even an array compared with itself
+    // must compare NaN elements as unequal. +0 and -0 compare equal in Rust.
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return a === b;
+    if (Array.isArray(a) !== Array.isArray(b)) return false;
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length && keys.every(key =>
+      Object.hasOwn(b, key) && this.equal(a[key], b[key], depth + 1));
+  }
   cells(count) { return Array.from({length: count}, () => ({value: undefined})); }
   reference(cells, slot, path = []) { return {__ref: true, cell: cells[slot], path}; }
   resolve(reference, depth = 0) {
@@ -168,7 +180,7 @@ export class Runtime {
       case 'format': return this.format(args, format);
       case 'panic': return this.fail(format ? this.format(args, format) : 'explicit panic', 'R_PANIC');
       case 'assert': if (!args[0]) this.fail('assertion failed', 'R_ASSERT'); return null;
-      case 'assert_eq': if (this.debug(args[0]) !== this.debug(args[1])) this.fail(`assertion failed: ${this.debug(args[0])} != ${this.debug(args[1])}`, 'R_ASSERT'); return null;
+      case 'assert_eq': if (!this.equal(args[0], args[1])) this.fail(`assertion failed: ${this.debug(args[0])} != ${this.debug(args[1])}`, 'R_ASSERT'); return null;
       case 'dbg': this.append(this.debug(args[0]) + '\n'); return args[0];
       case 'vec': return args;
       case 'Vec::new': return [];

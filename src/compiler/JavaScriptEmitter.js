@@ -1,3 +1,4 @@
+import {LiteralValue} from './LiteralValue.js';
 import {Runtime} from '../runtime/Runtime.js';
 import {MirLowerer} from './MirLowerer.js';
 import {MirVerifier} from './MirVerifier.js';
@@ -25,7 +26,7 @@ export class JavaScriptEmitter {
   expression(i) {
     const v = slot => this.value(slot), j = value => this.json(value);
     switch (i.op) {
-      case 'const': return `r.literal(${j(i.value)},${j(i.type)})`;
+      case 'const': return `r.literal(${j(LiteralValue.encode(i.value))},${j(i.type)})`;
       case 'read': return `r.read(${this.place(i.place)},${!!i.copy})`;
       case 'borrow': return this.place(i.place);
       case 'binary': return `r.binary(${j(i.operator)},${v(i.left)},${v(i.right)},${j(i.operandType)})`;

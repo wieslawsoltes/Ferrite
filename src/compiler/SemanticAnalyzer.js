@@ -151,7 +151,8 @@ export class SemanticAnalyzer {
       case 'closure': type=this.closures.create(node,ctx);break;
       case 'literal': {
         type = node.type;
-        if (type === '{integer}') type = expected && T.numeric(expected) ? expected : 'i32';
+        if (type === '{integer}') type = expected && T.integer(expected) ? expected : 'i32';
+        if (type === 'f64' && node.suffix == null && expected === 'f32') type = 'f32';
         if (T.integer(type)) {
           const value = BigInt(node.value);
           const bits = type.endsWith('size') ? 32 : Number(type.slice(1));

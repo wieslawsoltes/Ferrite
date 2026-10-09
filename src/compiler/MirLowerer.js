@@ -1,3 +1,4 @@
+import {LiteralValue} from './LiteralValue.js';
 import {PatternLowerer} from './patterns/PatternLowerer.js';
 /** Typed register MIR with explicit control flow; this IR is executed, not illustrative AST JSON. */
 export class MirLowerer {
@@ -22,7 +23,7 @@ export class MirLowerer {
       ...data, span: node?.span, sourceId: node?.id});
     return dest;
   }
-  literal(value, type, node) { return this.emit('const', {value}, node, type); }
+  literal(value, type, node) { return this.emit('const', {value: LiteralValue.encode(value)}, node, type); }
   unit(node) { return this.literal(null, '()', node); }
   terminate(kind, data, node) {
     if (this.current) this.current.terminator = {kind, ...data, span: node?.span};

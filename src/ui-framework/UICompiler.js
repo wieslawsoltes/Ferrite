@@ -13,18 +13,21 @@ const scalar = type => T.numeric(type) || ['String', '&str', 'bool', 'char', '()
 
 /** Typed Rust -> verified MIR -> checked UI imports, with original-source spans. */
 export class UICompiler {
-  static compile(source, {file = 'src/ui.rs', entry = 'app', optimize = true, maxSteps = 250000, files = {}, ...options} = {}) {
+  static compile(source, {file = 'src/ui.rs', entry = 'app', optimize = true, maxSteps = 250000, files = {}, entryProps = false, ...options} = {}) {
     if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > 2_000_000) throw new Diagnostic('F_UI_BUDGET', 'UI instruction budget must be between 1 and 2,000,000');
     if (file === UI_ABI_FILE || typeof file !== 'string' || !/^[\w./ -]+\.rs$/.test(file)) throw new Diagnostic('F_UI_FILE', 'A normal .rs source filename is required');
     if (!/^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*$/.test(entry)) throw new Diagnostic('F_UI_ENTRY', 'Invalid UI entry name');
     const project = prepareUIProject(source, {file, files, configuration: options.configuration}), expansion = project.expansion;
-    const build = compile(expansion.source, {...options, entry, optimize, file, tokens: project.tokens, ast: project.ast});
+    if (typeof entryProps !== 'boolean') throw new Diagnostic('F_UI_ENTRY', 'entryProps must be boolean');
+    const build = compile(expansion.source, {...options, entry, ...(entryProps ? {mode: 'library'} : {}), optimize, file, tokens: project.tokens, ast: project.ast});
+    if (entryProps) build.entry = build.optimizedMir.find(fn => fn.instance === `${entry}<>`)?.instance;
     const entryFunction = build.optimizedMir.find(fn => fn.instance === build.entry);
-    if (entryFunction?.returnType !== 'ui::Node' || entryFunction?.params?.length) throw new Diagnostic('F_UI_ENTRY', 'A UI entry must return ui::Node and take no arguments', entryFunction?.span);
+    if (entryFunction?.returnType !== 'ui::Node' || entryFunction?.params?.length !== (entryProps ? 1 : 0)) throw new Diagnostic('F_UI_ENTRY', 'A UI entry must return ui::Node; entryProps permits exactly one owned argument', entryFunction?.span);
     const shapes = new Map(build.sem.structures.map(shape => [shape.name, shape]));
     const enums = new Map(build.sem.enums.map(shape => [shape.name, shape]));
     const ownedSchemas = Object.create(null);
     const schema = type => ownSchema(type, shapes, enums, ownedSchemas);
+    const entryPropsType = entryProps ? schema(entryFunction.registers[entryFunction.params[0]].type) : null;
     const closures = new Map(build.sem.closures.map(closure => [closure.type, closure]));
     const unsafeCapture = (type, seen = new Set()) => {
       if (['ui::State', 'ui::Ref'].includes(type) || T.application(type).name === 'ui::Signal') return null;
@@ -63,7 +66,7 @@ export class UICompiler {
           callbacks[index] = {instance: closure.instance, type: closure.type, params: closure.params, span: closure.span};
         }
         const stateType = ['read', 'write', 'modify'].includes(name) ? T.application(types[0]).args[0] : name === 'state' ? types[0] : null;
-        const valueType = ['memo_value', 'memo_with'].includes(name) ? target.returnType : null;
+        const valueType = name === 'emit' ? types[1] : ['memo_value', 'memo_with'].includes(name) ? target.returnType : null;
         const dependencyType = name === 'memo_with' ? types[1] : name === 'effect_with' ? types[2] : null;
         for (const type of [stateType, valueType, dependencyType]) if (type) schema(type);
         instruction.op = 'builtin'; instruction.name = 'ferrite.ui.v1';
@@ -75,7 +78,7 @@ export class UICompiler {
     const emitted = new JavaScriptEmitter(optimizedMir, {entry: null, library: true, runtime: {maxSteps}}).build();
     const wasm = new WebAssemblyEmitter(optimizedMir, {entry: build.entry}).build();
     return {format: 'ferrite-ui-v1', abi: UI_ABI_VERSION, file, source, entry: build.entry, optimize, maxSteps,
-      files: project.files, modules: project.modules, ownedSchemas, nodes: project.nodes, mappings: expansion.mappings, expandedSource: expansion.source, mir, optimizedMir,
+      files: project.files, modules: project.modules, ownedSchemas, entryPropsType, nodes: project.nodes, mappings: expansion.mappings, expandedSource: expansion.source, mir, optimizedMir,
       js: emitted.code, generatedMap: emitted.sourceMap, wasm: {bytes: Array.from(wasm.bytes), metadata: wasm.metadata},
       diagnostics: build.diagnostics, timings: build.timings, closures: build.sem.closures, verification: MirVerifier.verify(optimizedMir)};
   }

@@ -1,7 +1,7 @@
 /** Compiler-owned declarations for the checked Ferrite UI host ABI, not a Rust stdlib. */
 export const UI_ABI_VERSION = 1;
 export const UI_ABI_FILE = 'ferrite:ui-abi';
-export const UI_INTRINSICS = Object.freeze(['element', 'fragment', 'text', 'value', 'child', 'attr', 'key', 'source', 'component', 'on_click', 'on', 'use_state', 'get', 'set', 'update', 'use_string', 'get_string', 'set_string', 'use_bool', 'get_bool', 'set_bool', 'use_ref', 'node_ref', 'focus', 'ref_value', 'effect', 'memo', 'prevent_default', 'stop_propagation', 'state', 'read', 'write', 'modify', 'memo_value', 'memo_with', 'effect_with', 'on_event']);
+export const UI_INTRINSICS = Object.freeze(['element', 'fragment', 'text', 'value', 'child', 'attr', 'key', 'source', 'component', 'on_click', 'on', 'use_state', 'get', 'set', 'update', 'use_string', 'get_string', 'set_string', 'use_bool', 'get_bool', 'set_bool', 'use_ref', 'node_ref', 'focus', 'ref_value', 'effect', 'memo', 'prevent_default', 'stop_propagation', 'state', 'read', 'write', 'modify', 'memo_value', 'memo_with', 'effect_with', 'on_event', 'emit', 'external']);
 // Trap bodies make an unlinked artifact fail. Only declarations from UI_ABI_FILE
 // may be linked; a similarly-named user function cannot become a host intrinsic.
 export const UI_DECLARATIONS = `
@@ -26,6 +26,8 @@ mod ui {
   pub fn memo_with<T: Clone, D: Clone, F: Fn() -> T>(factory: F, dependencies: D) -> T { panic!("UI ABI must be linked") }
   pub fn effect_with<D: Clone, F: Fn() -> (), C: Fn() -> ()>(setup: F, cleanup: C, dependencies: D) { panic!("UI ABI must be linked") }
   pub fn on_event<F: Fn(Event) -> ()>(node: Node, name: &str, callback: F) -> Node { panic!("UI ABI must be linked") }
+  pub fn emit<T: Clone>(name: &str, value: T) { panic!("UI ABI must be linked") }
+  pub fn external(name: &str, props_json: &str, children: Vec<Node>) -> Node { panic!("UI ABI must be linked") }
   pub fn stop_propagation() { panic!("UI ABI must be linked") }
   pub fn element(tag: &str, children: Vec<Node>) -> Node { panic!("UI ABI must be linked") }
   pub fn fragment(children: Vec<Node>) -> Node { panic!("UI ABI must be linked") }

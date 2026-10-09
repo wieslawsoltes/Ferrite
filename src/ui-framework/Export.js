@@ -12,13 +12,14 @@ export function scriptJSON(value) {
 const htmlText = value => String(value).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]);
 
 /** No CDN, fetch, module imports or external runtime assets in the result. */
-export function exportHTML(artifact, {backend = 'javascript', title = 'Ferrite Rust UI', css = '', channel = null, hydrate = false, identifierPrefix = ''} = {}) {
+export function exportHTML(artifact, {backend = 'javascript', title = 'Ferrite Rust UI', css = '', channel = null, hydrate = false, identifierPrefix = '', props} = {}) {
   if (artifact?.format !== 'ferrite-ui-v1' || !['javascript', 'wasm', 'mir'].includes(backend)) throw Error('Invalid UI export');
   if (typeof title !== 'string' || title.length > 1000 || typeof css !== 'string' || css.length > 500000) throw Error('UI export text exceeds its limit');
   if (typeof hydrate !== 'boolean' || typeof identifierPrefix !== 'string' || identifierPrefix.length > 200) throw Error('Invalid hydration options');
   if (channel !== null && !/^[a-f0-9]{32,128}$/.test(channel)) throw Error('Invalid preview channel');
+  props = artifact.entryPropsType ? new OwnedValues(artifact.ownedSchemas).encode(artifact.entryPropsType, new OwnedValues(artifact.ownedSchemas).decode(artifact.entryPropsType, props)) : null;
   const compact = {format: artifact.format, abi: artifact.abi, entry: artifact.entry, maxSteps: artifact.maxSteps, file: artifact.file, source: artifact.source,
-    ownedSchemas: artifact.ownedSchemas, files: artifact.files, optimizedMir: artifact.optimizedMir, ...(backend === 'javascript' ? {js: artifact.js} : {}), ...(backend === 'wasm' ? {wasm: {bytes: artifact.wasm.bytes}} : {})};
+    entryPropsType: artifact.entryPropsType, ownedSchemas: artifact.ownedSchemas, files: artifact.files, optimizedMir: artifact.optimizedMir, ...(backend === 'javascript' ? {js: artifact.js} : {}), ...(backend === 'wasm' ? {wasm: {bytes: artifact.wasm.bytes}} : {})};
   const bootstrap = `
 'use strict';
 const createUIRuntime = ${createUIRuntime.toString()};
@@ -36,7 +37,7 @@ const canvas = channel ? new CanvasController(document, send) : null;
 let picking = false, scheduled = false;
 function send(value) { if (channel) parent.postMessage({type:'ferrite-ui', channel, ...value}, '*'); }
 function showError(error) { let node=document.getElementById('ferrite-error'); if(!node){node=document.createElement('pre');node.id='ferrite-error';document.body.append(node);}node.textContent=error.message??String(error);send({event:'error',error:{message:node.textContent,code:error.code,span:error.span}}); }
-const session = new UISession(artifact, {backend:${scriptJSON(backend)}, runtime:UI, onError:showError});
+const session = new UISession(artifact, {backend:${scriptJSON(backend)}, runtime:UI, onError:showError, props:${scriptJSON(props)}});
 session.subscribe(event => {
   if(event.type==='callback'||event.type==='commit'){
     if(!scheduled){scheduled=true;queueMicrotask(()=>{scheduled=false;send({event:'snapshot',snapshot:session.inspect()});});}

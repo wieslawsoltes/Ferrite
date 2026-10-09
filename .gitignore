@@ -3,3 +3,6 @@ artifacts/
 __pycache__/
 *.pyc
 target/
+
+# Also ignore local reference dependency symlinks.
+node_modules

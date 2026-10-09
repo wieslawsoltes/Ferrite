@@ -13,9 +13,9 @@ export function renderToString(node, {runtime = UI, identifierPrefix = '', maxNo
 export function renderToStaticMarkup(node, options = {}) { return renderToString(node, {...options, staticMarkup: true}); }
 
 /** Explicit execution API. Ordinary exportHTML remains a non-executing artifact serializer. */
-export function renderUIToString(artifact, {backend = 'javascript', identifierPrefix = '', maxLength = 10000000, staticMarkup = false} = {}) {
+export function renderUIToString(artifact, {backend = 'javascript', identifierPrefix = '', maxLength = 10000000, staticMarkup = false, props, components = {}} = {}) {
   const document = new ServerDocument(), container = document.createElement('div');
-  const session = new UISession(artifact, {backend, onError: () => {}});
+  const session = new UISession(artifact, {backend, props, components, onError: () => {}});
   try { session.mount(container, {server: true, identifierPrefix}); return document.serialize(container, {maxLength, staticMarkup}); }
   finally { session.dispose(); }
 }

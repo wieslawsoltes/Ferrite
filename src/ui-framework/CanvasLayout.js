@@ -21,7 +21,7 @@ export class CanvasLayout {
         if (colon < start) throw Error('Incomplete inline CSS declaration');
         const name = css.slice(start, colon).replace(/\/\*[\s\S]*?\*\//g, '').trim();
         if (!/^(?:--[\w-]+|[a-zA-Z-]+)$/.test(name)) throw Error('Invalid inline CSS property');
-        entries.push({start, end, name: name.startsWith('--') ? name : name.toLowerCase()});
+        entries.push({start, end, valueStart: colon + 1, valueEnd: css[end - 1] === ';' ? end - 1 : end, name: name.startsWith('--') ? name : name.toLowerCase()});
       }
       start = end; colon = -1;
     };

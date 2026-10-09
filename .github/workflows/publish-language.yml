@@ -29,7 +29,12 @@ jobs:
               chunks = manifest['chunks']
               if len(chunks) > 64 or any(not re.fullmatch(r'\.github/compiler-payload-[a-z0-9-]+\.b64', path) for path in chunks):
                   raise SystemExit('Invalid publication chunks')
-              compressed = base64.b64decode(''.join(Path(path).read_text().strip() for path in chunks), validate=True)
+              encoded = ''.join(Path(path).read_text().strip() for path in chunks)
+              for repair in manifest.get('repairs', []):
+                  if encoded.count(repair['old']) != 1:
+                      raise SystemExit('Transport repair must match exactly once')
+                  encoded = encoded.replace(repair['old'], repair['new'], 1)
+              compressed = base64.b64decode(encoded, validate=True)
               if hashlib.sha256(compressed).hexdigest() != manifest['sha256']:
                   raise SystemExit('Payload digest mismatch')
               payload = json.loads(gzip.decompress(compressed))
@@ -73,3 +78,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run test.yml --ref feat/compiler-language-toolchain
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: compiler-transport-evidence
+          path: .github/compiler-payload*.b64
+          include-hidden-files: true
+          retention-days: 1

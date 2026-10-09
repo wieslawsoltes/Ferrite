@@ -1,0 +1,68 @@
+name: Publish verified terminal commits
+on:
+  push:
+    branches: [automation/terminal-assets-20261009]
+    paths: [terminal-publication/ready.json]
+permissions:
+  contents: write
+concurrency:
+  group: terminal-feature-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Reconstruct and verify the exact tested implementation commits
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, lzma, pathlib, re, subprocess
+          root = pathlib.Path.cwd()
+          ready = json.loads((root/'terminal-publication/ready.json').read_text())
+          batch = ready['batch']
+          assert re.fullmatch(r'[0-9]{2}', batch)
+          parts = sorted((root/'terminal-publication').glob(batch+'.*.b64'))
+          encoded = ''.join(''.join(part.read_text().split()) for part in parts)
+          data = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(data).hexdigest() == ready['sha256'], 'Payload hash mismatch'
+          payload = json.loads(data)
+          assert payload['branch'] == 'feat/terminal-ncurses-mcp'
+          for value in [payload['base'], payload['baseTree']]: assert re.fullmatch(r'[0-9a-f]{40}', value)
+          def git(*args, cwd=root):
+              return subprocess.check_output(['git', *args], cwd=cwd, text=True).strip()
+          git('fetch', 'origin', payload['branch'])
+          assert git('rev-parse', 'FETCH_HEAD') == payload['base'], 'Branch moved; inspect before retrying'
+          work = root.parent/'terminal-implementation'
+          git('worktree', 'add', '--detach', str(work), payload['base'])
+          assert git('rev-parse', 'HEAD^{tree}', cwd=work) == payload['baseTree']
+          git('config', 'user.name', 'Ferrite Contributors', cwd=work)
+          git('config', 'user.email', 'wieslawsoltes@users.noreply.github.com', cwd=work)
+          report = []
+          for index, commit in enumerate(payload['commits']):
+              assert re.fullmatch(r'[0-9a-f]{40}', commit['tree'])
+              subprocess.run(['git', 'apply', '--unidiff-zero', '--whitespace=nowarn', '-'], input=commit['patch'], text=True, cwd=work, check=True)
+              if commit.get('vendor'):
+                  subprocess.run(['node', 'tools/vendor-terminal.mjs', '--fetch'], cwd=work, check=True)
+              git('add', '-A', cwd=work)
+              tree = git('write-tree', cwd=work)
+              assert tree == commit['tree'], f'Commit {index}: unexpected tree {tree}, expected {commit["tree"]}'
+              git('commit', '-m', commit['message'], cwd=work)
+              report.append({'sha': git('rev-parse', 'HEAD', cwd=work), 'tree': tree, 'message': commit['message']})
+          subprocess.run(['npm', 'run', 'check'], cwd=work, check=True)
+          subprocess.run(['node', 'tools/vendor-terminal.mjs', '--check'], cwd=work, check=True)
+          subprocess.run(['npm', 'test'], cwd=work, check=True)
+          git('push', 'origin', 'HEAD:refs/heads/'+payload['branch'], cwd=work)
+          (root/'publication-report.json').write_text(json.dumps(report, indent=2))
+          print(json.dumps(report, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terminal-publication
+          path: publication-report.json
+          retention-days: 7

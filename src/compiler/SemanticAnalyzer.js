@@ -64,6 +64,14 @@ export class SemanticAnalyzer {
   hasTrait(type, bound, depth = 0) {
     if (depth > 32) return false;
     const closure=this.closures.get(type);
+    if(['Sized','core::marker::Sized','std::marker::Sized'].includes(bound)) {
+      if(T.reference(type)||T.function(type)||this.functionValues.get(type)||closure)return true;
+      if(T.numeric(type)||['bool','char','String','!'].includes(type))return true;
+      const tuple=T.tuple(type),array=T.array(type);
+      if(tuple||array)return (tuple??[array.element]).every(t=>this.hasTrait(t,'Sized',depth+1));
+      const {name,args}=T.application(type);
+      return (name==='Vec'||this.index.structs.has(name)||this.index.enums.has(name))&&args.every(t=>this.hasTrait(t,'Sized',depth+1));
+    }
     if(ClosureAnalyzer.bound(bound))return (this.functionValues.get(type)||this.functionValues.pointer(type))?this.functionValues.satisfies(type,bound):this.closures.satisfies(type,bound);
     if(!T.reference(type)&&this.functionValues.get(type))return ['Copy','Clone','Send','Sync'].includes(bound);
     if(T.function(type))return ['Copy','Clone','Send','Sync','PartialEq','Eq'].includes(bound);

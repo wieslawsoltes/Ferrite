@@ -28,7 +28,7 @@ export class ImplObligations {
     const found=this.index.resolve(this.index.traits,raw,module,node,false);
     if(found){this.index.visible(found,module,node);return found.name;}
     const name=raw.split('::').at(-1);
-    if(builtin.has(name) && (raw===name || /^(std|core)::/.test(raw)))return name;
+    if(builtin.has(name) && (raw===name || /^(std|core)::/.test(raw)))return name==='Sized'?'core::marker::Sized':name;
     if(/^(Fn|FnMut|FnOnce)\(/.test(raw))return this.normalize(raw,node);
     throw new Diagnostic('E0405',`Unknown trait '${raw}' in implementation bound`,node.span??this.declaration.span);
   }
@@ -51,9 +51,18 @@ export class ImplObligations {
   prove(type,bound,depth=0) {
     if(++this.visits>65536 || depth>64)throw new Diagnostic('F_IMPL_BOUND_LIMIT','Implementation obligation budget exceeded',this.declaration.span);
     if(this.assumptions.get(type)?.has(bound))return true;
-    // All parsed type parameters are implicitly Sized; ?Sized is not parsed.
+    // Ordinary parameters are implicitly Sized, unlike Self in a trait.
     if(this.index.traits.has(bound))return this.symbolic(type)?this.a.implementations.traits.prove(type,bound,this,depth):this.a.hasBound(type,bound);
-    if(bound==='Sized')return type!=='str';
+    if(bound==='Sized'||bound==='core::marker::Sized'||bound==='std::marker::Sized') {
+      if(this.parameters.has(type))return !(type==='Self'&&this.declaration.unsizedSelf);
+      if(T.reference(type)||T.function(type))return true;
+      const tuple=T.tuple(type),array=T.array(type);
+      if(tuple||array)return (tuple??[array.element]).every(t=>this.prove(t,'core::marker::Sized',depth+1));
+      const {name,args}=T.application(type);
+      if(name==='Vec'||this.index.structs.has(name)||this.index.enums.has(name))
+        return args.every(t=>this.prove(t,'core::marker::Sized',depth+1));
+      return this.a.hasTrait(type,'core::marker::Sized');
+    }
     if(!this.symbolic(type))return this.a.hasTrait(type,bound);
     if(this.parameters.has(type))return false;
     if(T.function(type))return ['Copy','Clone','Send','Sync','Unpin','PartialEq','Eq'].includes(bound);
@@ -87,6 +96,8 @@ export class ImplObligations {
     if(this.parameters.has(name)&&args.length)throw new Diagnostic('E0109',`Type parameter ${name} does not accept type arguments`,node.span);
     args.forEach(t=>this.validate(t,node));
     if(!shape)return;
+    for(const argument of args)if(!this.prove(argument,'core::marker::Sized'))
+      throw new Diagnostic('E0277',`Type argument ${argument} must be Sized`,node.span??this.declaration.span);
     const substitution=new Map(shape.generics.map((g,i)=>[g.name,args[i]]));
     const required=[];
     for(const generic of shape.generics)for(const bound of generic.bounds)required.push([substitution.get(generic.name),bound]);

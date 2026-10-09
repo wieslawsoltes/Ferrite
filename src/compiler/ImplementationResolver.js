@@ -154,7 +154,14 @@ export class ImplementationResolver {
     const app = T.application(owner);
     const declaration = this.index.typeResolver.find(this.index.structs, app.name, module, node) ??
       this.index.typeResolver.find(this.index.enums, app.name, module, node) ?? this.index.typeResolver.find(this.index.aliases, app.name, module, node);
-    if (!declaration) return null;
+    if (!declaration) {
+      // A substituted method binder can name a primitive/structural implementor,
+      // not just an item in the nominal declaration tables.
+      if(!T.numeric(owner)&&!['bool','char','str','String'].includes(owner)&&
+        !T.reference(owner)&&!T.tuple(owner)&&!T.array(owner)&&!T.function(owner))return null;
+      if(node.ownerTypeArguments?.length)throw new Diagnostic('E0107','This implementing type has no type arguments',node.span);
+      return this.lookup(owner,method,module,node,context.instance.fn);
+    }
     const explicit = node.ownerTypeArguments?.map(type => this.a.normalize(type, context, node));
     const args = explicit ?? (app.args.length ? app.args : declaration.generics.map(() => '_'));
     if (args.length !== declaration.generics.length) throw new Diagnostic('E0107', `Wrong number of type arguments for ${app.name}`, node.span);

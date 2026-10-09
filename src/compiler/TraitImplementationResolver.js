@@ -36,7 +36,7 @@ export class TraitImplementationResolver {
         if(method.visibility==='pub')throw new Diagnostic('E0449','Trait methods inherit the trait visibility',method.span);
         const parameters=new Set(['Self',...method.generics.map(g=>g.name)]);
         if(parameters.size!==method.generics.length+1)throw new Diagnostic('E0403','Duplicate trait method parameter',method.span);
-        const declaration={...method,module:trait.module,generics:[{name:'Self',bounds:[trait.name]},...method.generics]};
+        const declaration={...method,module:trait.module,unsizedSelf:true,generics:[{name:'Self',bounds:[trait.name]},...method.generics]};
         const requirements=new ImplObligations(this.a,{target:'Self',impl:declaration},declaration);
         for(const raw of [...method.params.map(p=>p.type),method.returnType]) {
           if(/\b_\b/.test(raw))throw new Diagnostic('E0121','Trait signatures cannot contain inferred types',method.span);
@@ -44,6 +44,10 @@ export class TraitImplementationResolver {
           const type=this.index.type(raw,trait.module,'Self',parameters,method);
           this.index.typeResolver.validateKnown(type,parameters,method);
           requirements.validate(type,method);
+          // Required methods may mention unsized Self by value, but a default
+          // body must have a Sized proof before materializing parameters/results.
+          if(method.body && !requirements.prove(type,'core::marker::Sized'))
+            throw new Diagnostic('E0277',`Default method ${method.localName} needs a Sized bound for ${type}`,method.span);
         }
       }
     }
@@ -134,7 +138,12 @@ export class TraitImplementationResolver {
       const node=queue.pop();
       for(const [key,value] of Object.entries(node)) {
         if(typeof value==='string' && ['type','returnType','target','annotation','to'].includes(key))node[key]=rewrite(value);
-        else if(typeof value==='string' && key==='name' && value.includes('::') && rename.has(value.split('::')[0]))node[key]=rewrite(value);
+        else if(typeof value==='string' && key==='name' && value.includes('::') && rename.has(value.split('::')[0])) {
+          // TypeSystem.substitute intentionally treats qualified names atomically.
+          // A generic associated path instead needs only its binder prefix changed.
+          const separator=value.indexOf('::');
+          node[key]=rename.get(value.slice(0,separator))+value.slice(separator);
+        }
         else if(Array.isArray(value) && ['bounds','typeArguments','ownerTypeArguments'].includes(key))node[key]=value.map(rewrite);
         else if(value&&typeof value==='object') {
           if(Array.isArray(value)){for(const child of value)if(child&&typeof child==='object')queue.push(child);}

@@ -57,7 +57,7 @@ export const genericTraitCompileFailCases=[
 genericTraitCases.push(
  ['default generic binder alpha renaming','trait Identity{fn identity<T>(&self,value:T)->T{let result:T=value;result}}struct C<T>(T);impl<T>Identity for C<T>{}fn main(){println!("{}",C(true).identity(33));}','33\n'],
  ['default binder renaming does not change strings or fields','trait Identity{fn identity<T>(&self,value:T)->T{println!("T::value");value}}struct C<T>{value:T}impl<T>Identity for C<T>{}fn main(){println!("{}",C{value:true}.identity(34));}','T::value\n34\n'],
- ['default contextual Self construction','trait Create{fn create()->Self;fn other()->Self{Self::create()}}struct C<T>(T);impl Create for C<i32>{fn create()->Self{Self(35)}}fn main(){println!("{}",C::other().0);}','35\n'],
+ ['default contextual Self construction','trait Create{fn create()->Self;fn other()->Self where Self:Sized{Self::create()}}struct C<T>(T);impl Create for C<i32>{fn create()->Self{Self(35)}}fn main(){println!("{}",C::other().0);}','35\n'],
  ['multiple traits selected by local scope','mod one{pub trait Value{fn value(&self)->i32;}}mod two{pub trait Value{fn value(&self)->i32;}}struct C;impl one::Value for C{fn value(&self)->i32{36}}impl two::Value for C{fn value(&self)->i32{37}}use one::Value;fn main(){println!("{}",C.value());}','36\n'],
  ['const expression in trait signatures','const fn size()->usize{2}trait Value{fn value(&self)->[i32;size()];}struct C;impl Value for C{fn value(&self)->[i32;size()]{[38,39]}}fn main(){println!("{}",C.value()[0]);}','38\n'],
  ['private trait does not leak into bounded parent scope','mod implementation{trait Value{fn value(&self)->i32;}pub struct C;impl Value for C{fn value(&self)->i32{39}}pub fn run()->i32{C.value()}}fn main(){println!("{}",implementation::run());}','39\n'],
@@ -73,4 +73,21 @@ genericTraitCompileFailCases.push(
 genericTraitCompileFailCases.push(
  ['associated trait calls cannot bypass scope','mod api{pub trait V{fn value()->i32;}pub struct C;impl V for C{fn value()->i32{1}}}fn main(){api::C::value();}','E0599'],
  ['associated trait function values cannot bypass scope','mod api{pub trait V{fn value()->i32;}pub struct C;impl V for C{fn value()->i32{1}}}fn main(){let f=api::C::value;f();}','E0599']
+);
+
+// Native-oracle regressions: never reclassify an invalid Rust default as a success.
+genericTraitCases.push(
+ ['default method binder in associated call','trait Factory{fn make()->Self;}impl Factory for i32{fn make()->Self{41}}trait Make{fn make_value<T:Factory>(&self)->T{T::make()}}struct Cell<T>(T);impl<T>Make for Cell<T>{}fn main(){println!("{}",Cell(true).make_value::<i32>());}','41\n'],
+ ['default method binder in associated pointer','trait Factory{fn make()->Self;}impl Factory for i32{fn make()->Self{42}}trait Make{fn make_value<T:Factory>(&self)->T{let f:fn()->T=T::make;f()}}struct Cell<T>(T);impl<T>Make for Cell<T>{}fn main(){println!("{}",Cell(true).make_value::<i32>());}','42\n'],
+ ['explicit Sized bound accepts scalars and aggregates','fn accept<T:Sized>(value:T)->T{value}struct Cell(i32);fn main(){let c=accept(Cell(43));println!("{} {}",c.0,accept([1,2])[1]);}','43 2\n'],
+ ['default method Sized receiver','trait Take{fn take(self)->Self where Self:Sized{self}}struct Cell<T>(T);impl<T>Take for Cell<T>{}fn main(){println!("{}",Cell(44).take().0);}','44\n'],
+ ['required method can return Self without Sized','trait Make{fn make()->Self;}struct Cell;impl Make for Cell{fn make()->Self{Cell}}fn main(){let _:Cell=Cell::make();}',''],
+ ['default shared receiver does not require Sized','trait Use{fn run(&self)->i32{45}}struct Cell;impl Use for Cell{}fn main(){println!("{}",Cell.run());}','45\n']
+);
+genericTraitCompileFailCases.push(
+ ['default return Self needs Sized even when unused','trait Create{fn create()->Self;fn other()->Self{Self::create()}}fn main(){}','E0277'],
+ ['default tuple Self needs Sized','trait Create{fn create()->Self;fn other()->(Self,){(Self::create(),)}}fn main(){}','E0277'],
+ ['default owned Self parameter needs Sized','trait Use{fn run(self){}}fn main(){}','E0277'],
+ ['default additional Self parameter needs Sized','trait Use{fn run(&self,other:Self){}}fn main(){}','E0277'],
+ ['a local Sized trait does not prove builtin Sized','trait Sized{}trait Use{fn run(self) where Self:Sized{}}fn main(){}','E0277']
 );

@@ -37,12 +37,20 @@ comparing signatures; trait and impl binders with the same spelling are distinct
 An implementation cannot impose stricter method bounds than its declaration.
 Omitted method bounds retain the trait contract when a method is instantiated.
 
+Trait `Self` is not implicitly `Sized`. Default bodies with by-value `Self`
+parameters or results require `where Self: Sized`; required methods can keep
+abstract by-value signatures. Checked `Sized` obligations apply to supported
+concrete primitives and aggregates. A user trait named `Sized` is not the
+builtin marker, and the `core::marker::Sized` path retains that distinction.
+This does not add dynamically sized value layout or `?Sized` parameters.
+
 Defaults are cloned into implementation-specific function descriptors. Default
 bodies retain the trait's lexical module, specialize `Self`, and resolve declared
 trait methods before similarly named inherent methods on the concrete type.
 Implementation and default-method type parameters cannot accidentally capture
-one another: default type syntax is alpha-renamed, not string literals or local
-value/field names. Ordinary external calls retain inherent-method precedence.
+one another: default type syntax and generic associated-path prefixes are
+alpha-renamed, not string literals or local value/field names. Substituted
+primitive/structural implementors support associated calls and method pointers. Ordinary external calls retain inherent-method precedence.
 
 ```rust
 trait Identity {

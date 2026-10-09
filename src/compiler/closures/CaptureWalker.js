@@ -10,7 +10,7 @@ export class CaptureWalker {
     if (!node || typeof node !== 'object') return node;
     if (Array.isArray(node)) return node.map(n => this.transform(n, names, onFree, use));
     const walk = (n, scope = names, mode = 'read') => this.transform(n, scope, onFree, mode);
-    if (node.kind === 'variable') return names.has(node.name) ? node : onFree(node, use);
+    if (node.kind === 'variable') return node.name === '_' || names.has(node.name) ? node : onFree(node, use);
     if (node.kind === 'block') {
       const scope = new Set(names), body = [];
       for (const statement of node.body) {
@@ -21,7 +21,7 @@ export class CaptureWalker {
     }
     if (node.kind === 'let') return {...node, value: walk(node.value, names, 'consume')};
     if (node.kind === 'return' || node.kind === 'break') return {...node, value: walk(node.value, names, 'consume')};
-    if (node.kind === 'assign') return {...node, target: walk(node.target, names, 'mutate'), value: walk(node.value, names, 'consume')};
+    if (node.kind === 'assign') return {...node, target: walk(node.target, names, 'mutate'), value: walk(node.value, names, node.target.kind === 'variable' && node.target.name === '_' ? 'read' : 'consume')};
     if (node.kind === 'unary' && node.op === '&') return {...node, value: walk(node.value, names, node.mutable ? 'mutate' : 'read')};
     if (node.kind === 'field' || node.kind === 'index') return {...node, object: walk(node.object, names, use), ...(node.index ? {index: walk(node.index)} : {})};
     if (node.kind === 'closure') return {...node, body: walk(node.body, new Set([...names, ...node.params.map(p => p.name)]), 'consume')};
@@ -42,7 +42,7 @@ export class CaptureWalker {
       } else if (callee) callee = walk(callee, names, 'read');
       return {...node, ...(callee ? {callee} : {}), args: node.args.map(arg => walk(arg, names, borrows ? 'read' : 'consume'))};
     }
-    if (node.kind === 'structLiteral') return {...node, fields: node.fields.map(f => ({...f, value: walk(f.value, names, 'consume')}))};
+    if (node.kind === 'structLiteral') return {...node, fields: node.fields.map(f => ({...f, value: walk(f.value, names, use === 'mutate' ? 'mutate' : 'consume')}))};
     const result = {...node};
     for (const key of ['value', 'condition', 'then', 'otherwise', 'left', 'right', 'body', 'items', 'count'])
       if (node[key]) result[key] = walk(node[key], names, ['items', 'value'].includes(key) ? use : 'read');

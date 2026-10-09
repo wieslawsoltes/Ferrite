@@ -164,8 +164,22 @@ export class OwnershipAnalyzer {
   }
   returnValue(value, origin) { this.checkReturn(value, this.value(value), origin); }
   assignment(node) {
+    if (node.destructuring) {
+      this.value(node.value, node.assignmentMoves);
+      if (node.assignmentRhsDiverges) return;
+      const visit = target => {
+        if (target.assignee === 'place') { this.writePlace(target, node); return; }
+        for (const child of target.assignee === 'struct' ? target.fields.map(field => field.value) : target.items ?? []) visit(child);
+      };
+      visit(node.target); return;
+    }
     const destination = node.target.kind === 'variable' ? node.target.binding?.slot : null;
     this.value(node.value, true, destination);
+    this.writePlace(node.target, node);
+  }
+  writePlace(target, assignment) {
+    const node = {target, op: assignment.op, span: target.span};
+    const destination = target.kind === 'variable' ? target.binding?.slot : null;
     // Index/deref operands are evaluated once, after the RHS. Only a plain
     // whole-local assignment may reinitialize a previously moved local.
     const evaluatePlace = target => {

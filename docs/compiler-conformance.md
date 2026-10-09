@@ -40,3 +40,5 @@ inference, exact Rust float formatting and NaN payload-bit preservation are not 
 Full user macros, async/generators, lifetime/NLL analysis, const generics, advanced
 trait/associated-type solving, reference/slice patterns, native ABI/code generation
 and the complete standard library remain outside this browser-compiler scope.
+
+The follow-on [destructuring assignment](destructuring-assignment.md) scope adds typed tuple/array/record assignees, staged RHS projections and sequential destination stores. Its shared fixtures also compare pre-panic output with native rustc. Reference-carrier transfers and projection-sensitive partial moves remain explicit boundaries.

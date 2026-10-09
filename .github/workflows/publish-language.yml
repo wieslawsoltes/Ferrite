@@ -18,6 +18,7 @@ jobs:
         with:
           node-version: '22'
       - name: Restore and verify focused feature commits
+        id: publish
         run: |
           python3 - <<'PY'
           import base64, gzip, hashlib, json, os, re, subprocess, tempfile
@@ -61,7 +62,7 @@ jobs:
                   merged = subprocess.run(['git', 'merge', '--no-commit', '--no-ff', change['merge']])
                   if merged.returncode:
                       conflicts = git('diff', '--name-only', '--diff-filter=U').splitlines()
-                      if not conflicts or any(not re.fullmatch(r'src/ui/workers/[a-z-]+\.bundle\.js', p) for p in conflicts):
+                      if not conflicts or any(not re.fullmatch(r'(?:src/ui/workers/[a-z-]+|src/sdk/ferrite)\.bundle\.js', p) for p in conflicts):
                           raise SystemExit('Unexpected source merge conflict')
                       git('checkout', '--ours', '--', *conflicts)
                       git('add', '--', *conflicts)
@@ -71,6 +72,9 @@ jobs:
                       git('apply', '--index', '--whitespace=error', patch.name)
               subprocess.run(['npm', 'run', 'build:workers'], check=True)
               git('add', 'src/ui/workers')
+              if Path('tools/bundle-sdk.mjs').is_file():
+                  subprocess.run(['npm', 'run', 'build:sdk'], check=True)
+                  git('add', 'src/sdk/ferrite.bundle.js')
               tree = git('write-tree')
               if tree != change['tree']:
                   raise SystemExit('Source tree mismatch: ' + tree)
@@ -90,7 +94,6 @@ jobs:
               out.write('target=' + target + '\n')
           Path(os.environ['GITHUB_STEP_SUMMARY']).write_text('Published `' + git('rev-parse', 'HEAD') + '`; tree `' + git('write-tree') + '`. No workflows were changed.\n')
           PY
-        id: publish
       - name: Dispatch the full feature-branch validation
         env:
           GH_TOKEN: ${{ github.token }}

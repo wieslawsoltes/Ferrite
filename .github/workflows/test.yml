@@ -41,6 +41,14 @@ jobs:
           python -m playwright install --with-deps chromium
           rustup toolchain install stable --profile minimal --component rustfmt --component rust-analyzer --component rust-src
           rustup default stable
+          rustup target add wasm32-unknown-unknown
+      - name: Compile and test the standard-Rust UI workspace offline
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/native-ui
+          cargo test --manifest-path rust-ui/Cargo.toml --offline --locked 2>&1 | tee artifacts/native-ui/cargo-test.log
+          npm run build:ui:native -- --trust-projects --offline 2>&1 | tee artifacts/native-ui/cargo-build.log
+          npm run test:ui:native
       - name: Differentially validate language semantics against installed rustc
         run: npm run test:language
       - name: Exercise installed Cargo over an offline local workspace
@@ -61,6 +69,12 @@ jobs:
         run: |
           set -o pipefail
           npm run test:ui:browser 2>&1 | tee artifacts/ui-browser.log
+      - name: Exercise first-party SSR and hydration in Chromium
+        run: npm run test:ui:rendering
+      - name: Exercise actual React, Radix, concurrent rendering and server streams
+        run: |
+          npm ci --prefix tests/react-reference --ignore-scripts
+          npm run test:ui:react
       - name: Record environment-dependent compiler timings
         run: |
           mkdir -p artifacts/performance

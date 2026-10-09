@@ -1,3 +1,4 @@
+import {ImplementationResolver} from './ImplementationResolver.js';
 import {FunctionValueAnalyzer} from './FunctionValueAnalyzer.js';
 import {EnumDiscriminants} from './EnumDiscriminants.js';
 import {StructAnalyzer} from './StructAnalyzer.js';
@@ -28,7 +29,9 @@ export class SemanticAnalyzer {
     this.constants = new ConstantEvaluator(this, constEvaluation);
     this.discriminants = new EnumDiscriminants(this);
     this.index.constantEvaluator = this.constants;
+    this.implementations = new ImplementationResolver(this);
     this.index.typeResolver.validate();
+    this.implementations.validate();
   }
   static analyze(ast, options) { return new SemanticAnalyzer(ast, options).analyze(); }
   analyze() {
@@ -47,13 +50,13 @@ export class SemanticAnalyzer {
     for (const instance of this.instances.values()) if (instance.fn.isConst) this.constants.validate(instance);
     this.closures.finish();this.functionValues.finish();
     this.discriminants.annotate(this.instances.values());
-    return {discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
+    return {implementations: this.implementations.snapshot(), discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
       symbols: this.index.symbols, structures: [...this.index.structs.values()],
       enums: [...this.index.enums.values()], warnings: this.warnings, entry: this.entryKey,
       capabilities: {ownership: 'conservative whole-local analysis', traits: 'concrete impls and built-in bounds'}};
   }
   annotate(node, type) { node.type = type; return type; }
-  normalize(type, ctx, node = null) { return this.index.type(T.substitute(type, ctx.instance.substitution), ctx.instance.fn.module, ctx.instance.fn.owner, new Set(), node); }
+  normalize(type, ctx, node = null) { return this.index.type(T.substitute(type, ctx.instance.substitution ?? new Map(Object.entries(ctx.instance.typeArguments))), ctx.instance.fn.module, ctx.instance.fn.owner, new Set(), node); }
   hasTrait(type, bound, depth = 0) {
     if (depth > 32) return false;
     const closure=this.closures.get(type);
@@ -79,24 +82,30 @@ export class SemanticAnalyzer {
     }
     return this.index.impls.some(impl => this.index.type(impl.target, impl.module) === type && impl.trait?.split('::').at(-1) === bound);
   }
+  formal(fn, type, substitution = new Map(), node = fn) {
+    const parameters = new Set(substitution.keys());
+    const owner = fn.owner ? this.index.type(fn.owner, fn.module, null, parameters, node) : null;
+    const expanded = this.index.type(type, fn.module, owner, parameters, node);
+    return this.index.type(T.substitute(expanded, substitution), fn.module, null, parameters, node);
+  }
   instantiate(fn, argumentTypes, explicit = [], node = fn) {
     if (fn.params.length !== argumentTypes.length) throw new Diagnostic('E0061', `${fn.name} expects ${fn.params.length} argument(s), got ${argumentTypes.length}`, node.span);
     const substitution = new Map(fn.generics.map((g, i) => [g.name, explicit[i] ?? null]));
     if (explicit.length > fn.generics.length) throw new Diagnostic('E0107', 'Too many generic arguments', node.span);
-    fn.params.forEach((p, i) => T.unify(this.index.type(p.type, fn.module, fn.owner, new Set(substitution.keys()), node), argumentTypes[i], substitution, node));
+    fn.params.forEach((p, i) => T.unify(this.formal(fn, p.type, substitution, node), argumentTypes[i], substitution, node));
     for (const parameter of fn.generics) {
       const type = substitution.get(parameter.name);
       if (!type || /\b_\b/.test(type)) throw new Diagnostic('E0282', `Cannot infer ${parameter.name} in ${fn.name}`, node.span);
       for (const rawBound of parameter.bounds) {
-        const bound=this.index.type(T.substitute(rawBound,substitution),fn.module,fn.owner);
+        const bound=this.formal(fn, rawBound, substitution, node);
         if (!this.hasTrait(type, bound)) throw new Diagnostic('E0277', `Trait obligation failed: ${type}: ${bound}`, node.span);
         this.obligations.push({type, trait: bound, status: 'satisfied', span: node.span});
       }
     }
     for (const predicate of fn.predicates ?? []) {
-      const type = this.index.type(T.substitute(predicate.type, substitution), fn.module, fn.owner);
+      const type = this.formal(fn, predicate.type, substitution, node);
       for (const rawBound of predicate.bounds) {
-        const bound = this.index.type(T.substitute(rawBound, substitution), fn.module, fn.owner);
+        const bound = this.formal(fn, rawBound, substitution, node);
         if (!this.hasTrait(type, bound)) throw new Diagnostic('E0277', `Where-clause obligation failed: ${type}: ${bound}`, node.span, [{message: 'Required by this bound', span: predicate.span}]);
         this.obligations.push({type, trait: bound, status: 'satisfied', span: node.span, declaration: predicate.span});
       }
@@ -120,9 +129,10 @@ export class SemanticAnalyzer {
     const warningStart = this.warnings.length, patternStart = this.patternReports.length;
     const copy = structuredClone(fn);
     const instance = {key, name: fn.name, fn: copy, substitution, typeArguments: Object.fromEntries(substitution),
-      returnType: this.index.type(T.substitute(fn.returnType, substitution), fn.module, fn.owner, new Set(), fn), calls: [], locals: []};
+      returnType: this.formal(fn, fn.returnType, substitution, fn), calls: [], locals: []};
     this.instances.set(key, instance);
     const ctx = new FunctionContext(instance);
+    copy.owner = fn.owner ? this.index.type(T.substitute(fn.owner, substitution), fn.module, null, new Set(), fn) : null;
     copy.params.forEach((p, i) => { p.type = argumentTypes[i]; p.binding = ctx.declare(p.name, p.type, p.mutable, p, true); });
     ctx.inferredReturns=[];
     const abstractReturn=instance.returnType.startsWith('impl ')?instance.returnType.slice(5):null;
@@ -132,6 +142,8 @@ export class SemanticAnalyzer {
       if(abstractReturn&&!this.hasTrait(inferred,abstractReturn))throw new Diagnostic('E0277',`Returned type does not implement ${abstractReturn}`,copy.body.span);
       instance.returnType=inferred;
     }else T.unify(instance.returnType, actual, new Map(), copy.body);
+    if (fn.implGenericCount && new AssigneeAnalyzer(this, ctx).carriesReference(instance.returnType))
+      throw new Diagnostic('F_IMPL_REFERENCE', 'Reference-carrying generic method results require interprocedural loan tracking', node.span);
     instance.locals = ctx.locals;
     delete instance.substitution;
     if (query) {
@@ -185,8 +197,9 @@ export class SemanticAnalyzer {
         if(constructor?.form==='tuple'){type=this.functionValues.create(node,constructor,ctx,expected);break;}
         if (constructor?.kind === 'struct') { type = this.structures.construct(node, constructor, [], ctx, expected); break; }
         if (constructor && !constructor.variant.fields.length) { type = this.construct(node, constructor, [], ctx, expected); break; }
-        const fn=this.index.resolve(this.index.functions,node.name,ctx.instance.fn.module,node,false);
-        if(fn){type=this.functionValues.create(node,fn,ctx,expected);break;}
+        const associated = this.implementations.associated(node, ctx);
+        const fn = associated?.fn ?? this.index.resolve(this.index.functions,node.name,ctx.instance.fn.module,node,false);
+        if(fn){type=this.functionValues.create(node,fn,ctx,expected,associated ? this.implementations.explicit(associated, node, ctx) : null);break;}
         throw new Diagnostic('E0425', `Unresolved identifier '${node.name}'`, node.span);
       }
       case 'tuple': {
@@ -371,7 +384,7 @@ export class SemanticAnalyzer {
     if (form === 'unit' && node.kind === 'call') throw new Diagnostic('E0618', `${tag} is a value, not a callable constructor`, node.span);
     if (form === 'tuple' && !['call', 'structLiteral'].includes(node.kind)) throw new Diagnostic('F_CONSTRUCTOR_VALUE', 'Call the tuple constructor directly; function-item values are not yet supported', node.span);
     if (variant.fields.length !== args.length) throw new Diagnostic('E0061', `${tag} expects ${variant.fields.length} values`, node.span);
-    const explicit = (node.callee?.typeArguments ?? node.typeArguments ?? []).map(type => this.normalize(type, ctx, node));
+    const explicit = (node.callee?.ownerTypeArguments ?? node.callee?.typeArguments ?? node.ownerTypeArguments ?? node.typeArguments ?? []).map(type => this.normalize(type, ctx, node));
     if (explicit.length && explicit.length !== owner.generics.length) throw new Diagnostic('E0107', 'Incorrect number of constructor type arguments', node.span);
     const hint = T.application(expected ?? ''), substitution = new Map(owner.generics.map((g, i) => [g.name, explicit[i] ?? constructor.typeArguments?.[i] ?? (hint.name === owner.name ? hint.args[i] : null)]));
     args.forEach((arg, i) => {
@@ -483,24 +496,36 @@ export class SemanticAnalyzer {
     const constructor = this.index.constructorFor(name === 'Self' ? ctx.instance.fn.owner : name.startsWith('Self::') && ctx.instance.fn.owner ? ctx.instance.fn.owner + name.slice(4) : name, ctx.instance.fn.module, node);
     if (constructor?.kind === 'struct') return this.structures.construct(node, constructor, node.args, ctx, expected);
     if (constructor) return this.construct(node, constructor, node.args, ctx, expected);
-    const fn = this.index.resolve(this.index.functions, name, ctx.instance.fn.module, node);
-    const explicit = (callee.typeArguments ?? []).map(t => this.normalize(t, ctx, callee));
-    const mapping = new Map(fn.generics.map((g, i) => [g.name, explicit[i] ?? null]));
+    const associated = this.implementations.associated(callee, ctx);
+    const fn = associated?.fn ?? this.index.resolve(this.index.functions, name, ctx.instance.fn.module, node);
+    const explicit = associated ? this.implementations.explicit(associated, callee, ctx) :
+      (callee.typeArguments ?? []).map(t => this.normalize(t, ctx, callee));
+    return this.invoke(node, ctx, fn, explicit, expected);
+  }
+  invoke(node, ctx, fn, explicit = [], expected = null, typedArguments = new Map()) {
+    if (fn.params.length !== node.args.length) throw new Diagnostic('E0061', `${fn.localName ?? fn.name} expects ${fn.params.length} argument(s)`, node.span);
+    const mapping = new Map(fn.generics.map((g, i) => [g.name, explicit[i] === '_' ? null : explicit[i] ?? null]));
+    // Result context is an inference input, not a cast, and never rewrites an
+    // already fixed generic argument. Instantiation rechecks every obligation.
+    if (expected && expected !== '_' && !expected.startsWith('impl ')) T.unify(this.formal(fn, fn.returnType, mapping, node), expected, mapping, node);
     const types = node.args.map((arg, i) => {
-      const formal = fn.params[i] && this.index.type(T.substitute(fn.params[i].type, mapping), fn.module, fn.owner, new Set(mapping.keys()), node);
-      return this.infer(arg, ctx, formal && !mapping.has(formal) ? formal : null);
+      const formal = this.formal(fn, fn.params[i].type, mapping, node);
+      const concrete = ![...mapping].some(([name, type]) => type === null && T.substitute(formal, new Map([[name, '_']])) !== formal);
+      const actual = typedArguments.has(i) ? typedArguments.get(i) : this.infer(arg, ctx, concrete || T.function(formal) ? formal : null);
+      T.unify(formal, actual, mapping, arg); return actual;
     });
-    const instance = this.instantiate(fn, types, explicit, node);
+    const instance = this.instantiate(fn, types, fn.generics.map(g => mapping.get(g.name)), node);
     node.resolved = instance.key;
     ctx.instance.calls.push({to: instance.key, span: node.span, loc: node.loc});
     return instance.returnType;
   }
-  method(node, ctx) {
+  method(node, ctx, expected = null) {
     const receiver = node.callee.object, method = node.callee.field;
     const original = this.infer(receiver, ctx), base = T.reference(original) && original !== '&str' ? T.target(original) : original;
     const app = T.application(base), array = /^\[(.+);\d+\]$/.exec(base);
+    const resolved = this.implementations.lookup(base, method, ctx.instance.fn.module, node);
     const builtins = ['len', 'clone', 'push', 'pop', 'push_str', 'to_string', 'unwrap', 'is_some', 'is_none', 'is_ok', 'is_err'];
-    if (builtins.includes(method)) {
+    if (!resolved && builtins.includes(method)) {
       node.receiver = receiver; node.receiverDeref = base !== original; node.builtin = `method::${method}`;
       if (['push', 'pop', 'push_str'].includes(method) && T.reference(original) && !original.startsWith('&mut '))
         throw new Diagnostic('E0596', 'Cannot mutate through a shared reference', receiver.span);
@@ -523,18 +548,33 @@ export class SemanticAnalyzer {
         if ((app.name === 'Option' && ['is_some', 'is_none'].includes(method)) || (app.name === 'Result' && ['is_ok', 'is_err'].includes(method))) return 'bool';
       }
     }
-    const fn = this.index.resolve(this.index.functions, `${base}::${method}`, ctx.instance.fn.module, node, false);
-    if (!fn) throw new Diagnostic('E0599', `No method '${method}' for ${base}`, node.span);
-    let first = receiver;
-    const formal = this.index.type(fn.params[0]?.type ?? '', fn.module, fn.owner);
+    const fn = resolved?.fn ?? this.index.resolve(this.index.functions, `${base}::${method}`, ctx.instance.fn.module, node, false);
+    if (!fn || fn.params[0]?.name !== 'self') throw new Diagnostic('E0599', `No method '${method}' for ${base}`, node.span);
+    const explicit = resolved ? this.implementations.explicit(resolved, node.callee, ctx) : [];
+    const mapping = new Map(fn.generics.map((g,i) => [g.name, explicit[i] ?? null]));
+    let first = receiver, firstType = original;
+    const formal = this.formal(fn, fn.params[0].type, mapping, node);
     if (T.reference(formal) && !T.reference(original)) {
-      first = {kind: 'unary', op: '&', mutable: formal.startsWith('&mut '), value: receiver, span: receiver.span, loc: receiver.loc};
+      const isPlace = value => value.kind === 'variable' && !!value.binding || value.kind === 'unary' && value.op === '*' ||
+        ['field', 'index'].includes(value.kind) && (value.autoDeref || isPlace(value.object));
+      if (!isPlace(first)) {
+        let name = `__method_receiver${ctx.locals.length}`;
+        while (ctx.lookup(name, node, false)) name += '_';
+        const binding = ctx.declare(name, original, true, receiver);
+        node.temporaryCallee = {value: receiver, binding};
+        first = {kind:'variable', name, binding, type:original, copy:this.hasTrait(original,'Copy'), span:receiver.span, loc:receiver.loc};
+      }
+      this.place(first, ctx, formal.startsWith('&mut '));
+      firstType = (formal.startsWith('&mut ') ? '&mut ' : '&') + original;
+      first = {kind:'unary', op:'&', mutable:formal.startsWith('&mut '), value:first, type:firstType,
+        copy:this.hasTrait(firstType,'Copy'), span:receiver.span, loc:receiver.loc};
     }
     node.args = [first, ...node.args];
-    const types = node.args.map((arg, i) => this.infer(arg, ctx, fn.params[i]?.type));
-    const instance = this.instantiate(fn, types, [], node);
-    node.resolved = instance.key; delete node.builtin; delete node.receiver;
-    ctx.instance.calls.push({to: instance.key, span: node.span, loc: node.loc}); return instance.returnType;
+    delete node.builtin; delete node.receiver;
+    const result = this.invoke(node, ctx, fn, explicit, expected, new Map([[0, firstType]]));
+    if ((fn.implGenericCount || node.temporaryCallee) && new AssigneeAnalyzer(this, ctx).carriesReference(result))
+      throw new Diagnostic('F_IMPL_REFERENCE', 'Reference-carrying generic method results require interprocedural loan tracking', node.span);
+    return result;
   }
   block(block, ctx, expected = null) {
     ctx.push(); let flow = '()';

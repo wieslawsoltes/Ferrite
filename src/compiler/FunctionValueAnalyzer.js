@@ -27,13 +27,13 @@ export class FunctionValueAnalyzer {
   base(type){while(T.reference(type))type=T.target(type);return type;}
   get(type){return this.records.get(this.base(type));}
   canonical(type){return typeof type==='string'&&this.aliases.size?T.substitute(type,this.aliases):type;}
-  create(node,definition,ctx,expected=null) {
+  create(node,definition,ctx,expected=null,prepared=null) {
     const constructor=definition.kind==='fn'?null:definition;
     const owner=constructor?.owner??definition;
     if(constructor&&constructor.form!=='tuple')throw new Diagnostic('E0533','Only tuple constructors are callable items',node.span);
     if(constructor?.kind==='struct')for(const field of owner.fields)this.index.fieldVisible(owner,field,ctx.instance.fn.module,node);
-    const explicit=(node.typeArguments??constructor?.typeArguments??[]).map(type=>this.a.normalize(type,ctx,node));
-    if(explicit.length&&explicit.length!==owner.generics.length)throw new Diagnostic('E0107',`Expected ${owner.generics.length} function-item type arguments`,node.span);
+    const explicit=prepared ?? (node.ownerTypeArguments??node.typeArguments??constructor?.typeArguments??[]).map(type=>this.a.normalize(type,ctx,node));
+    if(!prepared&&explicit.length&&explicit.length!==owner.generics.length)throw new Diagnostic('E0107',`Expected ${owner.generics.length} function-item type arguments`,node.span);
     const type=this.name(),record={type,definition,constructor,owner,node,ctx,explicit,
       mapping:new Map(owner.generics.map((g,i)=>[g.name,explicit[i]==='_'?null:explicit[i]??null])),signature:null,instance:null};
     this.records.set(type,record);
@@ -58,7 +58,7 @@ export class FunctionValueAnalyzer {
     }
     const formals=this.formals(record),parameters=new Set(record.mapping.keys());
     if(hints.length&&hints.length!==formals.length)throw new Diagnostic('E0061',`Callable expects ${formals.length} arguments`,node?.span??record.node.span);
-    const normalize=type=>this.index.type(T.substitute(type,record.mapping),record.owner.module,record.owner.owner,parameters,record.node);
+    const normalize=type=>record.constructor ? this.index.type(T.substitute(type,record.mapping),record.owner.module,record.owner.owner,parameters,record.node) : this.a.formal(record.owner,type,record.mapping,record.node);
     formals.forEach((type,i)=>{if(hints[i])T.unify(normalize(type),hints[i],record.mapping,node??record.node);});
     if(resultHint)T.unify(normalize(this.result(record)),resultHint,record.mapping,node??record.node);
     if([...record.mapping.values()].some(type=>!type||/\b_\b/.test(type))){

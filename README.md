@@ -21,11 +21,31 @@ Find in Files has source-linked results, include/exclude masks, explicit replace
 
 Every compiler representation uses original-file UTF-16 spans: selecting a token, AST/HIR node, symbol, obligation, ownership event, generic instance, MIR instruction, call site, diagnostic or mapped generated-JavaScript line navigates to the source. Editor selections highlight matching visible items. Edits invalidate old spans instead of navigating into obsolete source.
 
+## Rust UI Studio and embeddable compiler
+
+Open the optional **Rust UI Studio** tool window to create typed Rust `view!` components,
+edit source-backed visual nodes, preview real DOM state/events using JavaScript, Wasm
+or MIR, inspect live hooks/state, step event callbacks and export a self-contained HTML
+application. The ordinary editor and visual editor share workspace source and revisions.
+Counter, controlled-input and typed-component examples are included. Previews execute
+in opaque-origin iframes; MCP edits retain approval, hash checks and checkpoints.
+
+The reusable SDK is `src/sdk/Ferrite.js`; `src/sdk/ferrite.bundle.js` embeds the compiler
+and runtime as a single classic script. Explicit `Ferrite.runScripts()` executes inline
+Rust script tags. Public typed JSX/component/DOM adapters support source-level migration
+of React-style function components. See the [Rust UI guide](docs/rust-ui.md) and
+[embedding example](examples/ui-embed.html).
+
+**Compatibility remains explicit:** Ferrite's browser compiler is a Rust subset, and
+this independent synchronous UI runtime is not full React compatibility. Native Cargo,
+React internals, SSR/hydration and arbitrary third-party crates/components are not silently
+emulated. The guide lists the delivered API, safety boundaries and remaining work.
+
 ## Coding agents, Rust MCP and terminals
 
 The **Coding Agent** now runs **inside the browser by default**, following the browser-first agent design in VB6 Studio Web. Open the hosted IDE, choose OpenAI, Anthropic or Gemini, press **API sign in**, explicitly consent to direct-browser key exposure, select a tool-capable model, and run a task. **No local bridge, Node/Python installation, token or workspace synchronization is required.** Tools edit the project already open in the IDE.
 
-The same shared streamed harness supplies **21 browser tools**, actual compiler-worker/MIR execution, **13 source-aware browser Rust analysis methods**, **21 IDE commands**, live source edits and conditional checkpoints, task/run change review with hunk restoration, explicit follow-up queues, human questions, per-tool permission leases, read-only child agents, context compaction and execution visualization. Sessions and review data persist in project-scoped IndexedDB with cross-tab ownership; unavailable storage is clearly labelled memory-only. API keys remain in memory, never storage or source. Direct browser credentials are exposed to trusted page code/extensions; use a dedicated restricted key and provider spending limits.
+The same shared streamed harness supplies the **shared browser tool registry**, actual compiler-worker/MIR execution, **13 source-aware browser Rust analysis methods**, the **IDE command bridge**, live source edits and conditional checkpoints, task/run change review with hunk restoration, explicit follow-up queues, human questions, per-tool permission leases, read-only child agents, context compaction and execution visualization. Sessions and review data persist in project-scoped IndexedDB with cross-tab ownership; unavailable storage is clearly labelled memory-only. API keys remain in memory, never storage or source. Direct browser credentials are exposed to trusted page code/extensions; use a dedicated restricted key and provider spending limits.
 
 The Terminal supports workspace utilities and pipelines, browser Rust-subset `cargo check/run/test`, and the **same harness** through `agent login`, `agent task`, `agent status`, approval/question commands, stop/resume/compact/fork/export. These browser commands do not pretend to be installed native programs. See the [bridge-free browser agent guide](docs/browser-agent.md).
 

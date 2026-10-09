@@ -73,8 +73,8 @@ export function registerUITools(registry, {workspace, compiler, ide}) {
     ({path: file, ...args}, context) => ide.request('ui.preview', {file, ...args}, context));
   add('ui_inspect', 'Inspect the connected, current UI preview’s component tree, state handles, commit timings and debugger. Stale previews are rejected.',
     object(), 'read', (_, context) => ide.request('ui.inspect', {}, context));
-  add('ui_debug', 'Arm the next UI event callback, step MIR instructions/source lines, continue with breakpoints from the editor or disarm. Rendering/effects remain synchronous; paused events cannot cancel a past browser default.',
-    object({action: {enum: ['arm', 'step', 'step-line', 'continue', 'stop']}, expectedRevision: integer(0, Number.MAX_SAFE_INTEGER)}, ['action']), 'execute',
+  add('ui_debug', 'Arm the next UI event callback, step or reverse MIR instructions/source lines and staged state, restart retained history, continue with breakpoints from the editor or disarm. Rendering/effects remain synchronous; paused events cannot cancel a past browser default.',
+    object({action: {enum: ['arm', 'step', 'step-line', 'back', 'back-line', 'restart', 'continue', 'stop']}, expectedRevision: integer(0, Number.MAX_SAFE_INTEGER)}, ['action']), 'execute',
     (args, context) => ide.request('ui.debug', args, context));
   add('ui_state_set', 'Set a live Rust state handle through the checked type boundary. Integers use decimal strings to avoid JSON precision loss. Owned records, arrays, tuples and enums are validated against compiler-generated schemas. Requires execution approval.',
     object({handle: integer(1, 0xffffffff), value: {type: ['string', 'boolean', 'number', 'array', 'object', 'null']}, expectedRevision: integer(0, Number.MAX_SAFE_INTEGER)}, ['handle', 'value']), 'execute',

@@ -17,7 +17,7 @@ export class UIStudio {
     this.unselect = app.selection.subscribe(({span, origin}) => {
       if (origin === 'ui-studio' || !span || span.file !== this.file || !this.designer) return;
       const nodes = this.designer.nodes.filter(node => node.start <= span.start && node.end >= span.end);
-      nodes.sort((a, b) => a.end - a.start - (b.end - b.start)); if (nodes[0]) this.select(nodes[0].id, false);
+      nodes.sort((a, b) => a.end - a.start - (b.end - b.start)); if (nodes[0] && nodes[0].id !== this.selected) this.select(nodes[0].id, false);
     });
     const stored = Object.keys(this.model.files).find(file => file.endsWith('.rs') && Object.hasOwn(this.model.files, UIProject.manifestPath(file)));
     if (stored) this.loadProject(stored);
@@ -66,7 +66,7 @@ export class UIStudio {
     this.css = Dom.element('textarea', 'studio-source'); this.css.setAttribute('aria-label', 'UI application CSS'); this.css.value = UI_SAMPLE_CSS; this.css.oninput = () => { this.saveProject(); this.markStale(); }; stylesDetails.append(this.css);
     const debugDetails = Dom.element('details', 'studio-details'); debugDetails.open = true; debugDetails.append(Dom.element('summary', '', 'Live state / event debugger'));
     const debugBar = Dom.element('div', 'studio-toolbar');
-    for (const [label, command, icon] of [['Arm events', 'arm', 'debug'], ['Instruction', 'step', 'step'], ['Source line', 'step-line', 'line'], ['Continue', 'continue', 'run'], ['Disarm', 'stop', 'stop']])
+    for (const [label, command, icon] of [['Arm events', 'arm', 'debug'], ['Instruction', 'step', 'step'], ['Source line', 'step-line', 'line'], ['Back instruction', 'back', 'step'], ['Back line', 'back-line', 'line'], ['Restart event', 'restart', 'debug'], ['Continue', 'continue', 'run'], ['Disarm', 'stop', 'stop']])
       debugBar.append(this.button(label, () => this.debug(command), icon));
     this.states = Dom.element('div', 'studio-states'); this.debugOutput = Dom.element('pre', 'studio-debug');
     debugDetails.append(debugBar, this.states, this.debugOutput);

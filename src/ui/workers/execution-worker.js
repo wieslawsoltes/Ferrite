@@ -48,10 +48,12 @@ self.onmessage = ({data}) => {
         }postMessage({type:'tests-done',results});return;
       }
       if (data.mode === 'test') { runTests(data.functions, data.tests ?? []).catch(e => postMessage(errorData(e))); return; }
-      machine = new MirVirtualMachine(data.functions, {...options, entry: data.entry}); breakpoints = data.breakpoints ?? [];
+      machine = new MirVirtualMachine(data.functions, {...options, entry: data.entry, history: data.mode === 'debug'}); breakpoints = data.breakpoints ?? [];
       if (data.mode === 'debug') publish(); else { running = true; pump(); }
     } else if (data.command === 'pause') { running = false; publish(); }
     else if (data.command === 'continue') { if (!running && !machine?.done) { breakpoints = data.breakpoints ?? []; skipLine = machine.nextSpan(); running = true; pump(); } }
+    else if (!running && machine && data.command === 'back') { machine.stepBack(); publish(); }
+    else if (!running && machine && data.command === 'back-line') { machine.stepBackLine(); publish(); }
     else if (!running && machine && !machine.done && data.command === 'step') { machine.step({capture: false}); publish(); }
     else if (!running && machine && !machine.done && data.command === 'step-line') { machine.stepLine(); publish(); }
   } catch (error) { running = false; postMessage(errorData(error)); }

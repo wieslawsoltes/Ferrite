@@ -27,7 +27,7 @@ export function compileRust(source: string, options?: CompileOptions): RustArtif
 export function compileUI(source: string, options?: UICompileOptions): UIArtifact;
 /** Compiled artifacts contain executable JavaScript; accept only trusted artifacts. */
 export function mountUI(sourceOrArtifact: string | UIArtifact, container: Element, options?: UIOptions): UISession;
-export function runRust(sourceOrArtifact: string | RustArtifact, options?: {backend?: Backend; entry?: string; args?: unknown[]; maxSteps?: number; maxTrace?: number; maxDepth?: number} & CompileOptions): {value: unknown; output: string; steps: number; debugger?: unknown};
+export function runRust(sourceOrArtifact: string | RustArtifact, options?: {backend?: Backend; entry?: string; args?: unknown[]; history?: boolean | {maxSnapshots?: number; maxBytes?: number}; maxSteps?: number; maxTrace?: number; maxDepth?: number} & CompileOptions): {value: unknown; output: string; steps: number; debugger?: unknown};
 export function exportHTML(artifact: UIArtifact, options?: ExportOptions): string;
 export {renderToString, renderToStaticMarkup, renderUIToString, exportHydratedHTML} from '../ui-framework/ServerRenderer.js';
 import {renderToString, renderToStaticMarkup, renderUIToString, exportHydratedHTML} from '../ui-framework/ServerRenderer.js';
@@ -41,7 +41,7 @@ export class UISession {
   updateProps(props: unknown, bindings?: {onEvent?: (name: string, value: JsonValue) => void; components?: Record<string, unknown>}): this;
   mount(container: Element, options?: {hydrate?: boolean; identifierPrefix?: string; onRecoverableError?: (error: Error) => void}): this; inspect(): UISnapshot; inspectDebugger(): Record<string, unknown>;
   armDebugger(options?: {breakpoints?: {file: string; line: number}[]}): Record<string, unknown>;
-  debug(command?: 'step' | 'step-line' | 'continue' | 'stop'): Record<string, unknown>;
+  debug(command?: 'step' | 'step-line' | 'back' | 'back-line' | 'restart' | 'continue' | 'stop'): Record<string, unknown>;
   setState(handle: number, value: JsonValue): UISnapshot;
   subscribe(listener: (event: Record<string, unknown>) => void): () => void; dispose(): void;
 }
@@ -73,7 +73,7 @@ export class UIProject {
   changes(settings?: Partial<UIProjectSettings>, css?: string): Record<string, string>;
 }
 
-export interface RustReactHandle { inspect(): UISnapshot; setState(handle: number, value: JsonValue): UISnapshot; armDebugger(options?: {breakpoints?: {file: string; line: number}[]}): Record<string, unknown>; debug(command?: 'step' | 'step-line' | 'continue' | 'stop'): Record<string, unknown> }
+export interface RustReactHandle { inspect(): UISnapshot; setState(handle: number, value: JsonValue): UISnapshot; armDebugger(options?: {breakpoints?: {file: string; line: number}[]}): Record<string, unknown>; debug(command?: 'step' | 'step-line' | 'back' | 'back-line' | 'restart' | 'continue' | 'stop'): Record<string, unknown> }
 export interface RustReactProps<T> { value?: T; onEvent?: (name: string, value: JsonValue) => void; components?: Record<string, unknown>; ref?: {current: RustReactHandle | null} | ((handle: RustReactHandle | null) => void) | null }
 /** The return element type is inferred from the injected React installation. */
 export function createReactAdapter<R extends {createElement: (...args: never[]) => unknown}>(dependencies: {React: R; ReactDOMClient?: object; ReactDOM?: object; ReactDOMServer?: object}): {

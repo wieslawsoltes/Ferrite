@@ -60,6 +60,7 @@ export class UISession {
   }
   updateProps(props, {onEvent = this.bindings.onEvent, components = this.bindings.components} = {}) {
     if (!this.root || this.disposed) throw Error('Mount a UI session before updating props');
+    if (this.debugger.vm) throw Error('Finish or stop the paused event before updating props');
     if (this.artifact.entryPropsType) this.values.decode(this.artifact.entryPropsType, props);
     this.bindings = this.validateBindings({props, onEvent, components});
     this.root.render(this.ui.h(this.App)); return this;
@@ -113,7 +114,19 @@ export class UISession {
     const u = this.ui, node = handle => this.resolve(handle, 'node'), create = vnode => this.allocate('node', vnode);
     const callback = (index, values = [], options) => this.closure(spec.callbacks?.[index], args[index], values, options);
     const text = value => String(value?.__ref ? runtime.read(value) : value ?? '');
-    const state = (handle, kind) => { const result = this.resolve(handle, 'state'); if (result.kind !== kind) throw Error(`State requires ${kind}`); return result.cell; };
+    const state = (handle, kind) => {
+      const result = this.resolve(handle, 'state'); if (result.kind !== kind) throw Error(`State requires ${kind}`);
+      if (this.debugRunning && this.debugger.overlay) {
+        const staged = this.debugger.overlay.get(Number(handle.handle));
+        if (!staged || staged.cell !== result.cell) throw Error('State ownership changed during paused event');
+        return {get value() { return staged.value; }, set(value) { staged.value = value; }};
+      }
+      return result.cell;
+    };
+    if (this.debugRunning && !['get', 'get_string', 'get_bool', 'read', 'set', 'set_string', 'set_bool', 'write', 'modify', 'update'].includes(spec.name)) {
+      this.commitDebugState();
+      this.debugger.vm.historyBarrier(`Host operation ui::${spec.name}`);
+    }
     const newState = (kind, initial) => {
       const cell = u._useCell(initial, {kind: `rust-state:${kind}`});
       if (!cell.handle) { cell.handle = this.allocate('state', cell.retained = {kind, cell}, true); cell.dispose = () => this.handles.delete(Number(cell.handle.handle)); }
@@ -253,33 +266,68 @@ export class UISession {
   startDebugEvent() {
     const debug = this.debugger, next = debug.queue.shift(); if (!next) return;
     debug.bindings = next.bindings;
+    debug.overlay = new Map();
+    this.pruneHandles();
+    for (const [handle, record] of this.handles) {
+      const state = record.weak ? record.weak.deref() : record.value;
+      if (record.kind === 'state' && state) debug.overlay.set(handle, {cell: state.cell, baseline: state.cell.value, value: state.cell.value, kind: state.kind});
+    }
     this.callBudget = 0; debug.descriptor = next.descriptor; debug.scope = [];
     const ref = {__ref: true, cell: {value: next.environment}, path: []};
-    debug.vm = this.prepareVm(next.descriptor.instance, [ref, ...next.args]); this.emit('debug-paused', this.inspectDebugger());
+    debug.vm = this.prepareVm(next.descriptor.instance, [ref, ...next.args]);
+    debug.vm.enableHistory({captureExternal: () => [...debug.overlay].map(([id, record]) => [id, record.value]),
+      restoreExternal: values => { for (const [id, value] of values) debug.overlay.get(id).value = value; }});
+    this.emit('debug-paused', this.inspectDebugger());
+  }
+  assertDebugState() {
+    for (const [handle, staged] of this.debugger.overlay ?? []) {
+      const record = this.resolve({handle: BigInt(handle)}, 'state');
+      if (record.cell !== staged.cell || !Object.is(record.cell.value, staged.baseline)) throw Error('UI state changed outside the paused event; stop and retry');
+    }
+  }
+  commitDebugState() {
+    this.assertDebugState();
+    for (const staged of this.debugger.overlay?.values() ?? []) {
+      if (!Object.is(staged.value, staged.baseline)) staged.cell.set(staged.value);
+      staged.baseline = staged.cell.value;
+    }
   }
   debug(command = 'continue') {
     const debug = this.debugger;
-    if (command === 'stop') { if (debug.scope) this.release(debug.scope); debug.vm = null; debug.scope = null; debug.queue = []; debug.armed = false; return this.inspectDebugger(); }
-    if (!['step', 'step-line', 'continue'].includes(command)) throw Error('Unknown UI debugger command');
+    if (command === 'stop') {
+      if (debug.scope) this.release(debug.scope);
+      debug.vm = null; debug.scope = null; debug.overlay = null; debug.queue = []; debug.armed = false; return this.inspectDebugger();
+    }
+    if (!['step', 'step-line', 'back', 'back-line', 'restart', 'continue'].includes(command)) throw Error('Unknown UI debugger command');
     if (!debug.vm) this.startDebugEvent();
     const vm = debug.vm; if (!vm) return this.inspectDebugger();
+    this.assertDebugState();
     const previousBindings = this.currentBindings; this.currentBindings = debug.bindings;
-    this.scopes.push(debug.scope); this.depth++;
+    this.scopes.push(debug.scope); this.depth++; this.debugRunning = true;
+    let committed = false;
     try {
-      if (command === 'step') vm.step(); else if (command === 'step-line') vm.stepLine(); else vm.run({breakpoints: debug.breakpoints, skipFirst: true});
+      if (command === 'back') vm.stepBack();
+      else if (command === 'back-line') vm.stepBackLine();
+      else if (command === 'restart') { while (vm.historyInfo().available) vm.stepBack(); }
+      else if (command === 'step') vm.step();
+      else if (command === 'step-line') vm.stepLine();
+      else vm.run({breakpoints: debug.breakpoints, skipFirst: true});
       this.trace = vm.trace.slice();
-      if (vm.done) { this.release(debug.scope); debug.scope = null; }
-    } catch (error) {
-      this.release(debug.scope ?? []); debug.scope = null; debug.vm = null; throw error;
-    } finally { this.depth--; this.scopes.pop(); this.currentBindings = previousBindings; this.ui.flushSync(); }
-    const result = this.inspectDebugger(); this.emit(vm.done ? 'debug-complete' : 'debug-paused', result);
-    if (vm.done) debug.vm = null;
+      // Instruction stepping can finish provisionally; Continue is the explicit DOM/effect commit.
+      if (vm.done && command === 'continue') {
+        this.commitDebugState(); committed = true; vm.historyBarrier('Committed DOM render and effects');
+        this.release(debug.scope); debug.scope = null;
+      }
+    } finally { this.debugRunning = false; this.depth--; this.scopes.pop(); this.currentBindings = previousBindings; this.ui.flushSync(); }
+    const result = this.inspectDebugger(); this.emit(committed ? 'debug-complete' : 'debug-paused', result);
+    if (committed) { debug.vm = null; debug.overlay = null; }
     return result;
   }
   inspectDebugger() {
     return {armed: this.debugger.armed, queued: this.debugger.queue.length, callback: this.debugger.descriptor,
       state: this.debugger.vm?.snapshot() ?? null, trace: this.trace.slice(-this.maxTrace), breakpoints: this.debugger.breakpoints.slice(),
-      boundary: 'Instruction stepping pauses event callbacks only. Component rendering and effect callbacks remain synchronous.'};
+      stagedStates: [...(this.debugger.overlay ?? [])].map(([handle, record]) => ({handle, type: record.kind, value: this.values.schemas[record.kind] ? this.values.encode(record.kind, record.value) : this.ui._safeValue(record.value)})),
+      boundary: 'Back restores bounded Rust instructions and staged state. Continue commits the DOM. Host effects establish irreversible boundaries; rendering/effects are synchronous.'};
   }
   inspect() {
     const states = [];
@@ -291,6 +339,7 @@ export class UISession {
       root: this.root?.inspect() ?? null, debugger: this.inspectDebugger()};
   }
   setState(handle, value) {
+    if (this.debugger.vm) throw Error('Finish or stop the paused event before editing state');
     const record = this.resolve({handle: BigInt(handle)}, 'state');
     if (this.values.schemas[record.kind]) value = this.values.decode(record.kind, value);
     else if (record.kind === 'i64') { value = BigInt(String(value).replace(/n$/, '')); if (value < -(1n << 63n) || value >= 1n << 63n) throw Error('State is outside i64 bounds'); }

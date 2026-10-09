@@ -1,6 +1,7 @@
 import {CanvasController} from './CanvasController.js';
 import {OwnedValues} from './OwnedValues.js';
 import {createUIRuntime} from './Runtime.js';
+import {ExecutionSnapshot} from '../runtime/ExecutionSnapshot.js';
 import {Runtime} from '../runtime/Runtime.js';
 import {MirVirtualMachine} from '../runtime/MirVirtualMachine.js';
 import {WebAssemblyRuntime} from '../runtime/WebAssemblyRuntime.js';
@@ -25,6 +26,7 @@ export function exportHTML(artifact, {backend = 'javascript', title = 'Ferrite R
 const createUIRuntime = ${createUIRuntime.toString()};
 const UI = createUIRuntime();
 const Runtime = ${Runtime.toString()};
+const ExecutionSnapshot = ${ExecutionSnapshot.toString()};
 const MirVirtualMachine = ${MirVirtualMachine.toString()};
 const WebAssemblyRuntime = ${WebAssemblyRuntime.toString()};
 const OwnedValues = ${OwnedValues.toString()};
@@ -54,7 +56,7 @@ if(channel){
       else if(message.command==='layout')result=canvas.configure(message);
       else if(message.command==='pick'){picking=!!message.value;result={picking};}
       else if(message.command==='debug.arm')result=session.armDebugger({breakpoints:message.breakpoints??[]});
-      else if(['debug.step','debug.step-line','debug.continue','debug.stop'].includes(message.command))result=session.debug(message.command.slice(6));
+      else if(['debug.step','debug.step-line','debug.back','debug.back-line','debug.restart','debug.continue','debug.stop'].includes(message.command))result=session.debug(message.command.slice(6));
       else if(message.command==='state.set')result=session.setState(message.handle,message.value);
       else throw Error('Unknown preview command');
       send({reply:message.id,result});

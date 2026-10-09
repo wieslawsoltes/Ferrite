@@ -3,7 +3,7 @@ import {object, text, path, integer} from './ToolSchemas.js';
 import {RUST_LANGUAGE_METHODS} from '../core/LanguageMethods.js';
 import {AgentError} from '../core/AgentError.js';
 
-export const IDE_COMMANDS = [...UI_IDE_COMMANDS, 'editor.open', 'editor.select', 'editor.state', 'panel.open', 'panel.move', 'panel.float', 'layout.reset', 'compiler.check', 'compiler.build', 'compiler.run', 'compiler.test', 'compiler.debug', 'compiler.stop', 'visualizer.stage', 'visualizer.instance', 'debug.step', 'debug.step-line', 'debug.continue', 'debug.pause', 'debug.breakpoints', 'search.query'];
+export const IDE_COMMANDS = [...UI_IDE_COMMANDS, 'editor.open', 'editor.select', 'editor.state', 'panel.open', 'panel.move', 'panel.float', 'layout.reset', 'compiler.check', 'compiler.build', 'compiler.run', 'compiler.test', 'compiler.debug', 'compiler.stop', 'visualizer.stage', 'visualizer.instance', 'debug.step', 'debug.step-line', 'debug.back', 'debug.back-line', 'debug.continue', 'debug.pause', 'debug.breakpoints', 'search.query'];
 export function registerCompilerTools(registry, {workspace, compiler, language, ide}) {
   registerUITools(registry, {workspace, compiler, language, ide});
   const options = {type: 'object', properties: {features: {type: 'array', items: text(200), maxItems: 100}, allFeatures: {type: 'boolean'}, defaultFeatures: {type: 'boolean'}, optimize: {type: 'boolean'}, expandNativeMacros: {type: 'boolean'}}, additionalProperties: false};

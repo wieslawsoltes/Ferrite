@@ -1,3 +1,4 @@
+import {ImplObligations} from './ImplObligations.js';
 import {Diagnostic} from './Diagnostic.js';
 import {TypeSystem as T} from './TypeSystem.js';
 
@@ -112,7 +113,9 @@ export class ImplementationResolver {
       while (queue.length) { const term = queue.pop(); if (term.variable) used.add(term.variable); else queue.push(...term.args); }
       for (const name of parameters) if (!used.has(`impl${entry.id}:` + name))
         throw new Diagnostic('E0207', `Implementation parameter ${name} is not constrained by its self type`, impl.span);
+      new ImplObligations(this.a,entry).validate(target,impl);
       for (const fn of entry.methods.values()) {
+        const obligations = new ImplObligations(this.a,entry,fn);
         const all = new Set(fn.generics.map(g => g.name));
         if (fn.params[0]?.name === 'self') {
           let receiver = this.index.type(fn.params[0].type, fn.module, target, all, fn);
@@ -120,9 +123,11 @@ export class ImplementationResolver {
           if (receiver !== target) throw new Diagnostic('E0307', 'The self receiver must refer to the implementing type', fn.params[0].span);
         }
         for (const raw of [...fn.params.map(p => p.type), fn.returnType]) {
+          if (/\b_\b/.test(raw)) throw new Diagnostic('E0121', 'Placeholder types are not allowed in method signatures', fn.span);
           if (raw.startsWith('impl ')) continue; // Existing opaque-return analysis owns this case.
           const type = this.index.type(raw, fn.module, target, all, fn);
           this.index.typeResolver.validateKnown(type, all, fn);
+          obligations.validate(type,fn);
         }
       }
     }
@@ -136,9 +141,9 @@ export class ImplementationResolver {
       }
     }
   }
-  match(entry, type) {
+  match(entry, type, query = null) {
     this.prepare(entry);
-    const bindings = ImplTypePattern.unify(entry.pattern, ImplTypePattern.parse(type, new Set(), 'query:'));
+    const bindings = ImplTypePattern.unify(entry.pattern, query ?? ImplTypePattern.parse(type, new Set(), 'query:'));
     if (!bindings) return null;
     return new Map([...entry.parameters].map(name => [name, ImplTypePattern.render({variable: `impl${entry.id}:` + name}, bindings)]));
   }
@@ -155,9 +160,10 @@ export class ImplementationResolver {
     this.lookups++;
     const candidates = this.byOwner.get(T.application(type).name)?.get(method) ?? [], matches = [];
     let boundFailure = false;
+    const query = ImplTypePattern.parse(type, new Set(), 'query:');
     for (const entry of candidates) {
       this.candidatesExamined++;
-      const mapping = this.match(entry, type);
+      const mapping = this.match(entry, type, query);
       if (!mapping) continue;
       if (!this.applicable(entry, mapping)) { boundFailure = true; continue; }
       matches.push({fn: entry.methods.get(method), mapping});

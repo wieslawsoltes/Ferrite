@@ -37,6 +37,16 @@ export const genericImplCases = [
   ['inherent len method takes precedence over builtin names', `${tuple}impl<T> Cell<T>{fn len(&self,extra:i32)->i32{extra}}fn main(){let c=Cell(false);println!("{}",c.len(31));}`, '31\n'],
   ['recursive generic method reuses a single specialization', `${tuple}impl<T:Copy> Cell<T>{fn count(&self,n:u32)->u32{if n==0{0}else{1+self.count(n-1)}}}fn main(){let c=Cell(true);println!("{}",c.count(4));}`, '4\n'],
 ];
+genericImplCases.push(
+  ['impl nominal header repeats its required bound', 'struct C<T:Copy>(T);impl<T:Copy>C<T>{fn new(v:T)->Self{Self(v)}}fn main(){println!("{}",C::new(12).0);}', '12\n'],
+  ['where predicate proves header well-formedness', 'struct C<T:Copy>(T);impl<T>C<T> where T:Copy{fn new(v:T)->Self{Self(v)}}fn main(){println!("{}",C::new(true).0);}', 'true\n'],
+  ['Copy assumption implies Clone in nominal bounds', 'struct C<T:Clone>(T);impl<T:Copy>C<T>{fn new(v:T)->Self{Self(v)}}fn main(){println!("{}",C::new(13).0);}', '13\n'],
+  ['method bound proves a constrained return type', 'struct Outer<T>(T);struct Inner<U:Copy>(U);impl<T>Outer<T>{fn create<U:Copy>(v:U)->Inner<U>{Inner(v)}}fn main(){println!("{}",Outer::<bool>::create(14).0);}', '14\n'],
+  ['structural array Copy obligation follows element assumption', 'struct C<T:Copy>(T);impl<T:Copy>C<[T;2]>{fn new(v:[T;2])->Self{Self(v)}}fn main(){println!("{}",C::new([7,9]).0[1]);}', '9\n'],
+  ['transparent alias preserves target obligations', 'struct C<T:Copy>(T);type Alias<T>=C<T>;impl<T:Copy>Alias<T>{fn new(v:T)->Self{Self(v)}}fn main(){println!("{}",C::new(15).0);}', '15\n'],
+  ['declared trait assumptions validate constrained nominal signatures', 'trait Mark{}impl Mark for i32{}struct C<T:Mark>(T);impl<T:Mark>C<T>{fn new(v:T)->Self{Self(v)}}fn main(){println!("{}",C::new(16).0);}', '16\n'],
+  ['unused generic impl bound is an assumption not an instantiation demand', 'struct C<T>(T);impl<T:Copy>C<T>{fn unused(self){}}fn main(){println!("ok");}', 'ok\n'],
+);
 export const genericImplCompileFailCases = [
   ['impl bounds reject non-Copy actual types', `${tuple}impl<T:Copy> Cell<T>{fn get(&self)->T{self.0}}fn main(){let c=Cell(String::from("no"));let _=c.get();}`, 'E0277'],
   ['where bounds reject non-Copy actual types', `${tuple}impl<T> Cell<T> where T:Copy{fn get(&self)->T{self.0}}fn main(){let c=Cell(String::from("no"));let _=c.get();}`, 'E0277'],
@@ -64,3 +74,18 @@ export const genericImplCompileFailCases = [
   ['impl target placeholders are invalid', `${tuple}impl Cell<_>{}fn main(){}`, 'E0121'],
   ['generic consuming receiver cannot be reused', `${tuple}impl<T> Cell<T>{fn into(self)->T{self.0}}fn main(){let c=Cell(String::from("moved"));let _=c.into();let _=c.into();}`, 'E0382'],
 ];
+
+genericImplCompileFailCases.push(
+  ['unused impl must satisfy nominal header Copy bound', 'struct C<T:Copy>(T);impl<T>C<T>{}fn main(){}', 'E0277'],
+  ['unused method signature must satisfy nominal bounds', 'struct C<T>(T);struct D<T:Copy>(T);impl<T>C<T>{fn unused(&self,v:D<T>){}}fn main(){}', 'E0277'],
+  ['unused method result must satisfy nominal bounds', 'struct C<T>(T);struct D<T:Copy>(T);impl<T>C<T>{fn unused(&self)->D<T>{panic!("unused")}}fn main(){}', 'E0277'],
+  ['Clone does not imply Copy for a header obligation', 'struct C<T:Copy>(T);impl<T:Clone>C<T>{}fn main(){}', 'E0277'],
+  ['unused concrete false where predicate is diagnosed', 'struct C<T>(T);impl<T>C<T> where String:Copy{}fn main(){}', 'E0277'],
+  ['unknown unused impl bound is diagnosed', 'struct C<T>(T);impl<T:Missing>C<T>{}fn main(){}', 'E0405'],
+  ['unknown unused method bound is diagnosed', 'struct C<T>(T);impl<T>C<T>{fn f<U:Missing>(self,u:U){}}fn main(){}', 'E0405'],
+  ['unknown where predicate subject is diagnosed', 'struct C<T>(T);impl<T>C<T> where Missing:Copy{}fn main(){}', 'E0412'],
+  ['method parameter placeholder is invalid', 'struct C<T>(T);impl<T>C<T>{fn f(self,v:_){}}fn main(){}', 'E0121'],
+  ['method result placeholder is invalid', 'struct C<T>(T);impl<T>C<T>{fn f(self)->_{1}}fn main(){}', 'E0121'],
+  ['type arguments cannot apply to an impl type parameter', 'struct C<T>(T);impl<T>C<T>{fn f(self,v:T<u32>){}}fn main(){}', 'E0109'],
+  ['nested nominal header obligation is checked', 'struct C<T>(T);struct D<T:Copy>(T);impl<T>C<(D<T>,i32)>{}fn main(){}', 'E0277'],
+);

@@ -32,10 +32,12 @@ jobs:
               if len(chunks) > 64 or any(not re.fullmatch(r'\.github/compiler-payload-[a-z0-9-]+\.b64', path) for path in chunks):
                   raise SystemExit('Invalid publication chunks')
               encoded = ''.join(Path(path).read_text().strip() for path in chunks)
+              (evidence / 'transport-original.b64').write_text(encoded)
               for repair in manifest.get('repairs', []):
                   if encoded.count(repair['old']) != 1:
                       raise SystemExit('Transport repair must match exactly once')
                   encoded = encoded.replace(repair['old'], repair['new'], 1)
+              (evidence / 'transport-repaired.b64').write_text(encoded)
               compressed = base64.b64decode(encoded, validate=True)
               if hashlib.sha256(compressed).hexdigest() != manifest['sha256']:
                   raise SystemExit('Payload digest mismatch')

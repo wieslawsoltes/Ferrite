@@ -59,8 +59,12 @@ jobs:
                   merged = subprocess.run(['git', 'merge', '--no-commit', '--no-ff', change['merge']])
                   if merged.returncode:
                       conflicts = git('diff', '--name-only', '--diff-filter=U').splitlines()
-                      if not conflicts or any(not re.fullmatch(r'src/(ui/workers/[a-z-]+|sdk/ferrite)\.bundle\.js', p) for p in conflicts):
-                          raise SystemExit('Unexpected handwritten merge conflict')
+                      source = [p for p in conflicts if not re.fullmatch(r'src/(ui/workers/[a-z-]+|sdk/ferrite)\.bundle\.js', p)]
+                      allowed = {'src/compiler/SemanticAnalyzer.js', 'tools/ui-browser-acceptance.py'}
+                      if not conflicts or not set(source) <= allowed or sorted(source) != sorted(change.get('sourceConflicts', [])) or source and not change.get('patch'):
+                          raise SystemExit('Unexpected or unreviewed handwritten merge conflict')
+                      # Stage a reproducible baseline, then apply the reviewed resolution below.
+                      # Exact final-tree verification prevents silently discarding either branch.
                       git('checkout', '--ours', '--', *conflicts)
                       git('add', '--', *conflicts)
               if change.get('patch'):

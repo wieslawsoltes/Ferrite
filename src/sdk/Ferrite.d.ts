@@ -1,0 +1,55 @@
+import type {RuntimeAPI, Root} from '../ui-framework/React.js';
+export type Backend = 'mir' | 'wasm' | 'javascript';
+export interface SourceSpan { file: string; start: number; end: number; line: number; column: number; endLine?: number; endColumn?: number }
+export interface Diagnostic { code: string; message: string; severity?: 'error' | 'warning'; span?: SourceSpan; notes?: string[] }
+export interface MirFunction { instance: string; blocks: unknown[]; registers: unknown[]; params: unknown[]; returnType: string; span?: SourceSpan }
+export interface RustArtifact {
+  version: string; entry: string | null; js: string; wasm: {bytes: number[]; [name: string]: unknown};
+  mir: MirFunction[]; optimizedMir: MirFunction[]; diagnostics: Diagnostic[]; timings: {name: string; ms: number}[];
+  verification: unknown; ast: unknown; tokens: unknown[]; sem: unknown; [stage: string]: unknown;
+}
+export interface UIAttribute { name: string; kind: 'string' | 'expression' | 'boolean'; value?: string | boolean; start: number; end: number }
+export interface UINode { id: string; kind: 'element' | 'text' | 'expression'; span: SourceSpan; start: number; end: number; tag?: string | null; value?: string; attributes?: UIAttribute[]; children?: UINode[] }
+export interface UIArtifact {
+  format: 'ferrite-ui-v1'; abi: 1; source: string; file: string; entry: string; maxSteps: number;
+  nodes: UINode[]; mir: MirFunction[]; optimizedMir: MirFunction[]; js: string; wasm: {bytes: number[]; [name: string]: unknown};
+  diagnostics: Diagnostic[]; verification: unknown; timings: {name: string; ms: number}[]; [stage: string]: unknown;
+}
+export interface CompileOptions { file?: string; entry?: string; optimize?: boolean; now?: () => number; configuration?: Record<string, unknown>; runtime?: Record<string, unknown> }
+export interface UICompileOptions extends CompileOptions { maxSteps?: number }
+export interface UIOptions extends Omit<UICompileOptions, 'runtime'> { backend?: Backend; runtime?: RuntimeAPI; maxHandles?: number; maxTrace?: number; onError?: (error: Error & Partial<Diagnostic>) => void }
+export interface ExportOptions { backend?: Backend; title?: string; css?: string; channel?: string | null }
+export interface UIState { handle: number; type: 'i64' | 'String' | 'bool'; value: string | boolean }
+export interface UISnapshot { states: UIState[]; calls: number; handles: number; debugger: Record<string, unknown>; [name: string]: unknown }
+export function compileRust(source: string, options?: CompileOptions): RustArtifact;
+export function compileUI(source: string, options?: UICompileOptions): UIArtifact;
+/** Compiled artifacts contain executable JavaScript; accept only trusted artifacts. */
+export function mountUI(sourceOrArtifact: string | UIArtifact, container: Element, options?: UIOptions): UISession;
+export function runRust(sourceOrArtifact: string | RustArtifact, options?: {backend?: Backend; entry?: string; args?: unknown[]; maxSteps?: number; maxTrace?: number; maxDepth?: number} & CompileOptions): {value: unknown; output: string; steps: number; debugger?: unknown};
+export function exportHTML(artifact: UIArtifact, options?: ExportOptions): string;
+export function runScripts(options?: {document?: Document; root?: ParentNode; backend?: Backend; onError?: (error: Error, script: HTMLScriptElement) => void}): {script: HTMLScriptElement; result?: UISession | ReturnType<typeof runRust>; error?: Error}[];
+export const UI: RuntimeAPI;
+export function createUIRuntime(): RuntimeAPI;
+export class UICompiler { static compile(source: string, options?: UICompileOptions): UIArtifact }
+export class UISession {
+  constructor(artifact: UIArtifact, options?: UIOptions);
+  readonly artifact: UIArtifact; readonly backend: Backend; readonly root: Root | null; readonly disposed: boolean;
+  mount(container: Element): this; inspect(): UISnapshot; inspectDebugger(): Record<string, unknown>;
+  armDebugger(options?: {breakpoints?: {file: string; line: number}[]}): Record<string, unknown>;
+  debug(command?: 'step' | 'step-line' | 'continue' | 'stop'): Record<string, unknown>;
+  setState(handle: number, value: string | boolean): UISnapshot;
+  subscribe(listener: (event: Record<string, unknown>) => void): () => void; dispose(): void;
+}
+export type DesignOperation = {node: string} & (
+  {op: 'setAttribute'; name: string; value?: string; kind?: 'string' | 'expression' | 'boolean'} |
+  {op: 'removeAttribute'; name: string} | {op: 'setText' | 'setTag'; value: string} |
+  {op: 'insert'; markup: string; before?: string} | {op: 'remove' | 'duplicate'} | {op: 'move'; parent: string; before?: string}
+);
+export interface DesignSnapshot { file: string; entry: string; revision: number; source: string; canUndo: boolean; canRedo: boolean; nodes: (Omit<UINode, 'children'> & {parent: string | null; children?: string[]})[] }
+export class SourceDesigner {
+  constructor(source: string, options?: {file?: string; entry?: string; revision?: number; validate?: boolean; maxHistory?: number});
+  readonly source: string; readonly revision: number; readonly nodes: UINode[];
+  snapshot(): DesignSnapshot; apply(operation: DesignOperation, expectedRevision: number): DesignSnapshot;
+  undo(expectedRevision: number): DesignSnapshot; redo(expectedRevision: number): DesignSnapshot;
+}
+export const Ferrite: Readonly<{version: string; compileRust: typeof compileRust; compileUI: typeof compileUI; mountUI: typeof mountUI; runRust: typeof runRust; runScripts: typeof runScripts; exportHTML: typeof exportHTML; UI: RuntimeAPI; createUIRuntime: typeof createUIRuntime; SourceDesigner: typeof SourceDesigner}>;

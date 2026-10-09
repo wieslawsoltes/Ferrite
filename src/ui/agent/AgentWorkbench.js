@@ -209,6 +209,7 @@ export class AgentWorkbench {
     if (browser && app.backend === 'native' && /^(compiler\.|debug\.)/.test(command)) throw Error('Select a browser compiler backend before browser-agent execution. Native mode is never invoked automatically.');
     if (args.expectedRevision !== undefined && args.expectedRevision !== app.model.revision) throw Error('Stale IDE revision; inspect the current state before retrying.');
     if (!browser && !['editor.state','layout.reset'].includes(command) && !command.startsWith('panel.')) { if (!this.sync.enabled || this.sync.conflicts.length) throw Error('Explicitly import and synchronize this native checkout before source-dependent IDE commands.'); await this.sync.sync(); if (epoch !== this.client.epoch || generation !== this.sync.generation || !this.sync.enabled) throw Error('Workspace context changed during the IDE command. Inspect and synchronize again.'); if (args.expectedRevision !== undefined && args.expectedRevision !== app.model.revision) throw Error('Source changed while synchronizing. Inspect the new revision.'); }
+    if (command.startsWith('ui.')) return app.studio.command(command, args, {signal});
     if (command === 'editor.state') return this.state();
     if (command === 'editor.open' || command === 'editor.select') {
       const path = args.path ?? args.file ?? app.model.active, text = app.model.read(path); app.model.open(path);

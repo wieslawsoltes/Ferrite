@@ -1,3 +1,4 @@
+import {UIStudio} from './studio/UIStudio.js';
 import {AgentWorkbench} from './agent/AgentWorkbench.js';
 import {RepositoryController} from './controllers/RepositoryController.js';
 import {RepositoryView} from './views/RepositoryView.js';
@@ -39,7 +40,7 @@ export class IdeApplication {
     this.build=null;this.buildRevision=-1;this.requestSerial=0;this.options={};this.backend='browser';this.runMode=null;this.nativeArgs=[];
     this.settings={auto:true,optimize:true};try{Object.assign(this.settings,JSON.parse(storage?.getItem('ferrite.settings.v3')??'{}'));}catch{}
     this.settings.auto=this.settings.auto!==false;this.settings.optimize=this.settings.optimize!==false;
-    const definitions=[['agent','Coding Agent','code'],['terminal','Terminal','console'],['project','Project','folder'],['structure','Structure','tree'],['search','Find in Files','search'],['cargo','Cargo','cargo'],['repositories','Repositories','folder'],['crates','Crates','cargo'],['compiler','Compiler','code'],['profile','Profile','chart'],['language','Rust tooling','search'],['native-artifacts','Native artifacts','code'],['run','Run','console'],['problems','Problems','warning'],['debugger','Debugger','debug'],['tests','Tests','test']].map(([id,title,icon])=>({id,title,icon,element:Dom.element('div','tool-panel')}));
+    const definitions=[['ui-studio','Rust UI Studio','fit'],['agent','Coding Agent','code'],['terminal','Terminal','console'],['project','Project','folder'],['structure','Structure','tree'],['search','Find in Files','search'],['cargo','Cargo','cargo'],['repositories','Repositories','folder'],['crates','Crates','cargo'],['compiler','Compiler','code'],['profile','Profile','chart'],['language','Rust tooling','search'],['native-artifacts','Native artifacts','code'],['run','Run','console'],['problems','Problems','warning'],['debugger','Debugger','debug'],['tests','Tests','test']].map(([id,title,icon])=>({id,title,icon,element:Dom.element('div','tool-panel')}));
     this.panels=new Map(definitions.map(d=>[d.id,d.element]));
     this.dock=new DockLayout(this.$('dock-layout'),definitions,{storage});
     this.editor=new CodeEditor(this.$('editor-root'),this.model,this.selection);this.tabs=new TabStrip(this.$('document-tabs'),this.model);
@@ -58,12 +59,13 @@ export class IdeApplication {
     this.cargo=new CargoView(this.panels.get('cargo'),this.model,this.native,{onCommand:command=>this.compile(command),onOptions:options=>{this.options=options;this.invalidate();this.schedule();},onConnected:connected=>{if(!connected)this.repositories.detach();this.repositoryView.render();this.dependencyView.render();this.backend=connected?'native':'browser';this.$('backend-select').value=this.backend;this.status(connected?'Connected to the trusted native Cargo toolchain.':'Native bridge disconnected.','success');}});
     this.structureRegistry=new SpanRegistry(this.selection,'structure');this.runOutput=Dom.element('pre','run-output');this.runOutput.id='terminal';this.runOutput.setAttribute('aria-label','Program output');
     this.runLabel=Dom.element('span','','No program running');const runHeader=Dom.element('div','run-header');runHeader.append(Dom.icon('console'),this.runLabel,Dom.button('Clear',()=>{this.runOutput.textContent='';},{className:'subtle-button'}));this.panels.get('run').append(runHeader,this.runOutput);
+    this.studio=new UIStudio(this);
     this.agent=new AgentWorkbench(this);
     const stdinForm=Dom.element('form','native-stdin'),stdin=Dom.element('input','text-field');stdin.placeholder='Native stdin (line input; not a PTY)';stdin.setAttribute('aria-label','Native standard input');const send=Dom.button('Send input',null);send.type='submit';stdinForm.append(stdin,send);stdinForm.onsubmit=async event=>{event.preventDefault();try{if(!this.repositories.session)throw Error('Open a native repository to send input');await this.native.sendInput(this.repositories.session.id,stdin.value+'\n');stdin.value='';}catch(error){this.status(error.message,'error');}};this.panels.get('run').append(stdinForm);stdinForm.append(Dom.button('Close stdin',async()=>{try{if(!this.repositories.session)throw Error('Open a native repository first');await this.native.sendInput(this.repositories.session.id,null);}catch(error){this.status(error.message,'error');}},{className:'subtle-button'}));
     this.palette=new CommandPalette(()=>this.commands());this.toolbar(definitions);this.events();
     this.model.subscribe(event=>this.modelChanged(event));this.renderWorkspace();this.cargo.render();this.compile('check');
     // Read-only inspection hook used by browser acceptance tests and embedders.
-    Object.defineProperty(window,'ferrite',{value:Object.freeze({version:'0.8.0',getSnapshot:()=>this.model.snapshot(),getBuild:()=>this.build,getRevision:()=>this.model.revision,getSelection:()=>this.selection.value}),configurable:true});
+    Object.defineProperty(window,'ferrite',{value:Object.freeze({version:'0.8.0',getSnapshot:()=>this.model.snapshot(),getBuild:()=>this.build,getRevision:()=>this.model.revision,getSelection:()=>this.selection.value,getUIState:()=>this.studio.state()}),configurable:true});
   }
   toolbar(definitions){
     for(const [command,title,icon] of [['check','Check','check'],['build','Build','build'],['run','Run','run'],['debug','Debug','debug'],['test','Test','test']]){
@@ -78,7 +80,7 @@ export class IdeApplication {
     for(const [id,key] of [['auto-check','auto'],['optimize','optimize']])this.$(id).onchange=()=>{this.settings[key]=this.$(id).checked;try{this.storage?.setItem('ferrite.settings.v3',JSON.stringify(this.settings));}catch{}if(key==='optimize')this.invalidate();if(this.settings.auto)this.schedule();};
     this.$('backend-select').onchange=()=>{this.backend=this.$('backend-select').value;if(this.backend==='native'&&!this.native.capabilities)this.cargo.connect();};
     this.$('search-everywhere').onclick=()=>this.palette.open();this.$('project-menu').onclick=()=>this.palette.open();this.$('native-connect').onclick=()=>this.cargo.connect();
-    for(const id of ['project','structure','search','repositories','crates','cargo','problems','debugger','tests','run','terminal','compiler','profile','native-artifacts','language','agent']){const definition=definitions.find(d=>d.id===id);const button=Dom.button('',()=>this.dock.toggle(id),{icon:definition.icon,className:'rail-button',title:`${definition.title} tool window`});button.dataset.tool=id;this.$(['compiler','profile','native-artifacts','language','agent'].includes(id)?'right-rail':'left-rail').append(button);}
+    for(const id of ['project','structure','search','repositories','crates','cargo','problems','debugger','tests','run','terminal','compiler','profile','native-artifacts','language','agent','ui-studio']){const definition=definitions.find(d=>d.id===id);const button=Dom.button('',()=>this.dock.toggle(id),{icon:definition.icon,className:'rail-button',title:`${definition.title} tool window`});button.dataset.tool=id;this.$(['compiler','profile','native-artifacts','language','agent','ui-studio'].includes(id)?'right-rail':'left-rail').append(button);}
   }
   events(){
     document.addEventListener('keydown',event=>{

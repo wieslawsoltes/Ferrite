@@ -21,7 +21,22 @@ export class AssigneeAnalyzer {
     // A Copy projection or wildcard does not consume its non-Copy container.
     // Moving a non-Copy projection retains the existing whole-local analysis.
     assignment.assignmentMoves = this.leaves(assignment.target).some(node => !node.copy);
-    return actual === '!' ? '!' : '()';
+    assignment.assignmentRhsDiverges = AssigneeAnalyzer.diverges(assignment.value);
+    return assignment.assignmentRhsDiverges || this.leaves(assignment.target).some(node => AssigneeAnalyzer.diverges(node)) ? '!' : '()';
+  }
+  static diverges(node) {
+    if (!node) return false;
+    if (node.type === '!') return true;
+    const any = values => values.some(value => this.diverges(value));
+    switch (node.kind) {
+      case 'tuple': case 'array': return any(node.items);
+      case 'structLiteral': return any(node.fields.map(field => field.value));
+      case 'unary': case 'cast': case 'repeatArray': return this.diverges(node.value);
+      case 'field': case 'index': return any([node.object, node.index]);
+      case 'call': case 'intrinsic': return any([node.receiver, node.temporaryCallee?.value, ...(node.args ?? [])]);
+      case 'binary': return this.diverges(node.left) || !['&&', '||'].includes(node.op) && this.diverges(node.right);
+      default: return false;
+    }
   }
   children(node) {
     return node.assignee === 'struct' ? node.fields.map(field => field.value) : node.items ?? [];

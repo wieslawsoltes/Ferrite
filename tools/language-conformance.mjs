@@ -48,14 +48,18 @@ try {
           evidence.backends.push({backend:label,accepted:false});continue;
         }
         const compiled=compile(fixture.source,{optimize});
+        const machine=new MirVirtualMachine(compiled.optimizedMir,{entry:compiled.entry,maxTrace:0});
+        const wasm=new WebAssemblyRuntime(compiled.wasm);
+        const context=vm.createContext({});
         const actions=[
-          ['MIR',()=>new MirVirtualMachine(compiled.optimizedMir,{entry:compiled.entry,maxTrace:0}).run().output],
-          ['WebAssembly',()=>new WebAssemblyRuntime(compiled.wasm).run().output],
-          ['JavaScript',()=>{let output;vm.runInNewContext(compiled.js,{postMessage:value=>{output=value;}},{timeout:5000});return output;}],
+          ['MIR',()=>machine.run().output,()=>machine.runtime.output],
+          ['WebAssembly',()=>wasm.run().output,()=>wasm.runtime.output],
+          ['JavaScript',()=>{vm.runInContext(compiled.js,context,{timeout:5000});return vm.runInContext('r.output',context);},()=>vm.runInContext('r.output',context)],
         ];
-        for(const [backend,action] of actions) {
+        for(const [backend,action,output] of actions) {
           if(fixture.kind==='panic') assert.throws(action,e=>e.code===fixture.code,`${label} ${backend}`);
           else assert.equal(action(),fixture.output,`${label} ${backend}`);
+          if(fixture.output!==undefined) assert.equal(output(),fixture.output,`${label} ${backend} output`);
           evidence.backends.push({backend,optimize,panic:fixture.kind==='panic'});
         }
       }
@@ -74,7 +78,7 @@ try {
         assert.equal(compiled.status,0,`rustc -O${optimization}: ${compiled.stderr}`);
         const executed=run(binary,[],5000);
         assert.equal(executed.status,fixture.kind==='panic'?101:0,executed.stderr);
-        if(fixture.kind==='run') assert.equal(executed.stdout,fixture.output,`rustc -O${optimization}`);
+        if(fixture.output!==undefined) assert.equal(executed.stdout,fixture.output,`rustc -O${optimization}`);
         evidence.backends.push({backend:'rustc',optimization,exitCode:executed.status,output:executed.stdout});
       }
       evidence.status='passed';

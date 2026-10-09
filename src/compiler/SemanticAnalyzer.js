@@ -239,7 +239,7 @@ export class SemanticAnalyzer {
         const object = this.infer(node.object, ctx), base = T.reference(object) ? T.target(object) : object;
         node.autoDeref = base !== object;
         const index = this.infer(node.index, ctx, 'usize');
-        if (!T.integer(index)) throw new Diagnostic('E0277', 'Array index must be integer', node.index.span);
+        if (index !== '!' && !T.integer(index)) throw new Diagnostic('E0277', 'Array index must be integer', node.index.span);
         const array = /^\[(.+);\d+\]$/.exec(base);
         const vector = T.application(base);
         type = array?.[1] ?? (vector.name === 'Vec' ? vector.args[0] : null);

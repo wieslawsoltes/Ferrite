@@ -166,6 +166,7 @@ export class OwnershipAnalyzer {
   assignment(node) {
     if (node.destructuring) {
       this.value(node.value, node.assignmentMoves);
+      if (node.assignmentRhsDiverges) return;
       const visit = target => {
         if (target.assignee === 'place') { this.writePlace(target, node); return; }
         for (const child of target.assignee === 'struct' ? target.fields.map(field => field.value) : target.items ?? []) visit(child);

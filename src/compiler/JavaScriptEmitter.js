@@ -31,6 +31,7 @@ export class JavaScriptEmitter {
       case 'borrow': return this.place(i.place);
       case 'binary': return `r.binary(${j(i.operator)},${v(i.left)},${v(i.right)},${j(i.operandType)})`;
       case 'unary': return `r.unary(${j(i.operator)},${v(i.value)},${j(i.type)})`;
+      case 'discriminant': return `r.discriminant(${v(i.value)},${j(i.table)})`;
       case 'cast': return `r.cast(${v(i.value)},${j(i.targetType)})`;
       case 'aggregate': return `r.aggregate(${j(i.form)},[${i.values.map(v)}],${j(i.names ?? [])},${j(i.tag)})`;
       case 'repeat': return `Array.from({length:${i.count}},()=>r.clone(${v(i.value)}))`;

@@ -78,6 +78,12 @@ export class Runtime {
     if (op === '-') return this.normalize(-value, type);
     return this.fail(`Invalid unary operator ${op}`);
   }
+  discriminant(value, table) {
+    if (!value || typeof value.tag !== 'string' || !table || !Object.hasOwn(table, value.tag)) this.fail('Invalid enum discriminant', 'R_ENUM');
+    const result = table[value.tag];
+    if (typeof result !== 'string' || result.length > 40 || !/^-?\d+$/.test(result)) this.fail('Invalid enum discriminant value', 'R_ENUM');
+    return BigInt(result);
+  }
   cast(value, target) {
     if (target === 'char') return String.fromCodePoint(Number(value));
     if (typeof value === 'string') value = BigInt(value.codePointAt(0));

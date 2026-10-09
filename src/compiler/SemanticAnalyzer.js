@@ -1,3 +1,4 @@
+import {EnumDiscriminants} from './EnumDiscriminants.js';
 import {StructAnalyzer} from './StructAnalyzer.js';
 import {AssigneeAnalyzer} from './assignments/AssigneeAnalyzer.js';
 import {ConstantEvaluator} from './ConstantEvaluator.js';
@@ -24,11 +25,13 @@ export class SemanticAnalyzer {
     this.instances = new Map(); this.obligations = []; this.warnings = [];
     this.entry = entry; this.mode = mode; this.maxInstances = maxInstances; this.depth = 0;
     this.constants = new ConstantEvaluator(this, constEvaluation);
+    this.discriminants = new EnumDiscriminants(this);
     this.index.constantEvaluator = this.constants;
     this.index.typeResolver.validate();
   }
   static analyze(ast, options) { return new SemanticAnalyzer(ast, options).analyze(); }
   analyze() {
+    this.discriminants.validate();
     for (const constant of this.index.constants.values()) this.constants.constant(constant);
     if (this.mode !== 'library') {
       const main = this.index.resolve(this.index.functions, this.entry, '', null);
@@ -42,7 +45,8 @@ export class SemanticAnalyzer {
     }
     for (const instance of this.instances.values()) if (instance.fn.isConst) this.constants.validate(instance);
     this.closures.finish();
-    return {constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
+    this.discriminants.annotate(this.instances.values());
+    return {discriminants: this.discriminants.snapshot(), constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
       symbols: this.index.symbols, structures: [...this.index.structs.values()],
       enums: [...this.index.enums.values()], warnings: this.warnings, entry: this.entryKey,
       capabilities: {ownership: 'conservative whole-local analysis', traits: 'concrete impls and built-in bounds'}};
@@ -172,7 +176,7 @@ export class SemanticAnalyzer {
           const result = this.constants.constant(constant, node);
           node.constant = structuredClone(result.expression); type = result.type; break;
         }
-        const constructor = this.index.constructorFor(node.name === 'Self' ? ctx.instance.fn.owner : node.name, ctx.instance.fn.module, node);
+        const constructor = this.index.constructorFor(node.name === 'Self' ? ctx.instance.fn.owner : node.name.startsWith('Self::') && ctx.instance.fn.owner ? ctx.instance.fn.owner + node.name.slice(4) : node.name, ctx.instance.fn.module, node);
         if (constructor?.kind === 'struct') { type = this.structures.construct(node, constructor, [], ctx, expected); break; }
         if (constructor && !constructor.variant.fields.length) { type = this.construct(node, constructor, [], ctx, expected); break; }
         throw new Diagnostic('E0425', `Unresolved identifier '${node.name}'`, node.span);
@@ -273,6 +277,13 @@ export class SemanticAnalyzer {
       case 'cast': {
         const source = this.infer(node.value, ctx);
         node.target = this.normalize(node.target, ctx, node);
+        const enumeration = this.index.enums.get(T.application(source).name);
+        if (enumeration && T.integer(node.target)) {
+          this.discriminants.checkCast(enumeration, node);
+          node.discriminantEnum = enumeration.name;
+          node.discriminantType = this.discriminants.representation(enumeration);
+          type = node.target; break;
+        }
         const allowed = T.numeric(source) && T.numeric(node.target) || ['bool', 'char'].includes(source) && T.integer(node.target) || source === 'u8' && node.target === 'char';
         if (!allowed) throw new Diagnostic('E0605', `Invalid primitive cast from ${source} to ${node.target}`, node.span);
         type = node.target; break;
@@ -446,7 +457,7 @@ export class SemanticAnalyzer {
       if (!this.hasTrait(type, 'Clone')) throw new Diagnostic('E0277', `${type} does not implement Clone`, node.span);
       node.builtin = 'clone'; return type;
     }
-    const constructor = this.index.constructorFor(name === 'Self' ? ctx.instance.fn.owner : name, ctx.instance.fn.module, node);
+    const constructor = this.index.constructorFor(name === 'Self' ? ctx.instance.fn.owner : name.startsWith('Self::') && ctx.instance.fn.owner ? ctx.instance.fn.owner + name.slice(4) : name, ctx.instance.fn.module, node);
     if (constructor?.kind === 'struct') return this.structures.construct(node, constructor, node.args, ctx, expected);
     if (constructor) return this.construct(node, constructor, node.args, ctx, expected);
     const fn = this.index.resolve(this.index.functions, name, ctx.instance.fn.module, node);

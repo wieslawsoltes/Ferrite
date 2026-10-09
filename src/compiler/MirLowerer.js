@@ -94,7 +94,11 @@ export class MirLowerer {
         if (node.op === '||') return this.conditional(left, () => this.literal(true, 'bool', node), () => this.expr(node.right), node);
         return this.emit('binary', {operator: node.op, left, right: this.expr(node.right), operandType: node.operandType}, node, node.type);
       }
-      case 'cast': return this.emit('cast', {value: this.expr(node.value), targetType: node.target}, node, node.type);
+      case 'cast': {
+        let value = this.expr(node.value);
+        if (node.discriminantEnum) value = this.emit('discriminant', {value, enumName: node.discriminantEnum, table: node.discriminantTable ?? null}, node, node.discriminantType);
+        return this.emit('cast', {value, targetType: node.target}, node, node.type);
+      }
       case 'block': return this.block(node);
       case 'ifLet': {
         const value = this.expr(node.value), condition = this.patternTest(node.pattern, value);

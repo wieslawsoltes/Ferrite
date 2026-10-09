@@ -16,7 +16,8 @@ export class IrFormatter {
       case 'cast':text=`${r(i.value)} as ${i.targetType}`;break;
       case 'aggregate':text=`${i.form}${i.tag?' '+i.tag:''} [${i.values.map(r).join(', ')}]`;break;
       case 'get':text=`${r(i.value)}${i.index!=null?'['+r(i.index)+']':'.'+i.field}`;break;
-      case 'tag':text=`discriminant ${r(i.value)}`;break;
+      case 'tag':text=`variant_tag ${r(i.value)}`;break;
+      case 'discriminant':text=`discriminant ${r(i.value)} : ${i.type} ${JSON.stringify(i.table)}`;break;
       case 'payload':text=`${r(i.value)}.payload[${i.index}]`;break;
       case 'repeat':text=`[${r(i.value)}; ${i.count}]`;break;
       default:text=i.op;

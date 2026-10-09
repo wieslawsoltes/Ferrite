@@ -10,6 +10,11 @@ export class SymbolIndex {
     this.symbols = []; this.moduleRoots = new Map(); this.moduleVisibility = new Map();
     // Side tables are declaration-index-local, never attached to reusable AST/HIR.
     this.fieldIndexes = new WeakMap(); this.variantIndexes = new WeakMap(); this.structConstructors = new WeakMap(); this.variantPositions = new WeakMap();
+    // Compiler-owned zero-sized marker. Its generic argument affects type identity,
+    // but never adds storage or Clone/Copy obligations to the marker itself.
+    this.structs.set('std::marker::PhantomData', {kind: 'struct', name: 'std::marker::PhantomData',
+      generics: [{name: 'T', bounds: []}], fields: [], form: 'unit', predicates: [], attributes: [],
+      visibility: 'pub', module: 'std::marker', builtin: 'phantom', span: {file: 'ferrite:stdlib', start: 0, end: 0, line: 1, column: 1}});
     this.enums.set('Option', {kind: 'enum', name: 'Option', generics: [{name: 'T', bounds: []}],
       variants: [{name: 'Some', fields: ['T']}, {name: 'None', fields: []}], attributes: []});
     this.enums.set('Result', {kind: 'enum', name: 'Result', generics: [{name: 'T', bounds: []}, {name: 'E', bounds: []}],

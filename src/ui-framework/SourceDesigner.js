@@ -3,8 +3,9 @@ import {UICompiler} from './UICompiler.js';
 
 /** Source is authoritative. Every edit is range-based, revision-checked and atomic. */
 export class SourceDesigner {
-  constructor(source, {file = 'src/app.ui.rs', entry = 'app', revision = 0, validate = true, maxHistory = 50} = {}) {
+  constructor(source, {file = 'src/app.ui.rs', entry = 'app', revision = 0, validate = true, maxHistory = 50, files = {}, entryFile = file} = {}) {
     if (!Number.isSafeInteger(revision) || revision < 0) throw Error('Invalid designer revision');
+    this.files = files; this.entryFile = entryFile;
     this.file = file; this.entry = entry; this.revision = revision; this.validate = validate;
     this.maxHistory = Math.max(0, Math.min(50, maxHistory)); this.history = []; this.future = [];
     this.load(source);
@@ -27,7 +28,7 @@ export class SourceDesigner {
   }
   validateSource(source) {
     const syntax = new ViewSyntax(source, {file: this.file}); syntax.expand();
-    if (this.validate) UICompiler.compile(source, {file: this.file, entry: this.entry});
+    if (this.validate) UICompiler.compile(this.entryFile === this.file ? source : this.files[this.entryFile], {file: this.entryFile, entry: this.entry, files: {...this.files, [this.file]: source}});
   }
   commit(source, label) {
     if (source === this.source) return this.snapshot();

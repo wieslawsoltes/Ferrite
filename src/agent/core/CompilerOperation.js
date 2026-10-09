@@ -13,11 +13,11 @@ export class CompilerOperation {
       if (!Object.hasOwn(files, file)) throw Error('UI source file does not exist');
       const source = files[file];
       if (command === 'ui-design') {
-        const designer = new SourceDesigner(source, {file, entry, revision});
+        const designer = new SourceDesigner(source, {file, entry, revision, files});
         return operation ? designer.apply(operation, revision) : designer.snapshot();
       }
       if (!['ui-compile', 'ui-export', 'ui-analyze'].includes(command)) throw Error('Unknown UI compiler operation');
-      const artifact = UICompiler.compile(source, {file, entry});
+      const artifact = UICompiler.compile(source, {file, entry, files});
       if (command === 'ui-export') return {html: exportHTML(artifact, {backend, title, css, channel}), file, entry: artifact.entry};
       if (command === 'ui-analyze') return {file, entry: artifact.entry, nodes: artifact.nodes, diagnostics: artifact.diagnostics,
         verification: artifact.verification, timings: artifact.timings, backends: ['javascript', 'wasm', 'mir'],

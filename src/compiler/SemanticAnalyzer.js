@@ -43,7 +43,7 @@ export class SemanticAnalyzer {
     for (const instance of this.instances.values()) if (instance.fn.isConst) this.constants.validate(instance);
     this.closures.finish();
     return {constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
-      symbols: this.index.symbols, structures: [...this.index.structs.values()],
+      symbols: this.index.symbols, structures: [...this.index.structs.values()].filter(shape => !shape.builtin),
       enums: [...this.index.enums.values()], warnings: this.warnings, entry: this.entryKey,
       capabilities: {ownership: 'conservative whole-local analysis', traits: 'concrete impls and built-in bounds'}};
   }
@@ -65,6 +65,7 @@ export class SemanticAnalyzer {
     if (name === 'Vec') return bound !== 'Copy' && ['Clone', 'Debug', 'PartialEq', 'Eq'].includes(bound) && this.hasTrait(args[0], bound, depth + 1);
     if (['Option', 'Result'].includes(name)) return ['Copy', 'Clone', 'Debug', 'PartialEq', 'Eq'].includes(bound) && args.every(t => t !== '_' && this.hasTrait(t, bound, depth + 1));
     const shape = this.index.structs.get(name) ?? this.index.enums.get(name);
+    if (shape?.builtin === 'phantom') return ['Copy', 'Clone', 'Debug', 'PartialEq', 'Eq', 'Default'].includes(bound);
     if (shape?.attributes?.some(a => a.name === 'derive' && a.args.includes(bound))) {
       const substitution = new Map(shape.generics.map((g, i) => [g.name, args[i]]));
       const fields = shape.fields?.map(f => f.type) ?? shape.variants.flatMap(v => v.fields);
@@ -77,6 +78,27 @@ export class SemanticAnalyzer {
     const substitution = new Map(fn.generics.map((g, i) => [g.name, explicit[i] ?? null]));
     if (explicit.length > fn.generics.length) throw new Diagnostic('E0107', 'Too many generic arguments', node.span);
     fn.params.forEach((p, i) => T.unify(this.index.type(p.type, fn.module, fn.owner, new Set(substitution.keys()), node), argumentTypes[i], substitution, node));
+    // Infer output-only generic parameters from an already typed closure's Fn
+    // obligations. The bound still goes through ordinary trait/signature checking.
+    // Iteration handles chains such as F: Fn(A)->B, G: Fn(B)->C without guessing.
+    for (let pass = 0; pass <= fn.generics.length; pass++) {
+      const before = [...substitution.values()].filter(Boolean).length;
+      for (const parameter of fn.generics) {
+        const closure = this.closures.get(substitution.get(parameter.name) ?? '');
+        if (!closure) continue;
+        for (const rawBound of parameter.bounds) {
+          const signature = ClosureAnalyzer.bound(this.index.type(rawBound, fn.module, fn.owner, new Set(substitution.keys()), node));
+          if (!signature) continue;
+          const hints = signature.params.map(type => T.substitute(type, substitution));
+          const unresolved = hints.some(type => [...substitution].some(([name, value]) => !value && new RegExp(`\\b${name}\\b`).test(type)));
+          if (!closure.instance && !unresolved) this.closures.prepare(closure, hints);
+          if (!closure.instance || signature.params.length !== closure.signature.length) continue;
+          signature.params.forEach((type, i) => T.unify(type, closure.signature[i], substitution, node));
+          T.unify(signature.result, closure.instance.returnType, substitution, node);
+        }
+      }
+      if ([...substitution.values()].filter(Boolean).length === before) break;
+    }
     for (const parameter of fn.generics) {
       const type = substitution.get(parameter.name);
       if (!type || /\b_\b/.test(type)) throw new Diagnostic('E0282', `Cannot infer ${parameter.name} in ${fn.name}`, node.span);

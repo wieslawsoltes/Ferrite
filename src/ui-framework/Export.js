@@ -1,3 +1,4 @@
+import {OwnedValues} from './OwnedValues.js';
 import {createUIRuntime} from './Runtime.js';
 import {Runtime} from '../runtime/Runtime.js';
 import {MirVirtualMachine} from '../runtime/MirVirtualMachine.js';
@@ -15,7 +16,7 @@ export function exportHTML(artifact, {backend = 'javascript', title = 'Ferrite R
   if (typeof title !== 'string' || title.length > 1000 || typeof css !== 'string' || css.length > 500000) throw Error('UI export text exceeds its limit');
   if (channel !== null && !/^[a-f0-9]{32,128}$/.test(channel)) throw Error('Invalid preview channel');
   const compact = {format: artifact.format, abi: artifact.abi, entry: artifact.entry, maxSteps: artifact.maxSteps, file: artifact.file, source: artifact.source,
-    optimizedMir: artifact.optimizedMir, ...(backend === 'javascript' ? {js: artifact.js} : {}), ...(backend === 'wasm' ? {wasm: {bytes: artifact.wasm.bytes}} : {})};
+    ownedSchemas: artifact.ownedSchemas, files: artifact.files, optimizedMir: artifact.optimizedMir, ...(backend === 'javascript' ? {js: artifact.js} : {}), ...(backend === 'wasm' ? {wasm: {bytes: artifact.wasm.bytes}} : {})};
   const bootstrap = `
 'use strict';
 const createUIRuntime = ${createUIRuntime.toString()};
@@ -23,6 +24,7 @@ const UI = createUIRuntime();
 const Runtime = ${Runtime.toString()};
 const MirVirtualMachine = ${MirVirtualMachine.toString()};
 const WebAssemblyRuntime = ${WebAssemblyRuntime.toString()};
+const OwnedValues = ${OwnedValues.toString()};
 const UISession = ${UISession.toString()};
 const artifact = ${scriptJSON(compact)};
 const style = document.createElement('style'); style.textContent = ${scriptJSON(css)}; document.head.append(style);

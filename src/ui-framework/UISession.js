@@ -1,3 +1,4 @@
+import {OwnedValues} from './OwnedValues.js';
 import {UI} from './Runtime.js';
 import {MirVirtualMachine} from '../runtime/MirVirtualMachine.js';
 import {WebAssemblyRuntime} from '../runtime/WebAssemblyRuntime.js';
@@ -7,6 +8,7 @@ export class UISession {
   constructor(artifact, {backend = 'javascript', runtime = UI, maxHandles = 50000, maxTrace = 2000, onError = null} = {}) {
     if (artifact?.format !== 'ferrite-ui-v1' || artifact.abi !== 1 || !Array.isArray(artifact.optimizedMir)) throw Error('Unsupported UI artifact');
     if (!['javascript', 'wasm', 'mir'].includes(backend)) throw Error('Unknown UI backend');
+    this.values = new OwnedValues(artifact.ownedSchemas);
     this.artifact = artifact; this.backend = backend; this.ui = runtime; this.maxHandles = maxHandles; this.maxTrace = maxTrace;
     this.onError = onError; this.handles = new Map(); this.nextHandle = 1; this.scopes = []; this.components = new Map();
     this.root = null; this.disposed = false; this.trace = []; this.currentEvent = null; this.depth = 0; this.callBudget = 0; this.calls = 0;
@@ -126,13 +128,31 @@ export class UISession {
         const descriptor = spec.callbacks[1], environment = args[1];
         return create(u.cloneElement(node(args[0]), {onClick: event => this.event(descriptor, environment, [], event)}));
       }
-      case 'on': {
+      case 'on': case 'on_event': {
         const name = String(args[1]);
         if (!/^[a-z][a-z0-9]*(?::capture)?$/.test(name) || name.length > 80) throw Error('Invalid UI event name');
-        const [nativeName, capture] = name.split(':'), eventName = `on${nativeName[0].toUpperCase()}${nativeName.slice(1)}${capture ? 'Capture' : ''}`;
+        const eventName = this.eventProp(name);
         const descriptor = spec.callbacks[2], environment = args[2];
-        return create(u.cloneElement(node(args[0]), {[eventName]: event => this.event(descriptor, environment, [String(event.target?.value ?? event.key ?? '')], event)}));
+        return create(u.cloneElement(node(args[0]), {[eventName]: event => this.event(descriptor, environment, [spec.name === 'on_event' ? this.snapshotEvent(event) : String(event.target?.value ?? event.key ?? '')], event)}));
       }
+      case 'state': return {...newState(spec.stateType, this.values.clone(spec.stateType, args[0])), marker: {}};
+      case 'read': return this.values.clone(spec.stateType, state(args[0], spec.stateType).value);
+      case 'write': state(args[0], spec.stateType).set(this.values.clone(spec.stateType, args[1])); return null;
+      case 'modify': {
+        const cell = state(args[0], spec.stateType), value = this.values.clone(spec.stateType, cell.value);
+        cell.set(this.values.clone(spec.stateType, callback(1, [value]))); return null;
+      }
+      case 'memo_value': case 'memo_with': {
+        const deps = spec.dependencyType ? this.values.key(spec.dependencyType, args[1]) : String(args[1]);
+        return this.values.clone(spec.valueType, u.useMemo(() => this.values.clone(spec.valueType, callback(0)), [deps]));
+      }
+      case 'effect_with': {
+        const deps = this.values.key(spec.dependencyType, args[2]), setup = spec.callbacks[0], cleanup = spec.callbacks[1];
+        u.useEffect(() => { this.closure(setup, args[0]); return () => this.closure(cleanup, args[1]); }, [deps]); return null;
+      }
+      case 'stop_propagation':
+        if (!this.currentEvent) throw Error('Cannot stop propagation outside a synchronous event');
+        this.currentEvent.stopPropagation(); return null;
       case 'use_state': return newState('i64', args[0]);
       case 'use_string': return newState('String', String(args[0]));
       case 'use_bool': return newState('bool', args[0]);
@@ -161,6 +181,23 @@ export class UISession {
         this.currentEvent.preventDefault(); return null;
       default: throw Error(`Unknown UI ABI operation ${spec.name}`);
     }
+  }
+  eventProp(name) {
+    const [event, capture] = name.split(':');
+    const words = 'Click DoubleClick ContextMenu MouseDown MouseUp MouseMove MouseEnter MouseLeave MouseOver MouseOut KeyDown KeyUp KeyPress PointerDown PointerUp PointerMove PointerEnter PointerLeave PointerOver PointerOut PointerCancel GotPointerCapture LostPointerCapture TouchStart TouchEnd TouchMove TouchCancel Drag DragStart DragEnd DragEnter DragLeave DragOver Drop Input BeforeInput Change Submit Reset Focus Blur FocusIn FocusOut Wheel Scroll Copy Cut Paste CompositionStart CompositionUpdate CompositionEnd AnimationStart AnimationEnd AnimationIteration TransitionEnd Load Error';
+    const aliases = Object.fromEntries(words.split(' ').map(word => [word.toLowerCase(), word])); aliases.dblclick = 'DoubleClick';
+    return 'on' + (aliases[event] ?? event[0].toUpperCase() + event.slice(1)) + (capture ? 'Capture' : '');
+  }
+  snapshotEvent(event) {
+    const text = value => { const result = String(value ?? ''); if (result.length > 1000000) throw Error('DOM event value budget exceeded'); return result; };
+    const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
+    const integer = (value, unsigned = false) => BigInt(unsigned ? number(value) >>> 0 : number(value) | 0);
+    return {event_type: text(event.type), value: text(event.target?.value), key: text(event.key), code: text(event.code),
+      checked: !!event.target?.checked, repeat: !!event.repeat, alt_key: !!event.altKey, ctrl_key: !!event.ctrlKey,
+      meta_key: !!event.metaKey, shift_key: !!event.shiftKey, button: integer(event.button), buttons: integer(event.buttons, true),
+      client_x: number(event.clientX), client_y: number(event.clientY), pointer_id: integer(event.pointerId), pressure: number(event.pressure),
+      delta_x: number(event.deltaX), delta_y: number(event.deltaY), delta_z: number(event.deltaZ),
+      input_type: text(event.inputType), data: text(event.data), time_stamp: number(event.timeStamp)};
   }
   mount(container) {
     if (this.root || this.disposed) throw Error('A UI session mounts exactly once');
@@ -207,13 +244,14 @@ export class UISession {
   }
   inspect() {
     const states = [];
-    for (const [handle, entry] of this.handles) if (entry.kind === 'state') states.push({handle, type: entry.value.kind, value: this.ui._safeValue(entry.value.cell.value)});
+    for (const [handle, entry] of this.handles) if (entry.kind === 'state') states.push({handle, type: entry.value.kind, value: this.values.schemas[entry.value.kind] ? this.values.encode(entry.value.kind, entry.value.cell.value) : this.ui._safeValue(entry.value.cell.value)});
     return {format: 'ferrite-ui-inspection-v1', backend: this.backend, calls: this.calls, handles: this.handles.size, states,
       root: this.root?.inspect() ?? null, debugger: this.inspectDebugger()};
   }
   setState(handle, value) {
     const record = this.resolve({handle: BigInt(handle)}, 'state');
-    if (record.kind === 'i64') { value = BigInt(String(value).replace(/n$/, '')); if (value < -(1n << 63n) || value >= 1n << 63n) throw Error('State is outside i64 bounds'); }
+    if (this.values.schemas[record.kind]) value = this.values.decode(record.kind, value);
+    else if (record.kind === 'i64') { value = BigInt(String(value).replace(/n$/, '')); if (value < -(1n << 63n) || value >= 1n << 63n) throw Error('State is outside i64 bounds'); }
     else if (record.kind === 'bool' && typeof value !== 'boolean' || record.kind === 'String' && typeof value !== 'string') throw Error('State type mismatch');
     this.ui.flushSync(() => record.cell.set(value)); return this.inspect();
   }

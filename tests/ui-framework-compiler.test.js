@@ -66,3 +66,14 @@ test('single-file export escapes hostile source/title/CSS and carries no module 
   }
   assert.equal(JSON.parse(scriptJSON('<&\u2028')), '<&\u2028'); assert.equal(rustString('\u0001'), '"\\u{1}"');
 });
+
+test('a failed initial mount throws, reports the panic, and releases its hooks and root', () => {
+  const ui = createUIRuntime(), container = createDocument().createElement('main'), errors = [];
+  const artifact = UICompiler.compile('fn app() -> ui::Node { let n = ui::use_state(1); if ui::get(n) == 1 { panic!("bad app"); } ui::text("ready") }');
+  for (const backend of ['mir', 'wasm', 'javascript']) {
+    const session = new UISession(artifact, {runtime: ui, backend, onError: e => errors.push(e)});
+    assert.throws(() => session.mount(container), /bad app/); assert.equal(session.disposed, true); assert.equal(session.handles.size, 0);
+  }
+  assert.equal(errors.length, 3);
+  const valid = new UISession(UICompiler.compile(UI_SAMPLES.counter), {runtime: ui}).mount(container); valid.dispose();
+});

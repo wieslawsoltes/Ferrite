@@ -167,8 +167,10 @@ export class UISession {
     const session = this;
     function RustApp() { return session.invoke(session.artifact.entry, [], {node: true, label: 'render'}); }
     RustApp.displayName = this.artifact.entry;
-    this.root = this.ui.createRoot(container, {onError: error => { this.emit('error', {message: error.message, code: error.code, span: error.span}); this.onError?.(error); }});
-    this.root.subscribe(event => this.emit(event.type, event)); this.root.render(this.ui.h(RustApp)); return this;
+    this.root = this.ui.createRoot(container, {throwErrors: true, onError: error => { this.emit('error', {message: error.message, code: error.code, span: error.span}); this.onError?.(error); }});
+    this.root.subscribe(event => this.emit(event.type, event));
+    try { this.root.render(this.ui.h(RustApp)); return this; }
+    catch (error) { this.dispose(); throw error; }
   }
   armDebugger({breakpoints = []} = {}) {
     if (!Array.isArray(breakpoints) || breakpoints.length > 1000 || breakpoints.some(p => typeof p.file !== 'string' || !Number.isInteger(p.line) || p.line < 1)) throw Error('Invalid UI breakpoints');

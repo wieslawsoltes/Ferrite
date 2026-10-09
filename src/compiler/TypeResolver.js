@@ -107,8 +107,15 @@ export class TypeResolver {
         if (names.has(entry.name)) throw new Diagnostic(shape.fields ? 'E0124' : 'E0428', `Duplicate member ${entry.name} in ${shape.name}`, entry.span ?? shape.span);
         names.add(entry.name);
       }
+      if (shape.variants) for (const variant of shape.variants) {
+        const fields = new Set();
+        for (const member of variant.members ?? []) {
+          if (fields.has(member.name)) throw new Diagnostic('E0124', `Duplicate field ${member.name} in ${shape.name}::${variant.name}`, member.span);
+          fields.add(member.name);
+        }
+      }
       const fields = shape.fields?.map(field => ({type:field.type,node:field})) ??
-        shape.variants.flatMap(variant => variant.fields.map(type => ({type,node:variant})));
+        shape.variants.flatMap(variant => variant.fields.map((type, i) => ({type,node:variant.members?.[i] ?? variant})));
       const found = new Set();
       for (const field of fields) {
         if (/\b_\b/.test(field.type)) throw new Diagnostic('E0121', 'Inferred placeholder types are not allowed in stored field declarations', field.node.span ?? shape.span);

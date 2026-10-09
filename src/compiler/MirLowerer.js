@@ -69,7 +69,10 @@ export class MirLowerer {
   expression(node, borrowed = false) {
     if (!node) return this.unit(node);
     if (node.variant) {
-      return this.emit('aggregate', {form: 'enum', values: (node.args ?? []).map(n => this.expr(n)), tag: node.variant}, node, node.type);
+      const evaluated = (node.args ?? []).map(n => this.expr(n));
+      const values = node.payloadOrder ? Array(evaluated.length) : evaluated;
+      if (node.payloadOrder) node.payloadOrder.forEach((position, i) => { values[position] = evaluated[i]; });
+      return this.emit('aggregate', {form: 'enum', values, tag: node.variant}, node, node.type);
     }
     switch (node.kind) {
       case 'constValue': return this.expr(node.value);

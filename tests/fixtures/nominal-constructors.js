@@ -48,6 +48,19 @@ export const nominalCases = [
   ['enum constructor assignment Copy projections are detached', '#[derive(Clone,Copy)]struct P(i32);enum E{V(P,P)}fn main(){let mut a=P(0);let mut b=P(0);E::V(a,b)=E::V(P(1),P(2));a.0=9;println!("{} {}",a.0,b.0);}', '9 2\n'],
 ];
 export const nominalCompileFailCases = [
+  ['field type placeholders are not local inference', 'struct P(_);fn main(){}', 'E0121'],
+  ['stored fields cannot contain impl Trait', 'struct P(impl Copy);fn main(){}', 'E0562'],
+  ['unused tuple declaration still checks field types', 'struct P(Missing);fn main(){}', 'E0412'],
+  ['unused generic tuple declaration checks field types', 'struct P<T>(T,Missing);fn main(){}', 'E0412'],
+  ['unused record declaration checks field types', 'struct P{x:Missing}fn main(){}', 'E0412'],
+  ['unused tuple declaration checks generic field arity', 'struct P<T>(T);struct Q(P);fn main(){}', 'E0107'],
+  ['unused generic on unit struct', 'struct Unit<T>;fn main(){}', 'E0392'],
+  ['unused generic on tuple struct', 'struct P<T>(i32);fn main(){}', 'E0392'],
+  ['qualified type name does not use shadowing generic', 'mod m{pub struct T;}struct P<T>(m::T);fn main(){}', 'E0392'],
+  ['duplicate nominal generic parameters', 'struct P<T,T>(T);fn main(){}', 'E0403'],
+  ['duplicate named fields rejected before use', 'struct P{x:i32,x:bool}fn main(){}', 'E0124'],
+  ['duplicate enum variants rejected before use', 'enum E{V(i32),V(bool)}fn main(){}', 'E0428'],
+
   ['wrong tuple constructor arity', 'struct P(i32);fn main(){let _=P(1,2);}', 'E0061'],
   ['unit constructor is not callable', 'struct U;fn main(){let _=U();}', 'E0618'],
   ['unit tuple pattern mismatch', 'struct U;fn main(){let U()=U;}', 'E0532'],

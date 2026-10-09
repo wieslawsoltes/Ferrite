@@ -71,7 +71,7 @@ export class TypeResolver {
     if (callable) { T.split(callable[2]).forEach(next); next(callable[3]); return; }
     const {name, args} = T.application(type);
     if (!parameters.has(name) && !T.numeric(name) && !['bool', 'char', 'str', 'String', 'Vec', '!', '_'].includes(name) && !this.index.structs.has(name) && !this.index.enums.has(name))
-      throw new Diagnostic('E0412', `Unknown type '${name}' in alias ${node.name}`, node.span);
+      throw new Diagnostic('E0412', `Unknown type '${name}' in declaration ${node.name}`, node.span);
     const shape = this.index.structs.get(name) ?? this.index.enums.get(name);
     const arity = shape?.generics?.length ?? (name === 'Vec' ? 1 : 0);
     if (!parameters.has(name) && args.length !== arity) throw new Diagnostic('E0107', `${name} expects ${arity} type argument(s)`, node.span);
@@ -83,6 +83,42 @@ export class TypeResolver {
       if (parameters.size !== alias.generics.length) throw new Diagnostic('E0403', `Duplicate generic parameter in ${alias.name}`, alias.span);
       const result = this.resolve(alias.target, alias.module, null, parameters, [alias.name], alias);
       this.validateKnown(result, parameters, alias);
+    }
+    this.validateNominals();
+  }
+  /** Check stored field declarations even when no function constructs their type. */
+  validateNominals() {
+    const used = (type, parameters, found) => {
+      if (T.reference(type)) return used(T.target(type), parameters, found);
+      const tuple = T.tuple(type); if (tuple) { tuple.forEach(t => used(t, parameters, found)); return; }
+      const array = T.array(type); if (array) return used(array.element, parameters, found);
+      const callable = /^(Fn|FnMut|FnOnce)\((.*)\)->(.+)$/.exec(type);
+      if (callable) { [...T.split(callable[2]), callable[3]].forEach(t => used(t, parameters, found)); return; }
+      const app = T.application(type);
+      if (parameters.has(app.name)) found.add(app.name);
+      app.args.forEach(t => used(t, parameters, found));
+    };
+    for (const shape of [...this.index.structs.values(), ...this.index.enums.values()]) {
+      const parameters = new Set(shape.generics.map(g => g.name));
+      if (parameters.size !== shape.generics.length)
+        throw new Diagnostic('E0403', `Duplicate generic parameter in ${shape.name}`, shape.span);
+      const names = new Set(), entries = shape.fields ?? shape.variants;
+      for (const entry of entries) {
+        if (names.has(entry.name)) throw new Diagnostic(shape.fields ? 'E0124' : 'E0428', `Duplicate member ${entry.name} in ${shape.name}`, entry.span ?? shape.span);
+        names.add(entry.name);
+      }
+      const fields = shape.fields?.map(field => ({type:field.type,node:field})) ??
+        shape.variants.flatMap(variant => variant.fields.map(type => ({type,node:variant})));
+      const found = new Set();
+      for (const field of fields) {
+        if (/\b_\b/.test(field.type)) throw new Diagnostic('E0121', 'Inferred placeholder types are not allowed in stored field declarations', field.node.span ?? shape.span);
+        if (/\bimpl\s/.test(field.type)) throw new Diagnostic('E0562', 'impl Trait is not allowed in stored field declarations', field.node.span ?? shape.span);
+        const type = this.resolve(field.type, shape.module, shape.name, parameters, [], field.node);
+        this.validateKnown(type, parameters, {...shape,span:field.node.span ?? shape.span});
+        used(type, parameters, found);
+      }
+      for (const name of parameters) if (!found.has(name))
+        throw new Diagnostic('E0392', `Type parameter ${name} is never used in ${shape.name}`, shape.span);
     }
   }
   snapshot() { return {hits: this.hits, misses: this.misses, entries: this.cache.size, characters: this.characters, aliases: [...this.expansions.values()]}; }

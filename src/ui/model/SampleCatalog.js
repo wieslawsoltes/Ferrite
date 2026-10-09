@@ -3,6 +3,28 @@ const manifest=name=>`[package]\nname = "${name}"\nversion = "0.1.0"\nedition = 
 /** Each sample declares its backend and expected behavior; native-only syntax is never faked. */
 export class SampleCatalog {
   static projects = [
+    {name:'Nominal values · tuple/unit structs & assignments',expected:'port=443 swap=2/1 event=9\n',files:{
+      'Cargo.toml':manifest('nominal-values'),
+      'src/main.rs':`#[derive(Clone, Copy)]
+struct Port(u16);
+struct Ready;
+struct Pair<T>(T, T);
+enum Event { Value(i32) }
+
+const fn secure_port() -> Port { Port(443) }
+const HTTPS: Port = secure_port();
+
+fn main() {
+    let Ready = Ready;
+    let Port(port) = HTTPS;
+    let mut left = 1;
+    let mut right = 2;
+    Pair(left, right) = Pair(right, left);
+    let mut event = 0;
+    Event::Value(event) = Event::Value(9);
+    println!("port={} swap={}/{} event={}", port, left, right, event);
+}
+`}},
     {name:'Geometry lab · traits & modules',expected:'rectangle area = 42\ntriangle area = 20\n',files:{
       'Cargo.toml':manifest('geometry-lab'),
       'src/main.rs':`mod geometry;

@@ -1,3 +1,4 @@
+import type {ServerRenderOptions} from '../ui-framework/ServerRenderer.js';
 import type {RuntimeAPI, Root} from '../ui-framework/React.js';
 export type JsonValue = null | boolean | number | string | JsonValue[] | {[name: string]: JsonValue};
 export type Backend = 'mir' | 'wasm' | 'javascript';
@@ -18,8 +19,8 @@ export interface UIArtifact {
 }
 export interface CompileOptions { file?: string; entry?: string; optimize?: boolean; now?: () => number; configuration?: Record<string, unknown>; runtime?: Record<string, unknown> }
 export interface UICompileOptions extends CompileOptions { maxSteps?: number; files?: Record<string, string> }
-export interface UIOptions extends Omit<UICompileOptions, 'runtime'> { backend?: Backend; runtime?: RuntimeAPI; maxHandles?: number; maxTrace?: number; onError?: (error: Error & Partial<Diagnostic>) => void }
-export interface ExportOptions { backend?: Backend; title?: string; css?: string; channel?: string | null }
+export interface UIOptions extends Omit<UICompileOptions, 'runtime'> { backend?: Backend; runtime?: RuntimeAPI; maxHandles?: number; maxTrace?: number; onError?: (error: Error & Partial<Diagnostic>) => void; hydrate?: boolean; identifierPrefix?: string; onRecoverableError?: (error: Error) => void }
+export interface ExportOptions { backend?: Backend; title?: string; css?: string; channel?: string | null; hydrate?: boolean; identifierPrefix?: string }
 export interface UIState { handle: number; type: string; value: JsonValue }
 export interface UISnapshot { states: UIState[]; calls: number; handles: number; debugger: Record<string, unknown>; [name: string]: unknown }
 export function compileRust(source: string, options?: CompileOptions): RustArtifact;
@@ -28,6 +29,8 @@ export function compileUI(source: string, options?: UICompileOptions): UIArtifac
 export function mountUI(sourceOrArtifact: string | UIArtifact, container: Element, options?: UIOptions): UISession;
 export function runRust(sourceOrArtifact: string | RustArtifact, options?: {backend?: Backend; entry?: string; args?: unknown[]; maxSteps?: number; maxTrace?: number; maxDepth?: number} & CompileOptions): {value: unknown; output: string; steps: number; debugger?: unknown};
 export function exportHTML(artifact: UIArtifact, options?: ExportOptions): string;
+export {renderToString, renderToStaticMarkup, renderUIToString, exportHydratedHTML} from '../ui-framework/ServerRenderer.js';
+import {renderToString, renderToStaticMarkup, renderUIToString, exportHydratedHTML} from '../ui-framework/ServerRenderer.js';
 export function runScripts(options?: {document?: Document; root?: ParentNode; backend?: Backend; onError?: (error: Error, script: HTMLScriptElement) => void}): {script: HTMLScriptElement; result?: UISession | ReturnType<typeof runRust>; error?: Error}[];
 export const UI: RuntimeAPI;
 export function createUIRuntime(): RuntimeAPI;
@@ -35,7 +38,7 @@ export class UICompiler { static compile(source: string, options?: UICompileOpti
 export class UISession {
   constructor(artifact: UIArtifact, options?: UIOptions);
   readonly artifact: UIArtifact; readonly backend: Backend; readonly root: Root | null; readonly disposed: boolean;
-  mount(container: Element): this; inspect(): UISnapshot; inspectDebugger(): Record<string, unknown>;
+  mount(container: Element, options?: {hydrate?: boolean; identifierPrefix?: string; onRecoverableError?: (error: Error) => void}): this; inspect(): UISnapshot; inspectDebugger(): Record<string, unknown>;
   armDebugger(options?: {breakpoints?: {file: string; line: number}[]}): Record<string, unknown>;
   debug(command?: 'step' | 'step-line' | 'continue' | 'stop'): Record<string, unknown>;
   setState(handle: number, value: JsonValue): UISnapshot;
@@ -53,7 +56,7 @@ export class SourceDesigner {
   snapshot(): DesignSnapshot; apply(operation: DesignOperation, expectedRevision: number): DesignSnapshot;
   undo(expectedRevision: number): DesignSnapshot; redo(expectedRevision: number): DesignSnapshot;
 }
-export const Ferrite: Readonly<{version: string; compileRust: typeof compileRust; compileUI: typeof compileUI; mountUI: typeof mountUI; runRust: typeof runRust; runScripts: typeof runScripts; exportHTML: typeof exportHTML; UI: RuntimeAPI; createUIRuntime: typeof createUIRuntime; SourceDesigner: typeof SourceDesigner; UIProject: typeof UIProject; CanvasLayout: typeof CanvasLayout}>;
+export const Ferrite: Readonly<{version: string; compileRust: typeof compileRust; compileUI: typeof compileUI; mountUI: typeof mountUI; runRust: typeof runRust; runScripts: typeof runScripts; exportHTML: typeof exportHTML; UI: RuntimeAPI; createUIRuntime: typeof createUIRuntime; SourceDesigner: typeof SourceDesigner; UIProject: typeof UIProject; CanvasLayout: typeof CanvasLayout; renderToString: typeof renderToString; renderToStaticMarkup: typeof renderToStaticMarkup; renderUIToString: typeof renderUIToString; exportHydratedHTML: typeof exportHydratedHTML}>;
 
 export interface CanvasRectangle { x: number; y: number; width: number; height: number }
 export class CanvasLayout {

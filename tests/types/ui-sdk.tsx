@@ -30,3 +30,15 @@ designer.apply({op: 'setTag', node: designer.nodes[0].id, value: 'h2'}, designer
 // @ts-expect-error unknown backend must not compile.
 mountUI(source, node, {backend: 'native'});
 void html; void invalid;
+
+import {UIProject, CanvasLayout, renderUIToString, exportHydratedHTML} from 'ferrite-compiler';
+import {renderToString} from 'ferrite-compiler/react-dom/server';
+import {hydrateRoot} from 'ferrite-compiler/react-dom/client';
+const initialMarkup: string = renderToString(app, {identifierPrefix: 'test-'});
+hydrateRoot(document.createElement('main'), app, {identifierPrefix: 'test-'});
+const rustMarkup: string = renderUIToString(artifact, {backend: 'wasm'});
+const hydrated: string = exportHydratedHTML(artifact, {backend: 'javascript'});
+const project = UIProject.load({'src/app.rs': source}, 'src/app.rs');
+const changed = project.changes({grid: 8}, 'button { padding: 4px }');
+designer.apply({op: 'setLayout', node: designer.nodes[0].id, rectangle: CanvasLayout.geometry({x: 1, y: 2, width: 80, height: 40})}, designer.revision);
+void initialMarkup; void rustMarkup; void hydrated; void changed;

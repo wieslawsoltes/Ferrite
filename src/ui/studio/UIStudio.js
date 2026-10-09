@@ -41,7 +41,7 @@ export class UIStudio {
     this.backendSelect = this.selectInput('UI backend', [['javascript', 'JavaScript'], ['wasm', 'WebAssembly'], ['mir', 'MIR / trace']]);
     this.backendSelect.onchange = () => { this.backend = this.backendSelect.value; this.saveProject(); this.markStale(); };
     this.entryInput = this.input('UI entry function', 'app'); this.entryInput.onchange = () => { this.entry = this.entryInput.value; this.saveProject(); this.refreshSource(); };
-    controls.append(this.entryFiles, this.files, this.backendSelect, this.entryInput, this.button('Preview', () => this.build(), 'run'), this.button('Export HTML', () => this.download(), 'export'));
+    controls.append(this.entryFiles, this.files, this.backendSelect, this.entryInput, this.button('Preview', () => this.build(), 'run'), this.button('Export HTML', () => this.download(), 'export'), this.button('Export hydrated HTML', () => this.download({hydrate: true}), 'export'));
     const samples = Dom.element('div', 'studio-toolbar'); samples.append(Dom.element('span', '', 'New example:'));
     for (const name of Object.keys(UI_SAMPLES)) samples.append(this.button(name, () => this.createExample(name), 'plus'));
     this.status = Dom.element('div', 'studio-status', 'Create an example or choose a Rust UI source file.'); this.status.setAttribute('role', 'status');
@@ -243,9 +243,9 @@ export class UIStudio {
     }
     this.debugOutput.textContent = JSON.stringify({calls: this.snapshot?.calls, handles: this.snapshot?.handles, debugger: this.snapshot?.debugger}, null, 2)?.slice(0, 100000) ?? 'Preview an app to inspect its state.';
   }
-  async download() {
+  async download({hydrate = false} = {}) {
     this.saveProject(); const file = this.entryFile, source = this.model.read(file);
-    const {html} = await this.compiler.compile({...this.model.files}, 'ui-export', {file, entry: this.entry, backend: this.backend, css: this.css.value});
+    const {html} = await this.compiler.compile({...this.model.files}, hydrate ? 'ui-render' : 'ui-export', {file, entry: this.entry, backend: this.backend, css: this.css.value});
     const url = URL.createObjectURL(new Blob([html], {type: 'text/html;charset=utf-8'})); const link = document.createElement('a');
     link.href = url; link.download = file.split('/').pop().replace(/\.rs$/, '.html'); document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     return {characters: html.length, backend: this.backend};

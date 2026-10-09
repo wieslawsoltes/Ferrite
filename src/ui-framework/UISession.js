@@ -199,12 +199,12 @@ export class UISession {
       delta_x: number(event.deltaX), delta_y: number(event.deltaY), delta_z: number(event.deltaZ),
       input_type: text(event.inputType), data: text(event.data), time_stamp: number(event.timeStamp)};
   }
-  mount(container) {
+  mount(container, options = {}) {
     if (this.root || this.disposed) throw Error('A UI session mounts exactly once');
     const session = this;
     function RustApp() { return session.invoke(session.artifact.entry, [], {node: true, label: 'render'}); }
     RustApp.displayName = this.artifact.entry;
-    this.root = this.ui.createRoot(container, {throwErrors: true, onError: error => { this.emit('error', {message: error.message, code: error.code, span: error.span}); this.onError?.(error); }});
+    this.root = this.ui.createRoot(container, {...options, throwErrors: true, onError: error => { this.emit('error', {message: error.message, code: error.code, span: error.span}); this.onError?.(error); }});
     this.root.subscribe(event => this.emit(event.type, event));
     try { this.root.render(this.ui.h(RustApp)); return this; }
     catch (error) { this.dispose(); throw error; }

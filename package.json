@@ -25,7 +25,8 @@
     "build:sdk": "node tools/bundle-sdk.mjs",
     "test:ui": "node --test tests/ui-framework-*.test.js",
     "test:ui:browser": "python tools/ui-browser-acceptance.py",
-    "test:ui:types": "tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --lib ES2022,DOM --jsx react-jsx --jsxImportSource ferrite-compiler tests/types/ui-sdk.tsx"
+    "test:ui:types": "tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --lib ES2022,DOM --jsx react-jsx --jsxImportSource ferrite-compiler tests/types/ui-sdk.tsx",
+    "test:ui:rendering": "python tools/ui-rendering-acceptance.py"
   },
   "engines": {
     "node": ">=22"
@@ -57,7 +58,11 @@
     },
     "./standalone": "./src/sdk/ferrite.bundle.js",
     "./src/*": "./src/*",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./react-dom/server": {
+      "types": "./src/ui-framework/ServerRenderer.d.ts",
+      "import": "./src/ui-framework/ServerRenderer.js"
+    }
   },
   "types": "./src/sdk/Ferrite.d.ts"
 }

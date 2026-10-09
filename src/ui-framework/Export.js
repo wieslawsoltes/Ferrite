@@ -12,9 +12,10 @@ export function scriptJSON(value) {
 const htmlText = value => String(value).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]);
 
 /** No CDN, fetch, module imports or external runtime assets in the result. */
-export function exportHTML(artifact, {backend = 'javascript', title = 'Ferrite Rust UI', css = '', channel = null} = {}) {
+export function exportHTML(artifact, {backend = 'javascript', title = 'Ferrite Rust UI', css = '', channel = null, hydrate = false, identifierPrefix = ''} = {}) {
   if (artifact?.format !== 'ferrite-ui-v1' || !['javascript', 'wasm', 'mir'].includes(backend)) throw Error('Invalid UI export');
   if (typeof title !== 'string' || title.length > 1000 || typeof css !== 'string' || css.length > 500000) throw Error('UI export text exceeds its limit');
+  if (typeof hydrate !== 'boolean' || typeof identifierPrefix !== 'string' || identifierPrefix.length > 200) throw Error('Invalid hydration options');
   if (channel !== null && !/^[a-f0-9]{32,128}$/.test(channel)) throw Error('Invalid preview channel');
   const compact = {format: artifact.format, abi: artifact.abi, entry: artifact.entry, maxSteps: artifact.maxSteps, file: artifact.file, source: artifact.source,
     ownedSchemas: artifact.ownedSchemas, files: artifact.files, optimizedMir: artifact.optimizedMir, ...(backend === 'javascript' ? {js: artifact.js} : {}), ...(backend === 'wasm' ? {wasm: {bytes: artifact.wasm.bytes}} : {})};
@@ -60,7 +61,7 @@ if(channel){
   });
 }
 Object.defineProperty(window,'ferriteUI',{value:Object.freeze({version:'0.1.0',inspect:()=>session.inspect(),armDebugger:options=>session.armDebugger(options),debug:command=>session.debug(command),setState:(handle,value)=>session.setState(handle,value),dispose:()=>session.dispose()}),configurable:false});
-try{session.mount(document.getElementById('app'));send({event:'ready',snapshot:session.inspect()});}catch(error){showError(error);}
+try{session.mount(document.getElementById('app'),{hydrate:${scriptJSON(hydrate)},identifierPrefix:${scriptJSON(identifierPrefix)}});send({event:'ready',snapshot:session.inspect()});}catch(error){showError(error);}
 window.addEventListener('pagehide',()=>{canvas?.dispose();session.dispose();},{once:true});
 `;
   // Input data is encoded with scriptJSON; implementation source contains no HTML

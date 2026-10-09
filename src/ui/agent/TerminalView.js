@@ -18,12 +18,14 @@ export class TerminalView {
     for (const [id, title] of [['shell', 'Native shell'], ['codex', 'Codex CLI'], ['claude', 'Claude Code CLI'], ['gemini', 'Gemini CLI'], ['codex-login', 'Codex sign in'], ['claude-login', 'Claude sign in']]) { const option = Dom.element('option', '', title); option.value = id; this.launch.append(option); }
     controls.append(this.tabs, this.launch, Dom.button('New native', () => this.openNative().catch(this.report)), Dom.button('Connect', onConnect),
       Dom.button('Interrupt', () => this.send('\x03')), Dom.button('Close', () => this.closeActive()), Dom.button('Clear', () => this.current().screen.clear()),
-      Dom.button('Copy', () => { const text = this.current().screen.terminal.getSelection(); if (text) navigator.clipboard.writeText(text).catch(this.report); }),
+      Dom.button('Copy', () => { const text = this.current().screen.terminal.getSelection(); if (!text) return; if (!navigator.clipboard?.writeText) return this.report(Error('Clipboard access requires a secure browser context')); navigator.clipboard.writeText(text).catch(this.report); }),
       Dom.button('−', () => this.zoom(-1)), Dom.button('+', () => this.zoom(1)));
     this.findInput = Dom.element('input'); this.findInput.type = 'search'; this.findInput.placeholder = 'Find in terminal'; this.findInput.setAttribute('aria-label', 'Find in terminal');
     this.findInput.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); this.current().screen.find(this.findInput.value, event.shiftKey); } };
     this.gpuButton = Dom.button('GPU: off', () => { const enabled = this.current().screen.gpu(!this.current().screen.webgl); this.gpuButton.textContent = 'GPU: ' + (enabled ? 'on' : 'off'); });
-    controls.append(this.findInput, Dom.button('Find', () => this.current().screen.find(this.findInput.value)), this.gpuButton);
+    this.accessibilityButton = Dom.button('Screen reader: off', () => { const terminal = this.current().screen.terminal; terminal.options.screenReaderMode = !terminal.options.screenReaderMode; this.draw(); });
+    this.accessibilityButton.setAttribute('aria-pressed', 'false');
+    controls.append(this.findInput, Dom.button('Find', () => this.current().screen.find(this.findInput.value)), this.gpuButton, this.accessibilityButton);
     this.status = Dom.element('div', 'terminal-status'); this.viewport = Dom.element('div', 'terminal-viewport'); this.content = Dom.element('div', 'terminal-screen'); this.viewport.append(this.content);
     this.form = Dom.element('form', 'terminal-command'); this.input = Dom.element('input'); this.input.id = 'browser-terminal-input'; this.input.placeholder = 'Browser shell: help'; this.input.autocomplete = 'off'; this.input.spellcheck = false; this.input.setAttribute('aria-label', 'Browser shell command');
     this.form.append(Dom.element('span', '', '❯'), this.input); this.form.onsubmit = event => { event.preventDefault(); this.browserCommand(); };
@@ -68,7 +70,7 @@ export class TerminalView {
   }
   async restore(session) {
     const state = await this.request(session, '/state'); if (!this.alive(session)) return;
-    session.screen.reset(); session.screen.resize(state.cols, state.rows); await session.screen.write(state.ansi);
+    await session.screen.restore(state);
     if (!this.alive(session)) return; session.cursor = state.cursor; session.closed = state.closed; session.exitCode = state.exitCode; session.needsRestore = false;
     this.updateTabs(); this.draw();
   }
@@ -134,6 +136,8 @@ export class TerminalView {
     const switched = this.displayed !== session; this.displayed = session;
     this.form.hidden = session.id !== 'browser'; screen.open(this.content); this.ime = screen.terminal.textarea;
     this.gpuButton.textContent = 'GPU: ' + (screen.webgl ? 'on' : 'off');
+    this.accessibilityButton.textContent = 'Screen reader: ' + (screen.terminal.options.screenReaderMode ? 'on' : 'off');
+    this.accessibilityButton.setAttribute('aria-pressed', String(screen.terminal.options.screenReaderMode));
     this.status.textContent = session.id === 'browser' ? `Browser shell · /${this.shell.cwd} · bounded utilities, no native processes` : `Native PTY · xterm.js · ${screen.cols}×${screen.rows} · ${session.closed ? 'exited ' + session.exitCode : 'host permissions · not sandboxed'}`;
     if (switched) this.resize();
   }

@@ -6,6 +6,7 @@ only the loopback transport through a Python test binding; it does not verify br
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import threading
 import urllib.request
@@ -112,6 +113,38 @@ def run():
             expect(page.locator('.terminal-screen')).to_contain_text('native-terminal-ok',timeout=20000)
             page.screenshot(path=str(OUTPUT/'agent-terminal.png'),full_page=True)
             print('PASS browser utility pipeline and real interactive native PTY')
+            # A real ncurses application: both human interaction and the MCP screen
+            # oracle must agree. Increasing the dock is equivalent to a splitter resize.
+            page.locator('.dock-layout').evaluate("node => node.style.setProperty('--bottom-size', '500px')")
+            terminal_id=page.locator('#agent-terminal-tabs').input_value()
+            ime.focus();ime.press_sequentially('python3 -I -u '+shlex.quote(str(ROOT/'tests/fixtures/terminal-curses.py')),delay=1);ime.press('Enter')
+            rendered=page.locator('.terminal-screen .xterm-rows')
+            expect(rendered).to_contain_text('Ferrite ncurses interoperability',timeout=20000)
+            expect(rendered).to_contain_text('Unicode: 界é')
+            screen=api('/v1/terminals/'+terminal_id+'/screen')
+            assert screen['buffer']=='alternate' and screen['title']=='Ferrite ncurses fixture',screen
+            ime.press('ArrowDown');expect(rendered).to_contain_text('Selected: 2')
+            ime.press('F1');expect(rendered).to_contain_text('Event: HELP')
+            page.keyboard.insert_text('Ż界');expect(rendered).to_contain_text('Input: Ż界')
+            screen=api('/v1/terminals/'+terminal_id+'/screen')
+            assert 'Selected: 2' in screen['text'] and 'Input: Ż界' in screen['text'],screen
+            box=page.locator('.terminal-screen .xterm-screen').bounding_box()
+            page.mouse.click(box['x']+6.5*box['width']/screen['cols'],box['y']+7.5*box['height']/screen['rows'])
+            expect(rendered).to_contain_text('MOUSE 7,8')
+            previous_size=(screen['cols'],screen['rows'])
+            page.set_viewport_size({'width':1580,'height':1100})
+            page.locator('.dock-layout').evaluate("node => node.style.setProperty('--bottom-size', '560px')")
+            for _ in range(100):
+                page.wait_for_timeout(50)
+                screen=api('/v1/terminals/'+terminal_id+'/screen')
+                if (screen['cols'],screen['rows'])!=previous_size and ('Size: %dx%d'%(screen['cols'],screen['rows'])) in screen['text']:break
+            assert (screen['cols'],screen['rows'])!=previous_size,screen
+            expect(rendered).to_contain_text('Size: %dx%d'%(screen['cols'],screen['rows']))
+            page.locator('#agent-terminal-tabs').select_option('browser')
+            page.locator('#agent-terminal-tabs').select_option(terminal_id)
+            expect(rendered).to_contain_text('Selected: 2')
+            page.screenshot(path=str(OUTPUT/'terminal-ncurses.png'),full_page=True)
+            print('PASS actual browser ncurses: alternate screen, Unicode, arrows/F1, IME input, mouse, resize and tab restoration')
             # No bearer or API key may enter persistent web storage.
             stored=page.evaluate('JSON.stringify({local:{...localStorage},session:{...sessionStorage}})' if not MEMORY else '"memory-mode-no-origin-storage"')
             assert connection['token'] not in stored and 'fixture-private-api-key' not in stored
@@ -126,6 +159,18 @@ def run():
             page.locator('dialog.agent-dialog').get_by_role('button',name='Connect',exact=True).click();expect(page.locator('dialog.agent-dialog')).to_have_count(0)
             expect(page.locator('#agent-terminal-tabs option')).to_have_count(2)
             expect(agent.locator('.agent-error')).to_be_hidden()
+            if not page.locator('.terminal-workbench').is_visible():page.locator('[data-tool="terminal"]').click()
+            page.locator('#agent-terminal-tabs').select_option(terminal_id)
+            expect(rendered).to_contain_text('Ferrite ncurses interoperability')
+            expect(rendered).to_contain_text('Selected: 2')
+            expect(rendered).to_contain_text('Input: Ż界')
+            ime=page.get_by_role('textbox',name='Native terminal input',exact=True)
+            ime.focus();ime.press('q')
+            expect(rendered).to_contain_text('CURSES_EXIT_OK')
+            screen=api('/v1/terminals/'+terminal_id+'/screen')
+            assert screen['buffer']=='normal' and 'NORMAL BUFFER' in screen['text'],screen
+            print('PASS live ncurses reconnect snapshot and normal-screen restoration on exit')
+            if not agent.is_visible():page.locator('[data-tool="agent"]').click()
             agent.get_by_role('button',name='Import native workspace').click()
             expect(agent.locator('.agent-workspace-status')).to_contain_text('Synchronized')
             native_before=(Path(connection['root'])/'src/main.rs').read_text()
@@ -136,7 +181,7 @@ def run():
             agent.get_by_role('button',name='Disconnect',exact=True).click();expect(agent.locator('.agent-badge')).to_have_text('Disconnected')
             assert not errors,errors
             print('PASS session fork, sign-out, reconnect, project-switch isolation and credential non-persistence')
-            (OUTPUT/'results.json').write_text(json.dumps({'passed':6,'transport':'memory-injected' if MEMORY else 'http','provider':'deterministic fixture; real provider billing not exercised','errors':errors},indent=2))
+            (OUTPUT/'results.json').write_text(json.dumps({'passed':8,'transport':'memory-injected' if MEMORY else 'http','provider':'deterministic fixture; real provider billing not exercised','errors':errors},indent=2))
         except Exception:
             page.screenshot(path=str(OUTPUT/'failure.png'),full_page=True)
             (OUTPUT/'errors.json').write_text(json.dumps(errors,indent=2))

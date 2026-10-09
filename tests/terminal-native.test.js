@@ -1,3 +1,4 @@
+import {restoreTerminalState} from '../src/agent/terminal/XtermStateAdapter.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
@@ -52,4 +53,24 @@ test('screen recovery does not depend on retained replay escape boundaries',nati
   await visible(m,s.id,'RECOVER_ME\nLAST_ROW'); const log=m.read(s.id); assert.equal(log.gap,true);
   const state=await m.state(s.id), replica=new TerminalScreen(state.cols,state.rows); t.after(()=>replica.dispose()); await replica.write(state.ansi);
   assert.match(replica.text(),/RECOVER_ME/); assert.match(replica.text(),/LAST_ROW/); assert.equal(state.cursor,m.read(s.id).cursor);
+});
+
+test('checkpoint taken between PTY fragments resumes without exposing an incomplete escape',native,async t=>{
+  const m=manager(t), code="import os,tty; tty.setraw(0); os.write(1,b'FRAME_READY\\r\\n\\x1b[3;'); os.read(0,1); os.write(1,b'4HRESUMED'); os.read(0,1)";
+  const s=await m.start({executable:'python3',args:['-I','-u','-c',code],cols:50,rows:12});
+  await visible(m,s.id,'FRAME_READY'); const state=await m.state(s.id), replica=new TerminalScreen(state.cols,state.rows); t.after(()=>replica.dispose());
+  await replica.write(state.ansi); restoreTerminalState(replica.terminal,state.protocol);
+  m.input(s.id,'x'); await visible(m,s.id,'RESUMED');
+  for (const event of m.read(s.id,state.cursor).events) if(event.type==='data') await replica.write(event.text);
+  assert.deepEqual(replica.snapshot().lines,(await m.snapshot(s.id)).lines);
+  assert.equal(replica.snapshot().lines[2],'   RESUMED'); m.input(s.id,'x'); await m.get(s.id).exited;
+});
+test('SIGINT targets a shell foreground job while the shell remains usable',native,async t=>{
+  const m=manager(t), s=await m.start({executable:'/bin/bash',args:['--noprofile','--norc','-i']});
+  m.input(s.id,`python3 -I -u -c "import signal; print('JOB_'+'READY',flush=True); signal.pause()"\r`);
+  // Match output that is not present literally in the command's terminal echo.
+  await visible(m,s.id,'JOB_READY');
+  m.signal(s.id,'SIGINT'); m.input(s.id,"printf '\\n%s_%s\\n' SHELL SURVIVED\r");
+  await visible(m,s.id,'SHELL_SURVIVED'); assert.equal(m.read(s.id).closed,false);
+  m.input(s.id,'exit 0\r'); await m.get(s.id).exited;
 });

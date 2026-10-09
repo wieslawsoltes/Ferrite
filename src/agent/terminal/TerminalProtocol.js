@@ -23,6 +23,7 @@ export function installTerminalPolicy(terminal, {replica = false} = {}) {
     return false; // Observe, then let the upstream parser execute its complete semantics.
   }));
   subscriptions.push(terminal.parser.registerCsiHandler({intermediates: ' ', final: 'q'}, params => { state.cursorStyle = Number(params[0] ?? 0); return false; }));
+  subscriptions.push(terminal.parser.registerCsiHandler({intermediates: '!', final: 'p'}, () => { state.cursorVisible = true; state.cursorStyle = 0; return false; }));
   subscriptions.push(terminal.parser.registerEscHandler({final: 'c'}, () => { reset(); return false; }));
   if (replica) {
     for (const prefix of ['', '?', '>', '=']) for (const final of ['c', 'n']) subscriptions.push(terminal.parser.registerCsiHandler({prefix, final}, () => true));

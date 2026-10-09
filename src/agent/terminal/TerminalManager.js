@@ -1,3 +1,5 @@
+import {TerminalFramer} from './TerminalFramer.js';
+import {captureTerminalState} from './XtermStateAdapter.js';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {StringDecoder} from 'node:string_decoder';
@@ -35,6 +37,7 @@ export class TerminalManager {
       decoder: new StringDecoder('utf8'), closed: false, finishing: false, exitCode: null, lastUsed: Date.now(), createdAt: new Date().toISOString(), queue: Promise.resolve(), pendingCharacters: 0, resizes: new Map()};
     session.exited = new Promise(resolve => { session.resolveExit = resolve; });
     session.screen = new TerminalScreen(cols, rows, {onReply: text => { if (!session.closed && session.child && !session.child.stdin.destroyed) { try { this.input(id, text); } catch { /* A closing/congested process cannot receive replies. */ } } }});
+    session.framer = new TerminalFramer(session.screen.terminal);
     this.sessions.set(id, session);
     const helper = fileURLToPath(new URL('../../../tools/agent-pty.py', import.meta.url));
     let child;
@@ -93,6 +96,9 @@ export class TerminalManager {
     return result;
   }
   append(session, text) {
+    if (!text) return;
+    const discarded = session.framer.discarded; text = session.framer.push(text);
+    if (discarded !== session.framer.discarded) this.enqueue(session, () => session.log.emit('warning', {code: 'TERMINAL_CONTROL_LIMIT', discarded: session.framer.discarded}));
     if (!text) return; session.pendingCharacters += text.length;
     // Pausing the pipe propagates backpressure through Python to the actual PTY.
     if (session.pendingCharacters > 512 * 1024) session.child.stdout.pause();
@@ -136,7 +142,7 @@ export class TerminalManager {
     return this.enqueue(session, () => {
       let scrollback = 1000, ansi = session.screen.serialize(scrollback);
       while (ansi.length > 2_000_000 && scrollback > 0) { scrollback = Math.floor(scrollback / 2); ansi = session.screen.serialize(scrollback); }
-      return {...this.metadata(session), cursor: session.log.sequence, ansi, retainedScrollback: scrollback, title: session.screen.title, modes: session.screen.modes()};
+      return {...this.metadata(session), cursor: session.log.sequence, ansi, protocol: captureTerminalState(session.screen.terminal), retainedScrollback: scrollback, title: session.screen.title, modes: session.screen.modes()};
     });
   }
   async wait(id, {cursor = 0, contains, until = contains === undefined ? 'output' : 'text', timeoutMs = 1000, signal} = {}) {

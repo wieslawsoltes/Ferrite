@@ -1,3 +1,4 @@
+import {restoreTerminalState} from '../../agent/terminal/XtermStateAdapter.js';
 import {Terminal} from '../../vendor/xterm/xterm.mjs';
 import {FitAddon} from '../../vendor/xterm/addon-fit.mjs';
 import {SearchAddon} from '../../vendor/xterm/addon-search.mjs';
@@ -13,7 +14,7 @@ export class XtermSurface {
     this.host = document.createElement('div'); this.host.className = 'terminal-surface';
     this.terminal = new Terminal({cols, rows, scrollback: 2000, allowProposedApi: true, disableStdin: !native,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: 13, lineHeight: 1.15,
-      theme: {...TERMINAL_THEME}, cursorBlink: native, logLevel: 'off', screenReaderMode: true});
+      theme: {...TERMINAL_THEME}, cursorBlink: native, logLevel: 'off', screenReaderMode: false});
     this.fit = new FitAddon(); this.search = new SearchAddon(); this.pending = new Set(); this.native = native;
     for (const addon of [this.fit, this.search, new Unicode11Addon()]) this.terminal.loadAddon(addon);
     this.terminal.unicode.activeVersion = '11'; this.policy = installTerminalPolicy(this.terminal, {replica: true});
@@ -35,6 +36,12 @@ export class XtermSurface {
     if (this.disposed) return Promise.resolve();
     return new Promise(resolve => { const done = () => { this.pending.delete(done); resolve(); }; this.pending.add(done); this.terminal.write(text, done); });
   }
+  async restore(state) {
+    this.reset(); this.resize(state.cols, state.rows); await this.write(state.ansi);
+    if (this.disposed) return;
+    if (state.protocol) restoreTerminalState(this.terminal, state.protocol);
+    if (this.opened) this.terminal.refresh(0, this.rows - 1);
+  }
   reset() { if (!this.disposed) { this.terminal.reset(); this.policy.reset(); } }
   clear() { this.terminal.clear(); }
   resize(cols, rows) { if (!this.disposed) this.terminal.resize(cols, rows); }
@@ -48,7 +55,7 @@ export class XtermSurface {
     this.webgl?.dispose(); this.webgl = null;
     if (enabled && this.opened && !this.disposed) {
       try {
-        const addon = new WebglAddon(); this.terminal.loadAddon(addon); this.webgl = addon;
+        const addon = new WebglAddon(); this.webgl = addon; this.terminal.loadAddon(addon);
         this.gpuSubscription = addon.onContextLoss(() => this.gpu(false));
       } catch { this.webgl?.dispose(); this.webgl = null; }
     }

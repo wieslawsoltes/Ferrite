@@ -8,13 +8,14 @@ export class EnumRecordAnalyzer {
     return constructor.variant.members ?? constructor.variant.fields.map((type, i) => ({name: String(i), type}));
   }
 
-  static fields(node, constructor, partial = false) {
-    const members = this.members(constructor), positions = new Map(members.map((field, i) => [field.name, i]));
+  static fields(index, node, constructor, partial = false) {
+    const members = this.members(constructor);
     const seen = new Set();
     const indices = node.fields.map(field => {
-      if (!positions.has(field.name)) throw new Diagnostic('E0559', `Unknown field ${field.name} in ${constructor.tag}`, field.value?.span ?? field.pattern?.span ?? node.span);
+      const position = index.variantPosition(constructor.variant, field.name);
+      if (position === undefined) throw new Diagnostic('E0559', `Unknown field ${field.name} in ${constructor.tag}`, field.value?.span ?? field.pattern?.span ?? node.span);
       if (seen.has(field.name)) throw new Diagnostic('E0062', `Duplicate field ${field.name} in ${constructor.tag}`, node.span);
-      seen.add(field.name); return positions.get(field.name);
+      seen.add(field.name); return position;
     });
     if (!partial && seen.size !== members.length)
       throw new Diagnostic('E0063', `Missing fields in ${constructor.tag}; all ${members.length} fields are required`, node.span);
@@ -22,7 +23,7 @@ export class EnumRecordAnalyzer {
   }
 
   static literal(analyzer, node, constructor, context, expected) {
-    const order = this.fields(node, constructor);
+    const order = this.fields(analyzer.index, node, constructor);
     // Type and execute initializers in their written order, not the enum layout.
     // The adapter descriptor is ephemeral; indexed declarations remain immutable.
     const view = {...constructor, form: 'record', variant: {...constructor.variant,
@@ -35,7 +36,7 @@ export class EnumRecordAnalyzer {
   static pattern(analyzer, pattern, constructor, type, context, mutable, bindings, names, reuse) {
     if (T.application(type).name !== constructor.owner.name)
       throw new Diagnostic('E0308', `Pattern ${constructor.tag} does not match ${type}`, pattern.span);
-    const order = this.fields(pattern, constructor, !!pattern.rest);
+    const order = this.fields(analyzer.index, pattern, constructor, !!pattern.rest);
     const items = constructor.variant.fields.map((_, i) => ({kind: 'wildcard', id: `${pattern.id}:field:${i}`, span: pattern.span}));
     pattern.fields.forEach((field, i) => { items[order[i]] = field.pattern; });
     pattern.kind = 'variantPattern'; pattern.recordSyntax = true; pattern.items = items;

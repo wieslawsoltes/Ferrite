@@ -105,7 +105,7 @@ export class AssigneeAnalyzer {
       if (constructor?.kind === 'enum') {
         if (constructor.owner.variants.length !== 1)
           throw new Diagnostic('E0005', 'An enum assignee must be irrefutable (a single-variant enum)', node.span);
-        const order = EnumRecordAnalyzer.fields(node, constructor, !!node.rest), {owner} = constructor;
+        const order = EnumRecordAnalyzer.fields(this.a.index, node, constructor, !!node.rest), {owner} = constructor;
         const supplied = node.typeArguments?.map(type => this.a.normalize(type, this.ctx, node)) ?? constructor.typeArguments ?? [];
         if (supplied.length && supplied.length !== owner.generics.length)
           throw new Diagnostic('E0107', 'Incorrect number of assignee type arguments', node.span);

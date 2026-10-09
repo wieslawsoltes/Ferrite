@@ -1,4 +1,7 @@
+import {CanvasController} from './CanvasController.js';
+import {OwnedValues} from './OwnedValues.js';
 import {createUIRuntime} from './Runtime.js';
+import {ExecutionSnapshot} from '../runtime/ExecutionSnapshot.js';
 import {Runtime} from '../runtime/Runtime.js';
 import {MirVirtualMachine} from '../runtime/MirVirtualMachine.js';
 import {WebAssemblyRuntime} from '../runtime/WebAssemblyRuntime.js';
@@ -10,27 +13,33 @@ export function scriptJSON(value) {
 const htmlText = value => String(value).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]);
 
 /** No CDN, fetch, module imports or external runtime assets in the result. */
-export function exportHTML(artifact, {backend = 'javascript', title = 'Ferrite Rust UI', css = '', channel = null} = {}) {
+export function exportHTML(artifact, {backend = 'javascript', title = 'Ferrite Rust UI', css = '', channel = null, hydrate = false, identifierPrefix = '', props} = {}) {
   if (artifact?.format !== 'ferrite-ui-v1' || !['javascript', 'wasm', 'mir'].includes(backend)) throw Error('Invalid UI export');
   if (typeof title !== 'string' || title.length > 1000 || typeof css !== 'string' || css.length > 500000) throw Error('UI export text exceeds its limit');
+  if (typeof hydrate !== 'boolean' || typeof identifierPrefix !== 'string' || identifierPrefix.length > 200) throw Error('Invalid hydration options');
   if (channel !== null && !/^[a-f0-9]{32,128}$/.test(channel)) throw Error('Invalid preview channel');
+  props = artifact.entryPropsType ? new OwnedValues(artifact.ownedSchemas).encode(artifact.entryPropsType, new OwnedValues(artifact.ownedSchemas).decode(artifact.entryPropsType, props)) : null;
   const compact = {format: artifact.format, abi: artifact.abi, entry: artifact.entry, maxSteps: artifact.maxSteps, file: artifact.file, source: artifact.source,
-    optimizedMir: artifact.optimizedMir, ...(backend === 'javascript' ? {js: artifact.js} : {}), ...(backend === 'wasm' ? {wasm: {bytes: artifact.wasm.bytes}} : {})};
+    entryPropsType: artifact.entryPropsType, ownedSchemas: artifact.ownedSchemas, files: artifact.files, optimizedMir: artifact.optimizedMir, ...(backend === 'javascript' ? {js: artifact.js} : {}), ...(backend === 'wasm' ? {wasm: {bytes: artifact.wasm.bytes}} : {})};
   const bootstrap = `
 'use strict';
 const createUIRuntime = ${createUIRuntime.toString()};
 const UI = createUIRuntime();
 const Runtime = ${Runtime.toString()};
+const ExecutionSnapshot = ${ExecutionSnapshot.toString()};
 const MirVirtualMachine = ${MirVirtualMachine.toString()};
 const WebAssemblyRuntime = ${WebAssemblyRuntime.toString()};
+const OwnedValues = ${OwnedValues.toString()};
 const UISession = ${UISession.toString()};
 const artifact = ${scriptJSON(compact)};
 const style = document.createElement('style'); style.textContent = ${scriptJSON(css)}; document.head.append(style);
 const channel = ${scriptJSON(channel)};
+const CanvasController = ${CanvasController.toString()};
+const canvas = channel ? new CanvasController(document, send) : null;
 let picking = false, scheduled = false;
 function send(value) { if (channel) parent.postMessage({type:'ferrite-ui', channel, ...value}, '*'); }
 function showError(error) { let node=document.getElementById('ferrite-error'); if(!node){node=document.createElement('pre');node.id='ferrite-error';document.body.append(node);}node.textContent=error.message??String(error);send({event:'error',error:{message:node.textContent,code:error.code,span:error.span}}); }
-const session = new UISession(artifact, {backend:${scriptJSON(backend)}, runtime:UI, onError:showError});
+const session = new UISession(artifact, {backend:${scriptJSON(backend)}, runtime:UI, onError:showError, props:${scriptJSON(props)}});
 session.subscribe(event => {
   if(event.type==='callback'||event.type==='commit'){
     if(!scheduled){scheduled=true;queueMicrotask(()=>{scheduled=false;send({event:'snapshot',snapshot:session.inspect()});});}
@@ -44,9 +53,10 @@ if(channel){
     try{
       let result;
       if(message.command==='inspect')result=session.inspect();
+      else if(message.command==='layout')result=canvas.configure(message);
       else if(message.command==='pick'){picking=!!message.value;result={picking};}
       else if(message.command==='debug.arm')result=session.armDebugger({breakpoints:message.breakpoints??[]});
-      else if(['debug.step','debug.step-line','debug.continue','debug.stop'].includes(message.command))result=session.debug(message.command.slice(6));
+      else if(['debug.step','debug.step-line','debug.back','debug.back-line','debug.restart','debug.continue','debug.stop'].includes(message.command))result=session.debug(message.command.slice(6));
       else if(message.command==='state.set')result=session.setState(message.handle,message.value);
       else throw Error('Unknown preview command');
       send({reply:message.id,result});
@@ -54,8 +64,8 @@ if(channel){
   });
 }
 Object.defineProperty(window,'ferriteUI',{value:Object.freeze({version:'0.1.0',inspect:()=>session.inspect(),armDebugger:options=>session.armDebugger(options),debug:command=>session.debug(command),setState:(handle,value)=>session.setState(handle,value),dispose:()=>session.dispose()}),configurable:false});
-try{session.mount(document.getElementById('app'));send({event:'ready',snapshot:session.inspect()});}catch(error){showError(error);}
-window.addEventListener('pagehide',()=>session.dispose(),{once:true});
+try{session.mount(document.getElementById('app'),{hydrate:${scriptJSON(hydrate)},identifierPrefix:${scriptJSON(identifierPrefix)}});send({event:'ready',snapshot:session.inspect()});}catch(error){showError(error);}
+window.addEventListener('pagehide',()=>{canvas?.dispose();session.dispose();},{once:true});
 `;
   // Input data is encoded with scriptJSON; implementation source contains no HTML
   // terminator. Check rather than applying replacements that could alter JS syntax.

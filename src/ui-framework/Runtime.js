@@ -100,6 +100,7 @@ export function createUIRuntime() {
   function effect(kind, setup, deps) {
     if (typeof setup !== 'function' || deps !== undefined && !Array.isArray(deps)) fail('Invalid effect');
     const cell = hook(kind, () => ({initialized: false, cleanup: null, pending: null}));
+    if (current.root.server) return;
     if (!cell.initialized || !equalDeps(cell.deps, deps)) {
       cell.pending = {setup, deps: deps?.slice()};
       current.root[kind === 'layout' ? 'layouts' : 'effects'].add(cell);
@@ -122,10 +123,12 @@ export function createUIRuntime() {
     const cell = hook('context', () => ({})); cell.context = context;
     return current.context.has(context) ? current.context.get(context) : context.defaultValue;
   }
-  function useId() { return hook('id', owner => ({value: `:f${owner.root.id}-${owner.id}-${owner.cursor}:`})).value; }
-  function useSyncExternalStore(subscribe, getSnapshot, _getServerSnapshot) {
-    const [value, force] = useState(() => ({snapshot: getSnapshot()}));
-    const snapshot = getSnapshot();
+  function useId() { return hook('id', owner => ({value: `:${owner.root.identifierPrefix}f${owner.id}-${owner.cursor}:`})).value; }
+  function useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot) {
+    if (current?.root.server && typeof getServerSnapshot !== 'function') fail('Server rendering requires getServerSnapshot');
+    const read = (current?.root.server || current?.root.hydrating) && getServerSnapshot ? getServerSnapshot : getSnapshot;
+    const [value, force] = useState(() => ({snapshot: read()}));
+    const snapshot = read();
     useLayoutEffect(() => {
       const check = () => { const next = getSnapshot(); force(previous => Object.is(previous.snapshot, next) ? previous : {snapshot: next}); };
       const unsubscribe = subscribe(check); check();
@@ -186,7 +189,7 @@ export function createUIRuntime() {
     for (const cell of fiber.hooks) cleanup(cell, fiber.root);
     for (const cell of fiber.hooks) if (typeof cell.dispose === 'function') { try { cell.dispose(cell.value); } catch (error) { fiber.root.report(error); } }
     if (fiber.element) {
-      assignRef(fiber.props.ref, null);
+      if (!fiber.root.server && fiber.refAttached) assignRef(fiber.props.ref, null);
       for (const listener of fiber.listeners.values()) fiber.element.removeEventListener(listener.event, listener.handler, listener.capture);
     }
     if (fiber.portalStart) {
@@ -197,6 +200,8 @@ export function createUIRuntime() {
     if (remove) removeRange(fiber);
   }
   function eventName(key, element) {
+    // Explicit native bindings preserve DOM names, without React-style aliases.
+    if (/^on:[a-z][a-z0-9]*$/.test(key)) return {event: key.slice(3), capture: false};
     let name = key.slice(2), capture = false;
     if (name.endsWith('Capture')) { name = name.slice(0, -7); capture = true; }
     const aliases = {DoubleClick: 'dblclick', Focus: 'focusin', Blur: 'focusout'};
@@ -227,7 +232,7 @@ export function createUIRuntime() {
     for (const key of new Set([...Object.keys(previous), ...Object.keys(next)])) {
       const value = next[key];
       if (['children', 'key', 'ref', '__source'].includes(key)) continue;
-      if (/^on[A-Z]/.test(key)) {
+      if (/^on[A-Z]/.test(key) || /^on:[a-z][a-z0-9]*$/.test(key)) {
         const spec = eventName(key, element), existing = fiber.listeners.get(key);
         if (existing && (value == null || existing.event !== spec.event || existing.capture !== spec.capture)) {
           element.removeEventListener(existing.event, existing.handler, existing.capture); fiber.listeners.delete(key);
@@ -266,7 +271,9 @@ export function createUIRuntime() {
       else element.setAttribute(name, ['href', 'src', 'action', 'formAction', 'xlink:href'].includes(key) ? safeUrl(value) : String(value));
     }
     if (next.__source) element.setAttribute('data-ferrite-source', String(next.__source)); else element.removeAttribute('data-ferrite-source');
-    if (previous.ref !== next.ref) { assignRef(previous.ref, null); assignRef(next.ref, element); }
+    if (!fiber.root.server && previous.ref !== next.ref) {
+      fiber.root.refs.push(() => { if (fiber.refAttached) assignRef(previous.ref, null); if (fiber.mounted) { assignRef(next.ref, fiber.element); fiber.refAttached = !!next.ref; } });
+    }
     fiber.props = {...next, ...(next.style && typeof next.style === 'object' ? {style: {...next.style}} : {})};
   }
   function reconcileChildren(parent, owner, values, before, context, depth) {
@@ -296,7 +303,7 @@ export function createUIRuntime() {
     if (old && old.type !== vnode.type) { dispose(old); old = null; }
     let fiber = old;
     if (!fiber) {
-      fiber = {id: nextId++, type: vnode.type, key: vnode.key, root, parent: owner, hooks: [], cursor: 0, children: [], props: {}, context,
+      fiber = {id: root.nextFiberId++, type: vnode.type, key: vnode.key, root, parent: owner, hooks: [], cursor: 0, children: [], props: {}, context,
         dirty: true, mounted: true, rendered: false, waitVersion: 0, listeners: new Map()};
       root.fibers.set(fiber.id, fiber);
       const document = parent.ownerDocument;
@@ -316,13 +323,23 @@ export function createUIRuntime() {
     const props = vnode.props;
     if (fiber.element) {
       updateProps(fiber, props);
-      reconcileChildren(fiber.element, fiber, props.children, null, context, depth);
+      let renderedChildren = props.children;
+      if (fiber.element.namespaceURI === 'http://www.w3.org/1999/xhtml' && ['textarea', 'title'].includes(fiber.element.localName)) {
+        const parts = publicChildren(renderedChildren);
+        if (parts.some(value => isElement(value))) fail('textarea/title children must be primitive text');
+        if (fiber.element.localName === 'textarea' && (props.value != null || props.defaultValue != null)) {
+          if (parts.some(value => value !== null)) fail('A controlled/default textarea cannot also have children');
+          renderedChildren = undefined;
+        } else renderedChildren = parts.filter(value => value !== null).join('');
+      }
+      reconcileChildren(fiber.element, fiber, renderedChildren, null, context, depth);
       // Controlled selects apply their value only after options exist.
       if (fiber.element.localName === 'select' && props.value != null) fiber.element.value = String(props.value);
     } else if (vnode.type === TEXT) { if (fiber.first.data !== props.value) fiber.first.data = props.value; fiber.props = props; }
     else if (vnode.type === EMPTY) fiber.props = props;
     else if (vnode.type === Fragment) { fiber.props = props; reconcileChildren(parent, fiber, props.children, fiber.last, context, depth); }
     else if (vnode.type === PORTAL) {
+      if (root.server || root.hydrating) fail('Portals must be mounted after server rendering or hydration commits');
       if (!props.container?.insertBefore) fail('Portal requires a DOM container');
       if (fiber.portalTarget !== props.container) {
         for (const child of fiber.children) dispose(child); fiber.children = [];
@@ -386,10 +403,68 @@ export function createUIRuntime() {
       } catch (error) { root.report(error); }
     }
   }
+  /** Validate the complete shape before adopting any live node. Never execute refs on staging DOM. */
+  function adoptHydration(root, staging, container) {
+    const mapped = new Map(), operations = [], byElement = new Map();
+    for (const fiber of root.fibers.values()) if (fiber.element) byElement.set(fiber.element, fiber);
+    const mismatch = message => { const error = new Error('Hydration mismatch: ' + message); error.code = 'R_UI_HYDRATION'; throw error; };
+    const attributes = element => new Map(Array.from(element.attributes, item => Array.isArray(item) ? item : [item.name, item.value]));
+    const children = (expectedParent, actualParent, depth = 0) => {
+      if (depth > 256) mismatch('depth budget');
+      const expected = [...expectedParent.childNodes], actual = [...actualParent.childNodes]; let e = 0, a = 0;
+      while (e < expected.length) {
+        const left = expected[e];
+        if (left.nodeType === 3) {
+          const texts = [], existing = [];
+          while (e < expected.length && expected[e].nodeType === 3) texts.push(expected[e++]);
+          while (a < actual.length && actual[a].nodeType === 3) existing.push(actual[a++]);
+          if (texts.map(n => n.data).join('') !== existing.map(n => n.data).join('')) mismatch('text content');
+          const before = actual[a] ?? null, values = texts.map(n => n.data);
+          operations.push(() => {
+            // HTML parsing coalesces adjacent text and drops empty text nodes. Keep the
+            // first existing node; split the logical run without replacing its parent.
+            const first = existing[0]; for (const node of existing.slice(1)) node.remove();
+            for (let index = 0; index < texts.length; index++) {
+              const node = index === 0 && first ? first : actualParent.ownerDocument.createTextNode('');
+              node.data = values[index]; if (node !== first) actualParent.insertBefore(node, before); mapped.set(texts[index], node);
+            }
+          });
+          continue;
+        }
+        const right = actual[a++]; e++;
+        if (!right || left.nodeType !== right.nodeType) mismatch('node kind');
+        mapped.set(left, right);
+        if (left.nodeType === 8) { if (left.data !== right.data) mismatch('component boundary'); continue; }
+        if (left.localName !== right.localName || left.namespaceURI !== right.namespaceURI) mismatch('element tag');
+        const l = attributes(left), r = attributes(right);
+        const tag = left.localName;
+        const ignore = tag === 'input' ? ['value', 'checked'] : tag === 'option' ? ['selected'] : ['video', 'audio'].includes(tag) ? ['muted'] : [];
+        for (const key of ignore) { l.delete(key); r.delete(key); }
+        if (l.has('style') && r.has('style')) { l.set('style', left.style.cssText); r.set('style', right.style.cssText); }
+        if (l.size !== r.size || [...l].some(([key, value]) => r.get(key) !== value)) mismatch('attributes on ' + tag);
+        const fiber = byElement.get(left);
+        if (tag !== 'textarea' || !Object.hasOwn(fiber?.props ?? {}, 'value') && !Object.hasOwn(fiber?.props ?? {}, 'defaultValue')) children(left, right, depth + 1);
+      }
+      if (a !== actual.length) mismatch('extra nodes');
+    };
+    children(staging, container); for (const apply of operations) apply();
+    for (const fiber of root.fibers.values()) {
+      fiber.first = mapped.get(fiber.first) ?? fiber.first; fiber.last = mapped.get(fiber.last) ?? fiber.last;
+      if (fiber.element) {
+        const old = fiber.element, element = mapped.get(old); if (!element) mismatch('missing element mapping');
+        for (const listener of fiber.listeners.values()) { old.removeEventListener(listener.event, listener.handler, listener.capture); element.addEventListener(listener.event, listener.handler, listener.capture); }
+        fiber.element = element;
+        // Respect edits to uncontrolled inputs made before hydration. Controlled
+        // values intentionally become authoritative; defaultValue is mount-only.
+        for (const key of ['value', 'checked', 'selected', 'muted']) if (Object.hasOwn(fiber.props, key) && key in element && fiber.props[key] != null) element[key] = key === 'value' ? String(fiber.props[key]) : !!fiber.props[key];
+      }
+    }
+  }
   function createRoot(container, options = {}) {
     if (!container?.ownerDocument || !container.insertBefore) fail('createRoot requires a DOM container');
     if (roots.has(container)) fail('This container already has a Ferrite root');
-    const root = {id: nextId++, container, vnode: null, children: [], hooks: [], fibers: new Map(), layouts: new Set(), effects: new Set(), listeners: new Set(), timeline: [],
+    if (typeof (options.identifierPrefix ?? '') !== 'string' || (options.identifierPrefix ?? '').length > 200) fail('Invalid identifierPrefix');
+    const root = {id: nextId++, nextFiberId: 1, identifierPrefix: options.identifierPrefix ?? '', server: !!options.server, hydrating: !!options.hydrate, refs: [], container, vnode: null, children: [], hooks: [], fibers: new Map(), layouts: new Set(), effects: new Set(), listeners: new Set(), timeline: [],
       disposed: false, rendering: false, queued: false, mounted: true, maxNodes: options.maxNodes ?? 20000, visits: 0, commits: 0};
     root.root = root; root.parent = null;
     root.emit = (type, detail = {}) => {
@@ -400,14 +475,26 @@ export function createUIRuntime() {
     root.perform = () => {
       if (root.disposed || root.rendering) return;
       runEffects(root, root.effects); scheduled.delete(root);
-      root.rendering = true; root.visits = 0; const start = performance.now();
+      root.rendering = true; root.visits = 0; root.refs = []; const start = performance.now();
       try {
-        reconcileChildren(container, root, normalize(root.vnode), null, new Map(), 0);
+        if (root.hydrating) {
+          const document = container.ownerDocument;
+          const staging = container.namespaceURI ? document.createElementNS(container.namespaceURI, container.localName) : document.createElement('div');
+          reconcileChildren(staging, root, normalize(root.vnode), null, new Map(), 0);
+          try { adoptHydration(root, staging, container); root.emit('hydrate', {reused: true}); }
+          catch (error) {
+            if (error.code !== 'R_UI_HYDRATION') throw error;
+            container.replaceChildren(...staging.childNodes); root.emit('hydration-mismatch', {message: error.message});
+            options.onRecoverableError?.(error);
+          }
+          root.hydrating = false;
+        } else reconcileChildren(container, root, normalize(root.vnode), null, new Map(), 0);
+        for (const commit of root.refs) commit(); root.refs = [];
         root.commits++; root.emit('commit', {milliseconds: performance.now() - start, visited: root.visits});
       } catch (error) {
         // A failed root has no half-live hooks, listeners, or leaked detached fibers.
         for (const fiber of [...root.fibers.values()]) if (fiber.mounted) dispose(fiber, false);
-        root.children = []; root.pendingChildren = null; container.replaceChildren(); root.report(error);
+        root.children = []; root.pendingChildren = null; root.refs = []; root.hydrating = false; container.replaceChildren(); root.report(error);
         if (options.throwErrors) throw error;
       } finally { root.rendering = false; }
       runEffects(root, root.layouts);
@@ -427,9 +514,10 @@ export function createUIRuntime() {
         props: safeValue(fiber.props), hooks: fiber.hooks.map((cell, index) => ({index, kind: cell.kind, value: safeValue(cell.value ?? cell.ref?.current)})), children: fiber.children.map(inspect)});
       return {version: 1, commits: root.commits, disposed: root.disposed, tree: root.children.map(inspect), timeline: root.timeline.slice()};
     };
-    roots.set(container, root); container.replaceChildren();
+    roots.set(container, root); if (!root.hydrating) container.replaceChildren();
     return root;
   }
+  function hydrateRoot(container, vnode, options = {}) { return createRoot(container, {...options, hydrate: true}).render(vnode); }
   function flushSync(action) {
     batchDepth++;
     try { action?.(); } finally { batchDepth--; }
@@ -459,7 +547,7 @@ export function createUIRuntime() {
     map: (value, fn, self) => value == null ? value : publicChildren(value).flatMap((child, i) => publicChildren(fn.call(self, child, i))).filter(child => child !== null),
     forEach: (value, fn, self) => { if (value != null) publicChildren(value).forEach((child, i) => fn.call(self, child, i)); }
   };
-  return {version: '0.1.0', createElement, h: createElement, jsx: (type, props, key) => createElement(type, {...props, ...(key === undefined ? {} : {key})}), jsxs: (type, props, key) => createElement(type, {...props, ...(key === undefined ? {} : {key})}), Fragment, Suspense, ErrorBoundary, createRoot,
+  return {version: '0.1.0', createElement, h: createElement, jsx: (type, props, key) => createElement(type, {...props, ...(key === undefined ? {} : {key})}), jsxs: (type, props, key) => createElement(type, {...props, ...(key === undefined ? {} : {key})}), Fragment, Suspense, ErrorBoundary, createRoot, hydrateRoot,
     createPortal: (children, container, key = null) => createElement(PORTAL, {container, key}, children),
     useState, useReducer, useRef, useEffect, useLayoutEffect, useMemo, useCallback, useContext, useId, useImperativeHandle, useSyncExternalStore,
     createContext, createRef: () => ({current: null}), memo, forwardRef, lazy, use, flushSync, cloneElement, isValidElement: isElement, Children,

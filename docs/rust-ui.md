@@ -10,8 +10,9 @@ a native bridge. The existing default project and terminal remain unchanged.
 **This is not rustc in JavaScript and is not a complete React implementation.** UI
 expressions and callbacks use Ferrite's documented Rust subset and its conservative
 ownership checker. They are not rewritten into JavaScript expressions. Installed
-Cargo remains a separate, opt-in native backend; this change does not provide a
-native Cargo `view!` crate, arbitrary crates.io support, or a native DOM framework.
+Cargo is a separate, opt-in native backend. The [standard-Rust UI workspace](native-rust-ui.md)
+now provides a real `view!` proc macro, Rust-owned hooks and a checked browser Wasm host.
+It uses installed rustc and target-compatible dependencies, not the JavaScript compiler.
 
 The JavaScript runtime implements its own public component/hook APIs. It does not
 load React, use React private internals, or make existing React elements interchangeable
@@ -35,9 +36,12 @@ is type-checked before a visual edit is committed. Invalid edits leave the file 
 
 Source edits invalidate the previous preview. Press Preview to compile the new source.
 Compiler diagnostics retain original source locations. Responsive, phone and tablet
-preview widths are available. The CSS editor controls preview and export styling; its
-contents are currently panel-local, not a persisted workspace stylesheet. This is a
-source-oriented designer, not a free-positioning/Figma canvas or a CSS layout solver.
+preview widths are available. The CSS editor persists preview/export styling in a workspace `.ui.css` file.
+A `.ui.json` sidecar retains the entry, backend, viewport and grid settings. Canvas
+move/resize modes commit snapped absolute geometry into literal source styles. Dynamic
+style expressions are not silently rewritten; this is not a general CSS layout solver.
+Multi-file component picking selects the original module while compilation retains
+the project entry point. See [compatibility workflows](ui-compatibility.md).
 
 `SourceDesigner` is usable independently. Its node IDs are **source-offset IDs valid
 only for the inspected revision**, not permanent entity IDs. Every mutation, undo and
@@ -109,8 +113,13 @@ Retained component/event/effect callbacks must be reusable `Fn` closures with ow
 asynchronous DOM lifetime, including when nested in aggregates. State/ref handles
 can be copied into closures. The checked host boundary rejects stale handles and state
 type mismatches. These rules are intentionally stricter than full Rust lifetime analysis.
-Rust hook values are currently i64/string/bool rather than arbitrary generic Rust state.
-The JavaScript runtime's hooks can hold ordinary JavaScript values.
+Generic `state`, `read`, `write`, `modify`, `memo_value`, `memo_with` and `effect_with`
+now support owned values described by the browser compiler's type schemas, including
+records, enums, tuples, arrays and vectors. Borrowed/reference-carrying or unsupported
+values remain rejected. Native Cargo hooks keep arbitrary `Clone + 'static` values
+in Rust, without crossing the JSON state boundary. The JavaScript runtime's hooks
+can hold ordinary JavaScript values. `on_event` supplies owned keyboard, input, pointer,
+modifier and wheel fields; `stop_propagation` controls the current synchronous event.
 
 ### Compilation and execution
 
@@ -164,7 +173,7 @@ session.dispose();
 
 For a classic `<script>` without a module import graph, use the generated
 **`src/sdk/ferrite.bundle.js`**. It installs `globalThis.Ferrite`. Its deterministic
-43-module closed graph contains the compiler and runtime; it has no external module,
+closed module graph contains the compiler and runtime; it has no external module,
 CDN, Node bridge or package dependency. `examples/ui-embed.html` is executable:
 
 ```html
@@ -222,8 +231,10 @@ Suspense, functional error boundaries, portals, `cloneElement` and `Children` he
 Conditional `use(context)` does not consume an ordinary hook slot.
 
 Important differences remain: synchronous reconciliation, no concurrent scheduler,
-transitions, hydration, SSR/server components, class-component lifecycles or React
-DevTools protocol. Native DOM events are used rather than React SyntheticEvent.
+transitions, server components, class-component lifecycles or React DevTools protocol.
+First-party SSR and strict DOM hydration are now implemented. The optional actual-React
+adapter delegates concurrent rendering, ecosystem components and streaming to an
+explicitly injected React installation rather than emulating React internals. Native DOM events are used rather than React SyntheticEvent.
 Render-phase state updates are rejected. `Children` preserves primitive values and
 empty-slot counting but does not reproduce React's nested key recomputation. Descriptor
 call signatures in the type declarations support JSX; do not invoke symbolic/exotic
@@ -243,11 +254,17 @@ rendering uses JavaScript or Wasm: the armed event is executed by the equivalent
 interpreter. It is not native JavaScript/Wasm instruction stepping. Rendering and
 effect callbacks remain synchronous. A paused event cannot call `prevent_default`
 after the browser has already decided its default action; that operation reports an
-explicit error. Unmount/disarm cancels queued events. This is not reversible time travel.
+explicit error. Unmount/disarm cancels queued events. Back instruction, Back source line
+and Restart now restore bounded MIR snapshots and staged state, preserving reference
+aliases. Continue commits the resulting DOM update. Host effects and a committed DOM
+render establish irreversible boundaries; native Rust Wasm and external browser state
+are not rewound. See the compatibility guide for the exact execution contract.
 
 ## MCP and coding-agent tools
 
-The existing native and in-page agent registries share the same definitions:
+The existing native and in-page agent registries share the same definitions. Additional
+compatibility tools (`ui_project_inspect`, `ui_project_set`, `ui_render_html`,
+`ui_native_preview`, `ui_native_export_html`) are documented in the compatibility and native guides:
 
 | Tool | Authority and behavior |
 | --- | --- |
@@ -312,11 +329,16 @@ restricted environments; it runs the DOM/compiler code but does **not** claim HT
 file delivery coverage. Chromium is the verified browser; Safari/Firefox parity has
 not been measured here. Existing compiler/native Cargo/terminal/agent checks remain.
 
-## Remaining compatibility work
+## Compatibility follow-through
 
-Full Rust language/crate compatibility, a native Rust UI crate, generic Rust hooks,
-automatic React-to-Rust conversion, third-party React ecosystem conformance, concurrent
-rendering, SSR/hydration, richer DOM event objects in Rust, multi-file UI module
-compilation, persisted stylesheet/designer projects, freeform canvas layout editing,
-and whole-program UI time-travel debugging are not implemented by this extension.
-These are explicit follow-on capabilities, not silent fallbacks or claims of completion.
+The [compatibility guide](ui-compatibility.md) covers the implemented generic hooks,
+structured events, multi-file designer, persisted styles, snapped canvas editing,
+SSR/hydration, actual React adapter and reverse event debugger. The [native Rust guide](native-rust-ui.md)
+provides Cargo build commands, ABI/lifetime contracts, native Studio import and standalone export.
+
+The browser compiler is still not rustc, the first-party runtime is not a replacement
+for every React API, and no automatic general JavaScript-to-Rust translator is supplied.
+Reuse unmodified React components through the injected real-React adapter, then port
+selected components explicitly. Native binaries expose DOM inspection and export,
+not browser-compiler source editing, MIR stepping or native heap mutation. Safari/Firefox,
+all crates.io packages and every React ecosystem package are not claimed as validated.

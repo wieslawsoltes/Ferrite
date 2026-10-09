@@ -1,3 +1,4 @@
+import {exportHydratedHTML} from '../../ui-framework/ServerRenderer.js';
 import {UICompiler} from '../../ui-framework/UICompiler.js';
 import {SourceDesigner} from '../../ui-framework/SourceDesigner.js';
 import {exportHTML} from '../../ui-framework/Export.js';
@@ -9,15 +10,16 @@ export class CompilerOperation {
   constructor() { this.compiler = new CompilerSession(); }
   perform(files, command, options = {}) {
     if (command.startsWith('ui-')) {
-      const {file = 'src/app.ui.rs', entry = 'app', backend = 'javascript', title, css, channel, operation, revision = 0} = options;
+      const {file = 'src/app.ui.rs', entry = 'app', backend = 'javascript', title, css, channel, operation, entryFile = file, revision = 0} = options;
       if (!Object.hasOwn(files, file)) throw Error('UI source file does not exist');
       const source = files[file];
       if (command === 'ui-design') {
-        const designer = new SourceDesigner(source, {file, entry, revision});
+        const designer = new SourceDesigner(source, {file, entry, entryFile, revision, files});
         return operation ? designer.apply(operation, revision) : designer.snapshot();
       }
-      if (!['ui-compile', 'ui-export', 'ui-analyze'].includes(command)) throw Error('Unknown UI compiler operation');
-      const artifact = UICompiler.compile(source, {file, entry});
+      if (!['ui-compile', 'ui-export', 'ui-analyze', 'ui-render'].includes(command)) throw Error('Unknown UI compiler operation');
+      const artifact = UICompiler.compile(source, {file, entry, files});
+      if (command === 'ui-render') return {html: exportHydratedHTML(artifact, {backend, title, css, identifierPrefix: options.identifierPrefix ?? ''}), file, entry: artifact.entry, execution: 'server-rendered Rust; effects and refs suppressed'};
       if (command === 'ui-export') return {html: exportHTML(artifact, {backend, title, css, channel}), file, entry: artifact.entry};
       if (command === 'ui-analyze') return {file, entry: artifact.entry, nodes: artifact.nodes, diagnostics: artifact.diagnostics,
         verification: artifact.verification, timings: artifact.timings, backends: ['javascript', 'wasm', 'mir'],

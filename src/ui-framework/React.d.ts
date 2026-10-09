@@ -14,7 +14,7 @@ export type DependencyList = readonly unknown[];
 export interface Context<T> extends ExoticComponent<{value: T; children?: ReactNode}> {
   defaultValue: T; displayName: string; Provider: Context<T>; Consumer: ComponentType<{children: (value: T) => ReactNode}>;
 }
-export interface RootOptions { onError?: (error: Error) => void; throwErrors?: boolean; maxNodes?: number }
+export interface RootOptions { onError?: (error: Error) => void; throwErrors?: boolean; maxNodes?: number; identifierPrefix?: string; onRecoverableError?: (error: Error) => void }
 export interface Root { render(node: ReactNode): Root; unmount(): void; flushEffects(): void; subscribe(listener: (event: Record<string, unknown>) => void): () => void; inspect(): Record<string, unknown> }
 export function createElement<P>(type: ElementType<P>, props?: (P & {key?: Key; ref?: Ref<any>}) | null, ...children: ReactNode[]): ReactElement<P>;
 export const h: typeof createElement;
@@ -22,6 +22,7 @@ export const Fragment: ExoticComponent<{children?: ReactNode}>;
 export const Suspense: ExoticComponent<{children?: ReactNode; fallback?: ReactNode}>;
 export const ErrorBoundary: ExoticComponent<{children?: ReactNode; fallback?: ReactNode | ((error: Error) => ReactNode); onError?: (error: Error) => void}>;
 export function createRoot(container: Element, options?: RootOptions): Root;
+export function hydrateRoot(container: Element, node: ReactNode, options?: RootOptions): Root;
 export function createPortal(children: ReactNode, container: Element, key?: Key | null): ReactElement;
 export function flushSync(action?: () => void): void;
 export function createRef<T = unknown>(): MutableRefObject<T | null>;
@@ -55,7 +56,7 @@ export const Children: {
 };
 export interface RuntimeAPI {
   version: string; createElement: typeof createElement; h: typeof h; Fragment: typeof Fragment; Suspense: typeof Suspense; ErrorBoundary: typeof ErrorBoundary;
-  createRoot: typeof createRoot; createPortal: typeof createPortal; flushSync: typeof flushSync; createRef: typeof createRef; createContext: typeof createContext;
+  createRoot: typeof createRoot; hydrateRoot: typeof hydrateRoot; createPortal: typeof createPortal; flushSync: typeof flushSync; createRef: typeof createRef; createContext: typeof createContext;
   useState: typeof useState; useReducer: typeof useReducer; useRef: typeof useRef; useEffect: typeof useEffect; useLayoutEffect: typeof useLayoutEffect;
   useMemo: typeof useMemo; useCallback: typeof useCallback; useContext: typeof useContext; useId: typeof useId; useImperativeHandle: typeof useImperativeHandle;
   useSyncExternalStore: typeof useSyncExternalStore; use: typeof use; memo: typeof memo; forwardRef: typeof forwardRef; lazy: typeof lazy;

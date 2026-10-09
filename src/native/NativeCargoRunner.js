@@ -1,3 +1,4 @@
+import {NativeUIArtifact} from './NativeUIArtifact.js';
 import {CargoLogStream} from './CargoLogStream.js';
 import {NativeArtifactCollector} from './NativeArtifactCollector.js';
 import {cp, mkdir} from 'node:fs/promises';
@@ -8,7 +9,7 @@ import {CargoOutputParser} from './CargoOutputParser.js';
 
 /** Delegates native Rust semantics to installed Cargo; it does not emulate Cargo. */
 export class NativeCargoRunner {
-  static commands = new Set(['inspect', 'check', 'build', 'run', 'test', 'metadata', 'tree', 'fetch', 'clean', 'doc', 'clippy', 'fmt', 'bench', 'rustc', 'rustdoc', 'locate-project', 'verify-project', 'generate-lockfile', 'update', 'package', 'add', 'remove', 'vendor', 'report']);
+  static commands = new Set(['ui-build', 'inspect', 'check', 'build', 'run', 'test', 'metadata', 'tree', 'fetch', 'clean', 'doc', 'clippy', 'fmt', 'bench', 'rustc', 'rustdoc', 'locate-project', 'verify-project', 'generate-lockfile', 'update', 'package', 'add', 'remove', 'vendor', 'report']);
   constructor({project = null, ...options} = {}) { this.process = new ProcessRunner(options); this.project = project; this.ownsProject = !project; this.busy = false; this.input = null; }
   async run(snapshot, command = 'check', {args = [], timeoutMs = 120000, signal, onEvent, outputDir = null, json = false, offline = false, locked = false, jobs = null, toolchain = '', manifest = null, interactive = false} = {}) {
     if (!NativeCargoRunner.commands.has(command)) throw Error(`Unsupported Cargo command ${command}; publishing and credential commands are intentionally not exposed`);
@@ -17,31 +18,35 @@ export class NativeCargoRunner {
     if (jobs !== null && (!Number.isInteger(jobs) || jobs < 1 || jobs > 256)) throw Error('Cargo jobs must be 1..256');
     if (toolchain && !/^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$/.test(toolchain)) throw Error('Invalid Rust toolchain');
     if (manifest) { const {RepositoryPolicy} = await import('./repository/RepositoryPolicy.js'); RepositoryPolicy.path(manifest); }
+    const nativeUI = command === 'ui-build';
+    if (nativeUI) json = true;
     const cargoArguments=args.slice(0,args.includes('--')?args.indexOf('--'):args.length);
     if (manifest && cargoArguments.some(a=>a==='--manifest-path'||a.startsWith('--manifest-path='))) throw Error('Select the repository manifest through its manifest control');
     if (jobs !== null && cargoArguments.some(a => /^--jobs(?:=|$)|^-j/.test(a))) throw Error('Set jobs through the build job control, not extra arguments');
+    if (nativeUI && args.some(a => a === '--' || /^--(?:target|target-dir|message-format|artifact-dir|out-dir)(?:=|$)/.test(a))) throw Error('Native UI owns the Wasm target, artifact directory and JSON output format');
     this.busy = true;let collector=null;
     try {
       signal?.throwIfAborted();
       if (this.project) await this.project.update(snapshot); else this.project = await ProjectMaterializer.create(snapshot);
       if(command==='inspect')collector=await NativeArtifactCollector.create();
-      const argv = [...(toolchain ? ['+' + toolchain] : []), command==='inspect'?'rustc':command];
+      const argv = [...(toolchain ? ['+' + toolchain] : []), command==='inspect'?'rustc':nativeUI?'build':command];
       const manifestPath=manifest?resolve(this.project.root,manifest):null;
       const workingDirectory=manifestPath?dirname(manifestPath):this.project.root;
       if (manifestPath) argv.push('--manifest-path', manifestPath);
-      if (jobs !== null && ['check','build','run','test','clippy','bench','inspect','rustc','rustdoc','doc'].includes(command)) argv.push('--jobs', String(jobs));
+      if (nativeUI) argv.push('--target','wasm32-unknown-unknown','--target-dir',join(this.project.root,'target'),'--lib');
+      if (jobs !== null && ['ui-build','check','build','run','test','clippy','bench','inspect','rustc','rustdoc','doc'].includes(command)) argv.push('--jobs', String(jobs));
       if (command === 'metadata' && !args.includes('--format-version')) argv.push('--format-version', '1');
-      if (json && ['check', 'build', 'test', 'run', 'clippy', 'bench','inspect'].includes(command) && !cargoArguments.some(a => a.startsWith('--message-format'))) argv.push('--message-format=json');
+      if (json && ['ui-build', 'check', 'build', 'test', 'run', 'clippy', 'bench','inspect'].includes(command) && !cargoArguments.some(a => a.startsWith('--message-format'))) argv.push('--message-format=json');
       if (command !== 'fmt') { if (offline) argv.push('--offline'); if (locked) argv.push('--locked'); } argv.push(...args);
       if(collector){if(!args.includes('--'))argv.push('--');argv.push(...collector.arguments());}
       const presentationArguments=argv.slice(0,argv.includes('--')?argv.indexOf('--'):argv.length);
       const structuredOutput=presentationArguments.some((a,i)=>(a.startsWith('--message-format=')&&a.includes('json'))||(a==='--message-format'&&presentationArguments[i+1]?.includes('json')));
       const logs = new CargoLogStream(onEvent, structuredOutput);
       const start = performance.now();
-      const result = await this.process.run('cargo', argv, {cwd: workingDirectory, signal, timeoutMs, onEvent: event => logs.accept(event), onInput: interactive ? write => { this.input = write; } : null});
+      const result = await this.process.run('cargo', argv, {cwd: workingDirectory, ...(nativeUI ? {env: {...process.env, CARGO_ENCODED_RUSTFLAGS: [...(process.env.CARGO_ENCODED_RUSTFLAGS?.split('\x1f') ?? []),'-C','link-arg=--max-memory=67108864'].join('\x1f')}} : {}), signal, timeoutMs, onEvent: event => logs.accept(event), onInput: interactive ? write => { this.input = write; } : null});
       logs.finish();
       if (outputDir && result.exitCode === 0 && command === 'build') { const output = resolve(outputDir); await mkdir(output, {recursive: true}); await cp(join(this.project.root, 'target'), output, {recursive: true}); }
-      return {...result, programOutput:logs.programOutput, command, args: argv, elapsedMs: performance.now() - start, backend: 'native-cargo', sourceRoot: this.project.root, workingDirectory, jobs, ...CargoOutputParser.parse(structuredOutput ? result.stdout : ''), compilerArtifacts:collector?await collector.collect(this.project.root,snapshot.files):[], files: await this.project.outputFiles()};
+      return {...result, programOutput:logs.programOutput, command, args: argv, elapsedMs: performance.now() - start, backend: 'native-cargo', sourceRoot: this.project.root, workingDirectory, jobs, ...CargoOutputParser.parse(structuredOutput ? result.stdout : ''), compilerArtifacts:nativeUI && result.exitCode===0 ? await NativeUIArtifact.collect(result.stdout,this.project.root) : collector?await collector.collect(this.project.root,snapshot.files):[], files: await this.project.outputFiles()};
     } finally { try{await collector?.dispose();}finally{this.busy = false; this.input = null;} }
   }
   async dispose() { if (this.busy) throw Error('Cannot dispose a running Cargo project; cancel and await it first'); if (this.ownsProject) await this.project?.dispose(); this.project = null; }

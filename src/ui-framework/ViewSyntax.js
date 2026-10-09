@@ -59,7 +59,7 @@ export class ViewSyntax {
   }
   add(node) {
     if (this.nodes.length >= this.maxNodes) this.error('UI node budget exceeded', node.start);
-    node.id = `v${node.start}`; node.span = this.span(node.start, node.end); this.nodes.push(node); return node;
+    node.id = `${this.file}#v${node.start}`; node.span = this.span(node.start, node.end); this.nodes.push(node); return node;
   }
   parseElement(at, depth = 0) {
     if (depth > 128) this.error('Markup nesting budget exceeded', at);
@@ -167,6 +167,7 @@ export class ViewSyntax {
         if (a.name === 'key') call = `ui::key(${temp}_node, ${temp}_a${index})`;
         else if (a.name === 'ref') call = `ui::node_ref(${temp}_node, ${temp}_a${index})`;
         else if (a.name === 'on:click' || a.name === 'onClick') call = `ui::on_click(${temp}_node, ${temp}_a${index})`;
+        else if (a.name.startsWith('on_event:')) call = `ui::on_event(${temp}_node, ${rustString(a.name.slice(9))}, ${temp}_a${index})`;
         else if (a.name.startsWith('on:')) call = `ui::on(${temp}_node, ${rustString(a.name.slice(3))}, ${temp}_a${index})`;
         else call = `ui::attr(${temp}_node, ${rustString(a.name)}, ${temp}_a${index})`;
         synthetic(`let ${temp}_node = ${call}; `, node);

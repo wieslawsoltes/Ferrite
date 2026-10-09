@@ -65,3 +65,34 @@ for (const backend of ['browser', 'native']) {
     assert.ok(!exported.html.includes('<script src='));
   });
 }
+for (const backend of ['browser', 'native']) {
+  test(`${backend} MCP server rendering cannot downgrade execution authority; project sidecars are atomic`, async t => {
+    const runtime = await fixture(t, backend), path = 'src/app.ui.rs';
+    await assert.rejects(runtime.tools.execute('ui_render_html', {path}, {mode: 'ask', interactive: false}), {code: 'APPROVAL_REQUIRED'});
+    const rendered = await complete(runtime, await runtime.tools.execute('ui_render_html', {path, backend: 'wasm'}, trusted));
+    assert.match(rendered.html, /<output[^>]*>0<\/output>/); assert.match(rendered.html, /hydrate:true/);
+    const settings = await complete(runtime, await runtime.tools.execute('ui_project_inspect', {path}));
+    assert.equal(settings.hashes.manifest, null); assert.equal(settings.hashes.stylesheet, null);
+    const args = {path, expectedHashes: settings.hashes, settings: {backend: 'wasm', grid: 16}, css: 'button{color:red}'};
+    await assert.rejects(runtime.tools.execute('ui_project_set', args, {mode: 'ask', interactive: false}), {code: 'APPROVAL_REQUIRED'});
+    const applied = await runtime.tools.execute('ui_project_set', args, trusted);
+    assert.equal(JSON.parse(await runtime.workspace.text(settings.manifest)).backend, 'wasm');
+    assert.equal(await runtime.workspace.text(settings.settings.stylesheet), 'button{color:red}');
+    await assert.rejects(runtime.tools.execute('ui_project_set', args, trusted), {code: 'EDIT_CONFLICT'});
+    await runtime.tools.execute('checkpoint_restore', {id: applied.checkpoint}, trusted);
+    assert.equal(await runtime.workspace.text(settings.manifest, {optional: true}), null);
+    assert.equal(await runtime.workspace.text(settings.settings.stylesheet, {optional: true}), null);
+  });
+}
+
+for (const backend of ['browser', 'native']) {
+  test(`${backend} MCP native binary tools cannot downgrade execution through ide_command`, async t => {
+    const runtime = await fixture(t, backend);
+    const wasm = Buffer.from([0,97,115,109,1,0,0,0,5,4,1,1,1,2]).toString('base64');
+    await assert.rejects(runtime.tools.execute('ui_native_preview', {wasm}, {mode: 'ask', interactive: false}), {code: 'APPROVAL_REQUIRED'});
+    await assert.rejects(runtime.tools.execute('ide_command', {command: 'ui.native.preview', arguments: {wasm}}, {mode: 'ask', interactive: false}), {code: 'APPROVAL_REQUIRED'});
+    const exported = await complete(runtime, await runtime.tools.execute('ui_native_export_html', {wasm}));
+    assert.equal(exported.backend, 'native-wasm'); assert.match(exported.html, /connect-src 'none'/);
+    await assert.rejects(runtime.tools.execute('ui_native_export_html', {wasm: 'not-wasm'}));
+  });
+}

@@ -1,0 +1,9 @@
+[workspace]
+members = ["ferrite-ui", "ferrite-ui-macro", "example"]
+resolver = "2"
+
+[profile.release]
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = "debuginfo"

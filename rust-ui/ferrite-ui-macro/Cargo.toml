@@ -1,0 +1,9 @@
+[package]
+name = "ferrite-ui-macro"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+[lib]
+proc-macro = true

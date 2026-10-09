@@ -1,3 +1,4 @@
+import {ExecutionSnapshot} from './ExecutionSnapshot.js';
 import {Runtime} from './Runtime.js';
 
 /** Instruction-level execution, with explicit call frames and a bounded trace. */
@@ -7,8 +8,10 @@ export class MirVirtualMachine {
     this.functions = new Map(functions.map(fn => [fn.instance, fn]));
     this.blockMaps = new Map(functions.map(fn => [fn.instance, new Map(fn.blocks.map(block => [block.id, block]))]));
     this.runtime = new Runtime(options); this.frames = []; this.done = false; this.result = null;
+    this.history = null; this.historyWork = 0;
     this.last = null; this.trace = []; this.maxTrace = options.maxTrace ?? 2000;
     if (entry) this.push(entry, args, null); else this.done = true;
+    if (options.history) this.enableHistory(options.history === true ? {} : options.history);
   }
   push(name, args, returnTo) {
     const fn = this.functions.get(name);
@@ -48,7 +51,64 @@ export class MirVirtualMachine {
       default: return r.fail(`Unknown MIR operation ${instruction.op}`);
     }
   }
+  enableHistory({maxSnapshots = 256, maxBytes = 16 * 1024 * 1024, captureExternal = null, restoreExternal = null} = {}) {
+    if (!Number.isInteger(maxSnapshots) || maxSnapshots < 1 || maxSnapshots > 4096 || !Number.isInteger(maxBytes) || maxBytes < 1024 || maxBytes > 128 * 1024 * 1024)
+      throw Error('Invalid execution history limits');
+    if ((captureExternal !== null && typeof captureExternal !== 'function') || (restoreExternal !== null && typeof restoreExternal !== 'function') || !!captureExternal !== !!restoreExternal)
+      throw Error('Execution history requires paired external snapshot callbacks');
+    this.history = {past: [], bytes: 0, maxSnapshots, maxBytes, captureExternal, restoreExternal, dropped: 0, boundary: 'Start of execution', epoch: 0};
+    return this;
+  }
+  historyInfo() {
+    const h = this.history;
+    return h ? {available: h.past.length, bytes: h.bytes, dropped: h.dropped, boundary: h.boundary, work: this.historyWork} : null;
+  }
+  historyBarrier(reason = 'Irreversible host effect') {
+    const h = this.history; if (!h) return;
+    h.past = []; h.bytes = 0; h.epoch++; h.boundary = String(reason).slice(0, 500);
+  }
+  captureExecution() {
+    const r = this.runtime, h = this.history;
+    return new ExecutionSnapshot({frames: this.frames.map(f => ({instance: f.fn.instance, cells: f.cells, block: f.block, ip: f.ip, returnTo: f.returnTo})),
+      done: this.done, result: this.result, last: this.last, trace: this.trace,
+      runtime: {steps: r.steps, depth: r.depth, output: r.output, span: r.span}, external: h.captureExternal?.()},
+      {maxBytes: h.maxBytes});
+  }
+  stepBack() {
+    const h = this.history, point = h?.past.at(-1);
+    if (!point) throw Object.assign(Error(h?.boundary ?? 'Execution history is not enabled'), {code: 'R_HISTORY_BOUNDARY'});
+    const state = point.restore();
+    h.restoreExternal?.(state.external);
+    this.frames = state.frames.map(f => ({...f, fn: this.functions.get(f.instance), blocks: this.blockMaps.get(f.instance)}));
+    this.done = state.done; this.result = state.result; this.last = state.last; this.trace = state.trace;
+    Object.assign(this.runtime, state.runtime); h.past.pop(); h.bytes -= point.bytes;
+    return this.snapshot();
+  }
+  stepBackLine() {
+    const initial = this.nextSpan() ?? this.last?.span;
+    do { this.stepBack(); }
+    while (this.history.past.length && this.nextSpan()?.file === initial?.file && this.nextSpan()?.line === initial?.line);
+    return this.snapshot();
+  }
   step({capture = true} = {}) {
+    const h = this.history;
+    if (!h || this.done) return this.executeStep({capture});
+    // Work is monotonic: rewinding cannot refund a hostile program's execution budget.
+    if (++this.historyWork > this.runtime.maxSteps * 4) this.runtime.fail('Reversible execution work budget exceeded', 'R_BUDGET');
+    const epoch = h.epoch, point = this.captureExecution();
+    let result;
+    try { result = this.executeStep({capture: false}); }
+    finally {
+      if (epoch === h.epoch) {
+        h.past.push(point); h.bytes += point.bytes;
+        while (h.past.length > h.maxSnapshots || h.bytes > h.maxBytes) {
+          h.bytes -= h.past.shift().bytes; h.dropped++; h.boundary = 'Oldest retained execution snapshot';
+        }
+      }
+    }
+    return capture ? this.snapshot() : result;
+  }
+  executeStep({capture = true} = {}) {
     if (this.done) return this.snapshot();
     const frame = this.frames.at(-1), block = frame.blocks.get(frame.block);
     const instruction = block.instructions[frame.ip++];
@@ -105,7 +165,7 @@ export class MirVirtualMachine {
   }
   snapshot() {
     const r = this.runtime;
-    return {done: this.done, steps: r.steps, output: r.output, last: this.last, next: this.nextSpan(),
+    return {done: this.done, history: this.historyInfo(), steps: r.steps, output: r.output, last: this.last, next: this.nextSpan(),
       result: this.done ? r.debug(this.result) : null,
       frames: this.frames.map(frame => ({function: frame.fn.instance, block: frame.block,
         locals: frame.fn.registers.map((register, slot) => ({slot, name: register.name, type: register.type,

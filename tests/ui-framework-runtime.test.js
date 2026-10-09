@@ -58,3 +58,18 @@ test('style object updates remove old properties; events swap without duplicatin
   const button = elements(container, 'button')[0]; root.render(ui.h('button', {style: {height: 20}, onClick: () => b++}, 'B')); button.dispatchEvent(new Event('click'));
   assert.equal(button.style.width, ''); assert.equal(button.style.height, '20px'); assert.equal(a, 0); assert.equal(b, 1); root.unmount();
 });
+
+// Native-Wasm bindings deliberately bypass JSX's onChange/onFocus aliases.
+test('explicit native DOM events retain exact names, replace listeners and reject strings', () => {
+  const {ui, root, container} = setup(); const events = [];
+  const draw = callback => root.render(ui.h('input', {'on:change': callback, 'on:focus': e => events.push(e.type)}));
+  draw(e => events.push('old:' + e.type)); const input = elements(container, 'input')[0];
+  input.dispatchEvent(new Event('input')); input.dispatchEvent(new Event('focusin'));
+  assert.deepEqual(events, []); input.dispatchEvent(new Event('change'));
+  draw(e => events.push('new:' + e.type)); input.dispatchEvent(new Event('change'));
+  input.dispatchEvent(new Event('focus'));
+  assert.deepEqual(events, ['old:change', 'new:change', 'focus']);
+  draw(null); input.dispatchEvent(new Event('change')); assert.equal(events.length, 3);
+  assert.throws(() => root.render(ui.h('input', {'on:change': 'execute()'})), /requires a function/);
+  root.unmount();
+});

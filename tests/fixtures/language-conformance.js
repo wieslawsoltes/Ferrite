@@ -1,3 +1,4 @@
+import {nominalCases, nominalCompileFailCases, nominalPanicCases} from './nominal-constructors.js';
 import {destructuringCases, destructuringCompileFailCases, destructuringPanicCases} from './destructuring-conformance.js';
 import {floatCases, floatPanicCases, floatCompileFailCases} from './float-conformance.js';
 // Shared deterministic programs: Node backends and installed-rustc conformance.
@@ -119,8 +120,8 @@ export const runtimePanicCases = [
   ['explicit panic', 'fn main(){panic!("expected");}', 'R_PANIC'],
 ];
 export const languageCases = [
-  ...primitiveCases, ...sequenceCases, ...constantCases, ...controlCases, ...floatCases, ...destructuringCases,
+  ...primitiveCases, ...sequenceCases, ...constantCases, ...controlCases, ...floatCases, ...destructuringCases, ...nominalCases,
 ].map(([name,source,output])=>({name,source,output,kind:'run'})).concat(
-  [...compileFailCases, ...floatCompileFailCases, ...destructuringCompileFailCases].map(([name,source])=>({name,source,kind:'compile-fail'})),
-  [...runtimePanicCases, ...floatPanicCases, ...destructuringPanicCases].map(([name,source,code,output])=>({name,source,code,output,kind:'panic'})),
+  [...compileFailCases, ...floatCompileFailCases, ...destructuringCompileFailCases, ...nominalCompileFailCases].map(([name,source])=>({name,source,kind:'compile-fail'})),
+  [...runtimePanicCases, ...floatPanicCases, ...destructuringPanicCases, ...nominalPanicCases].map(([name,source,code,output])=>({name,source,code,output,kind:'panic'})),
 );

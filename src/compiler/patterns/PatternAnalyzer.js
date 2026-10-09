@@ -36,7 +36,7 @@ export class PatternAnalyzer {
         if (constant || constructor) {
           if (pattern.mutable) throw new Diagnostic('E0530', 'A binding cannot shadow a constant or enum constructor', pattern.span);
           if (constructor) {
-            pattern.kind = 'variantPattern'; pattern.items = [];
+            pattern.kind = 'variantPattern'; pattern.items = []; pattern.tupleSyntax = false;
           } else {
             const literal = structuredClone(this.analyzer.constants.constant(constant, pattern).expression);
             if (literal.kind !== 'literal') throw new Diagnostic('F_PATTERN_CONST', 'Aggregate constant patterns require structural equality support', pattern.span);
@@ -127,6 +127,7 @@ export class PatternAnalyzer {
           const definition = shape.fields.find(f => f.name === field.name);
           if (!definition || fields.has(field.name)) throw new Diagnostic('E0025', `Unknown or duplicate field ${field.name}`, pattern.span);
           fields.add(field.name);
+          this.analyzer.index.fieldVisible(shape, definition, context.instance.fn.module, field.pattern);
           const fieldType = this.analyzer.index.type(T.substitute(definition.type, substitution), shape.module);
           this.analyze(field.pattern, fieldType, context, mutable, bindings, names, reuse);
         }
@@ -135,9 +136,20 @@ export class PatternAnalyzer {
         return;
       }
       case 'variantPattern': {
-        const constructor = this.analyzer.index.constructorFor(pattern.name, context.instance.fn.module);
+        const constructor = this.analyzer.index.constructorFor(pattern.name === 'Self' ? context.instance.fn.owner : pattern.name, context.instance.fn.module, pattern);
         const app = T.application(type);
         if (!constructor || constructor.owner.name !== app.name) throw new Diagnostic('E0532', `Pattern ${pattern.name} does not match ${type}`, pattern.span);
+        if (constructor.kind === 'struct') {
+          if (Boolean(pattern.tupleSyntax) !== (constructor.form === 'tuple'))
+            throw new Diagnostic('E0532', `Expected ${constructor.form === 'tuple' ? 'tuple' : 'unit'} constructor pattern for ${pattern.name}`, pattern.span);
+          if (constructor.form === 'tuple') for (const field of constructor.owner.fields)
+            this.analyzer.index.fieldVisible(constructor.owner, field, context.instance.fn.module, pattern);
+          this.expandRest(pattern, constructor.owner.fields.length, 'E0023');
+          pattern.kind = 'structPattern'; pattern.name = constructor.owner.name;
+          pattern.fields = pattern.items.flatMap((item, i) => item.kind === 'wildcard' ? [] : [{name: String(i), pattern: item}]);
+          pattern.rest = true; delete pattern.items;
+          return this.analyze(pattern, type, context, mutable, bindings, names, reuse);
+        }
         this.expandRest(pattern, constructor.variant.fields.length, 'E0023');
         const substitution = new Map(constructor.owner.generics.map((g, i) => [g.name, app.args[i]]));
         pattern.variant = constructor.tag;

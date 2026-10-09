@@ -8,7 +8,7 @@ import {TypeSystem as T} from '../TypeSystem.js';
 export class AssigneeAnalyzer {
   constructor(analyzer, context) { this.a = analyzer; this.ctx = context; this.nodes = 0; }
   static accepts(node) {
-    return ['tuple', 'array', 'structLiteral', 'assigneeRest'].includes(node.kind) ||
+    return ['tuple', 'array', 'structLiteral', 'assigneeRest', 'call'].includes(node.kind) ||
       node.kind === 'variable' && node.name === '_' || node.kind === 'literal' && node.type === '()';
   }
   analyze(assignment) {
@@ -59,6 +59,46 @@ export class AssigneeAnalyzer {
       if (rests > 1) throw new Diagnostic('E0527', 'Only one rest is permitted in an assignee sequence', node.span);
       return;
     }
+    if (node.kind === 'call') {
+      if (node.macro || node.callee?.kind !== 'variable' || this.ctx.lookup(node.callee.name, node.callee, false))
+        throw new Diagnostic('E0070', 'Only a tuple constructor can be an assignee call', node.span);
+      const spelling = node.callee.name === 'Self' ? this.ctx.instance.fn.owner : node.callee.name;
+      const constructor = this.a.index.constructorFor(spelling, this.ctx.instance.fn.module, node);
+      if (!constructor || constructor.form !== 'tuple')
+        throw new Diagnostic('E0070', 'Assignee call must name a tuple struct or tuple enum variant', node.span);
+      if (constructor.kind === 'enum' && constructor.owner.variants.length !== 1)
+        throw new Diagnostic('E0005', 'An enum constructor assignee must be irrefutable (a single-variant enum)', node.span);
+      const {owner} = constructor, fields = constructor.variant.fields;
+      const rest = node.args.findIndex(arg => arg.kind === 'assigneeRest');
+      const count = node.args.filter(arg => arg.kind === 'assigneeRest').length;
+      if (count > 1) throw new Diagnostic('E0527', 'Only one rest is permitted in a constructor assignee', node.span);
+      if (node.args.length - count > fields.length || !count && node.args.length !== fields.length)
+        throw new Diagnostic('E0023', 'Constructor assignee arity does not match its fields', node.span);
+      node.typeArguments = node.callee.typeArguments;
+      const projections = node.args.flatMap((arg, i) => i === rest ? [] : [{value: arg,
+        name: String(rest < 0 || i < rest ? i : fields.length - (node.args.length - i))}]);
+      if (constructor.kind === 'struct') {
+        for (const field of owner.fields) this.a.index.fieldVisible(owner, field, this.ctx.instance.fn.module, node);
+        node.kind = 'structLiteral'; node.name = owner.name; node.fields = projections; node.rest = count !== 0;
+        delete node.args; delete node.callee; delete node.macro;
+        this.prepare(node, depth + 1); return;
+      }
+      const supplied = node.typeArguments?.map(type => this.a.normalize(type, this.ctx, node)) ?? constructor.typeArguments ?? [];
+      if (supplied.length && supplied.length !== owner.generics.length)
+        throw new Diagnostic('E0107', 'Incorrect number of assignee type arguments', node.span);
+      const substitution = new Map(owner.generics.map((g, i) => [g.name, supplied[i] ?? null]));
+      node.kind = 'constructorAssignee'; node.assignee = 'variant'; node.items = projections.map(projection => {
+        const item = projection.value; item.assigneeIndex = Number(projection.name);
+        this.prepare(item, depth + 1);
+        const hint = this.hint(item);
+        if (!hint.includes('_')) T.unify(this.a.index.type(fields[item.assigneeIndex], owner.module,
+          null, new Set(substitution.keys()), item), hint, substitution, item);
+        return item;
+      });
+      node.name = owner.name; node.assigneeTag = constructor.tag;
+      node.assigneeHint = owner.name + (owner.generics.length ? '<' + owner.generics.map(g => substitution.get(g.name) ?? '_').join(',') + '>' : '');
+      delete node.args; delete node.callee; delete node.macro; return;
+    }
     if (node.kind === 'structLiteral') {
       node.assignee = 'struct'; const module = this.ctx.instance.fn.module;
       const alias = this.a.index.resolve(this.a.index.aliases, node.name, module, node, false);
@@ -74,7 +114,9 @@ export class AssigneeAnalyzer {
       for (const field of node.fields) {
         const definition = shape.fields.find(entry => entry.name === field.name);
         if (!definition || seen.has(field.name)) throw new Diagnostic('E0062', `Unknown or duplicate field ${field.name}`, field.value.span);
-        seen.add(field.name); this.prepare(field.value, depth + 1);
+        seen.add(field.name);
+        this.a.index.fieldVisible(shape, definition, module, field.value);
+        this.prepare(field.value, depth + 1);
         const hint = this.hint(field.value);
         if (!hint.includes('_')) {
           const formal = this.a.index.type(T.substitute(definition.type, substitution), shape.module);
@@ -93,7 +135,7 @@ export class AssigneeAnalyzer {
   }
   hint(node, value = null) {
     if (node.assignee === 'place') return node.type;
-    if (node.assignee === 'struct') return node.assigneeHint;
+    if (node.assignee === 'struct' || node.assignee === 'variant') return node.assigneeHint;
     if (value?.kind === 'block') value = value.tail;
     if (node.assignee === 'tuple') {
       const rest = node.items.findIndex(item => item.assignee === 'rest');
@@ -126,6 +168,13 @@ export class AssigneeAnalyzer {
       node.assigneeSourceType = actual; return;
     }
     node.type = actual;
+    if (node.assignee === 'variant') {
+      T.unify(node.assigneeHint, actual, new Map(), node);
+      const app = T.application(actual), shape = this.a.index.enums.get(app.name);
+      const substitution = new Map(shape.generics.map((g, i) => [g.name, app.args[i]]));
+      for (const item of node.items) this.check(item, this.a.index.type(T.substitute(shape.variants[0].fields[item.assigneeIndex], substitution), shape.module));
+      return;
+    }
     if (node.assignee === 'struct') {
       T.unify(node.assigneeHint, actual, new Map(), node);
       const app = T.application(actual), shape = this.a.index.structs.get(app.name);

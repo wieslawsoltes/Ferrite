@@ -64,6 +64,13 @@ export class Parser {
     }
     return path;
   }
+  fieldName() {
+    const token = this.c.peek();
+    if (token.kind !== 'number') return this.c.identifier();
+    if (!/^(0|[1-9][0-9]*)$/.test(token.value))
+      throw new Diagnostic('E0609', 'Tuple field names must be unsuffixed decimal indices', token.span);
+    return this.c.take().value;
+  }
   type() {
     if (++this.typeDepth > 128) throw new Diagnostic('F_TYPE_DEPTH', 'Type nesting limit exceeded', this.c.peek().span);
     try { return this.parseType(); } finally { this.typeDepth--; }
@@ -109,19 +116,39 @@ export class Parser {
     }
     if (this.c.match('struct')) {
       const name = this.c.identifier(), generics = this.generics();
-      this.c.eat('{');
-      const fields = this.list('}', () => {
-        const attributes=this.attributes(); this.c.match('pub'); const name = this.c.identifier(); this.c.eat(':'); return {name, type: this.type(), attributes};
-      });
-      return [this.c.node('struct', start, {name, generics, fields, attributes, visibility})];
+      let form = 'record', fields, predicates;
+      if (this.c.match('(')) {
+        form = 'tuple';
+        fields = this.list(')', () => {
+          const at = this.c.peek(), attributes = this.attributes();
+          const visibility = this.c.match('pub') ? 'pub' : 'private';
+          return this.c.node('structField', at, {type: this.type(), attributes, visibility});
+        });
+        fields.forEach((field, i) => { field.name = String(i); });
+        predicates = this.whereClause(); this.c.eat(';');
+      } else {
+        predicates = this.whereClause();
+        if (this.c.match(';')) { form = 'unit'; fields = []; }
+        else {
+          this.c.eat('{');
+          fields = this.list('}', () => {
+            const at = this.c.peek(), attributes = this.attributes();
+            const visibility = this.c.match('pub') ? 'pub' : 'private';
+            const name = this.c.identifier(); this.c.eat(':');
+            return this.c.node('structField', at, {name, type: this.type(), attributes, visibility});
+          });
+        }
+      }
+      return [this.c.node('struct', start, {name, generics, fields, form, predicates, attributes, visibility})];
     }
     if (this.c.match('enum')) {
       const name = this.c.identifier(), generics = this.generics();
       this.c.eat('{');
       const variants = this.list('}', () => {
         const attributes=this.attributes(), name = this.c.identifier();
-        const fields = this.c.match('(') ? this.list(')', () => this.type()) : [];
-        return {name, fields, attributes};
+        const form = this.c.match('(') ? 'tuple' : 'unit';
+        const fields = form === 'tuple' ? this.list(')', () => this.type()) : [];
+        return {name, fields, form, attributes};
       });
       return [this.c.node('enum', start, {name, generics, variants, attributes, visibility})];
     }
@@ -297,14 +324,15 @@ export class Parser {
       const fields = []; let rest = false;
       while (!this.c.is('}')) {
         if (this.c.match('..')) { rest = true; this.c.match(','); break; }
-        const field = this.c.peek(), mutable = !!this.c.match('mut'), key = this.c.identifier();
+        const field = this.c.peek(), mutable = !!this.c.match('mut'), key = this.fieldName();
+        if (/^\d+$/.test(key) && !this.c.is(':')) this.c.eat(':');
         const pattern = this.c.match(':') ? this.pattern() : this.c.node('bindingPattern', field, {name: key, mutable});
         fields.push({name: key, pattern});
         if (!this.c.match(',')) break;
       }
       this.c.eat('}'); return this.c.node('structPattern', start, {name, fields, rest});
     }
-    if (this.c.match('(')) return this.c.node('variantPattern', start, {name, items: this.list(')', () => this.pattern())});
+    if (this.c.match('(')) return this.c.node('variantPattern', start, {name, tupleSyntax: true, items: this.list(')', () => this.pattern())});
     return this.c.node(name.includes('::') || name === 'None' ? 'variantPattern' : 'bindingPattern', start, {name, items: []});
   }
   expr(minimum = 0, allowRecord = true) {
@@ -318,7 +346,8 @@ export class Parser {
           this.c.take(); const fields = []; let rest = false;
           while (!this.c.is('}')) {
             if (this.c.match('..')) { rest = true; break; }
-            const at = this.c.peek(), name = this.c.identifier();
+            const at = this.c.peek(), name = this.fieldName();
+            if (/^\d+$/.test(name) && !this.c.is(':')) this.c.eat(':');
             const value = this.c.match(':') ? this.expr() : this.c.node('variable', at, {name});
             fields.push({name, value});
             if (!this.c.match(',')) break;

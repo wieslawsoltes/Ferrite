@@ -24,7 +24,7 @@ OUTPUT.mkdir(parents=True, exist_ok=True)
 
 
 def memory_document(page):
-    modules = {str(p.relative_to(ROOT)): p.read_text() for p in (ROOT / 'src').rglob('*.js')}
+    modules = {str(p.relative_to(ROOT)): p.read_text() for p in (ROOT / 'src').rglob('*') if p.suffix in {'.js', '.mjs'}}
     definitions, visited = [], set()
 
     def visit(path):
@@ -54,7 +54,9 @@ def memory_document(page):
       }
       return urls['src/ui/main.js'];
     }''', definitions)
-    html = (ROOT / 'index.html').read_text().replace('<link rel="stylesheet" href="./styles/ide.css">', '<style>' + (ROOT / 'styles/ide.css').read_text() + '</style>')
+    html = (ROOT / 'index.html').read_text()
+    for stylesheet in ['styles/ide.css', 'src/vendor/xterm/xterm.css', 'styles/agent.css']:
+        html = html.replace('<link rel="stylesheet" href="./' + stylesheet + '">', '<style>' + (ROOT / stylesheet).read_text() + '</style>')
     page.set_content(html.replace('./src/ui/main.js', entry), wait_until='load')
 
 

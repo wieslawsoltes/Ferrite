@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""POSIX PTY host. Private JSON-lines control channel; terminal bytes are base64.
+"""POSIX controlling PTY. JSON-lines control, byte-exact base64 output.
 
-No shell interpolation: argv/cwd arrive as a JSON argument. The hosted shell or
-CLI owns its normal job control and authentication. This is not a sandbox.
+The host executes argv without shell interpolation. This is a trusted native
+process, NOT a sandbox. Resize acknowledgements are ordered with PTY output.
 """
 import base64
 import errno
@@ -37,7 +37,7 @@ def main():
             if slave > 2:
                 os.close(slave)
             os.chdir(config['cwd'])
-            for name in ('SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT', 'SIGPIPE'):
+            for name in ('SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT', 'SIGPIPE', 'SIGTSTP', 'SIGTTIN', 'SIGTTOU'):
                 signal.signal(getattr(signal, name), signal.SIG_DFL)
             os.execvpe(config['argv'][0], config['argv'], os.environ)
         except BaseException as error:
@@ -46,18 +46,26 @@ def main():
     os.close(slave)
     os.set_blocking(master, False)
     os.set_blocking(0, False)
-    incoming = bytearray()
-    outgoing = bytearray()
+    incoming, outgoing = bytearray(), bytearray()
     deadline = None
-    eof = False
+    control_eof = pty_eof = False
     exit_status = None
+    shutdown_groups = {pid}
 
-    def send_signal(number):
-        groups = {pid}
+    def foreground():
         try:
-            groups.add(os.tcgetpgrp(master))
+            group = os.tcgetpgrp(master)
+            return group if group > 0 else pid
         except OSError:
-            pass
+            return pid
+
+    def send_signal(number, closing=False):
+        # Ctrl-C/agent interrupts target the foreground job, not its interactive
+        # shell as well. Closing must also terminate the session's shell group.
+        groups = {foreground()}
+        if closing:
+            shutdown_groups.update(groups)
+            groups = shutdown_groups
         for group in groups:
             if group > 0 and group != os.getpgrp():
                 try:
@@ -67,7 +75,7 @@ def main():
 
     def stop(_signum=None, _frame=None):
         nonlocal deadline
-        send_signal(signal.SIGHUP)
+        send_signal(signal.SIGHUP, closing=True)
         if deadline is None:
             deadline = time.monotonic() + 0.75
 
@@ -77,26 +85,27 @@ def main():
     try:
         while True:
             if deadline is not None and time.monotonic() >= deadline:
-                send_signal(signal.SIGKILL)
+                send_signal(signal.SIGKILL, closing=True)
                 deadline = time.monotonic() + 3600
-            readable, writable, _ = select.select(([0] if not eof else []) + ([master] if not eof or exit_status is None else []), [master] if outgoing else [], [], 0.05)
+            inputs = ([] if control_eof else [0]) + ([] if pty_eof else [master])
+            readable, writable, _ = select.select(inputs, [master] if outgoing and not pty_eof else [], [], 0.05)
             if master in readable:
                 try:
                     chunk = os.read(master, 65536)
                     if chunk:
                         emit({'type': 'data', 'data': base64.b64encode(chunk).decode('ascii')})
                     else:
-                        eof = True
+                        pty_eof = True
                 except OSError as error:
                     if error.errno == errno.EIO:
-                        eof = True
+                        pty_eof = True
                     elif error.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
                         raise
             if 0 in readable:
                 chunk = os.read(0, 65536)
                 if not chunk:
                     stop()
-                    eof = True
+                    control_eof = True
                 else:
                     incoming.extend(chunk)
                     if len(incoming) > 1024 * 1024:
@@ -111,15 +120,16 @@ def main():
                             if len(outgoing) > 1024 * 1024:
                                 raise ValueError('PTY input backpressure exceeded 1 MiB')
                         elif kind == 'resize':
-                            cols, rows = int(message['cols']), int(message['rows'])
-                            if not 2 <= cols <= 500 or not 2 <= rows <= 200:
+                            cols, rows = message['cols'], message['rows']
+                            if type(cols) is not int or type(rows) is not int or not 2 <= cols <= 500 or not 2 <= rows <= 200:
                                 raise ValueError('Invalid terminal dimensions')
                             fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+                            emit({'type': 'resize', 'cols': cols, 'rows': rows, 'requestId': message.get('requestId')})
                         elif kind == 'signal':
-                            number = {'SIGINT': signal.SIGINT, 'SIGTERM': signal.SIGTERM, 'SIGHUP': signal.SIGHUP}.get(message['signal'])
-                            if number is None:
+                            name = message['signal']
+                            if name not in ('SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT', 'SIGTSTP', 'SIGCONT'):
                                 raise ValueError('Unsupported signal')
-                            send_signal(number)
+                            send_signal(getattr(signal, name))
                         elif kind == 'close':
                             stop()
                         else:
@@ -129,13 +139,20 @@ def main():
                     count = os.write(master, outgoing)
                     del outgoing[:count]
                 except OSError as error:
-                    if error.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EIO):
+                    if error.errno == errno.EIO:
+                        outgoing.clear()
+                    elif error.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
                         raise
             if exit_status is None:
                 child, status = os.waitpid(pid, os.WNOHANG)
                 if child:
                     exit_status = os.waitstatus_to_exitcode(status)
-            if exit_status is not None and eof:
+                    # Descendants holding the slave open cannot hold the helper
+                    # alive indefinitely after the controlling shell has exited.
+                    stop()
+            if pty_eof and exit_status is None:
+                stop()
+            if exit_status is not None and pty_eof:
                 break
     finally:
         stop()
@@ -144,7 +161,7 @@ def main():
         except OSError:
             pass
         if exit_status is None:
-            send_signal(signal.SIGKILL)
+            send_signal(signal.SIGKILL, closing=True)
             _, status = os.waitpid(pid, 0)
             exit_status = os.waitstatus_to_exitcode(status)
     emit({'type': 'exit', 'code': exit_status})

@@ -64,7 +64,7 @@ Provider-native reasoning/signature data needed for continuation is preserved in
 
 ## Shared MCP and IDE tools
 
-The same schema-validated registry supplies the built-in agent, HTTP tools, and MCP. It has **28 tools**, including a Rust-language dispatcher with **44 allowed LSP/Rust methods** and an IDE dispatcher with **21 explicit commands**. Discovery returns the actual schemas and annotations. No arbitrary browser JavaScript execution is exposed.
+The same schema-validated registry supplies the built-in agent, HTTP tools, and MCP. It includes native terminal lifecycle/interaction tools, a Rust-language dispatcher with **44 allowed LSP/Rust methods** and an IDE dispatcher with **21 explicit commands**. Discovery returns the actual schemas and annotations. No arbitrary browser JavaScript execution is exposed.
 
 | Area | Tools |
 | --- | --- |
@@ -72,6 +72,7 @@ The same schema-validated registry supplies the built-in agent, HTTP tools, and 
 | Recovery/context | `checkpoint_list`, `checkpoint_restore`, `artifact_read`, `instructions_read` |
 | Native execution | `process_exec`, `cargo`, `git_inspect` |
 | PTY lifecycle | `terminal_open`, `terminal_list`, `terminal_read`, `terminal_input`, `terminal_resize`, `terminal_signal`, `terminal_close` |
+| Interactive TUI / ncurses | `terminal_screen`, `terminal_wait`, `terminal_key`, `terminal_paste`, `terminal_mouse` |
 | Compiler/Rust | `compiler_analyze`, `compiler_inspect`, `compiler_execute`, `rust_language` |
 | IDE/agent | `ide_inspect`, `ide_command`, `plan_update`, `agent_delegate` |
 
@@ -124,7 +125,7 @@ node tools/agent-mcp.mjs --workspace /absolute/checkout --trust-workspace
 
 **New native** launches a real `/bin/sh -i` PTY in the chosen checkout. Terminal state, stdin, job control, foreground signals, resize, exit codes, Unicode output, cursor movement, alternate screen and bracketed paste are implemented. Select installed Codex, Claude or Gemini CLIs, or their available login launcher, from the terminal menu. Those applications must be installed separately. Their own authentication is separate from Ferrite API sign-in: launching `codex login`, `claude auth login` or interactive `gemini` does not repurpose consumer-account credentials for Ferrite provider calls.
 
-Agent PTYs have explicit ownership; another agent cannot read/input a user's terminal. Output is bounded and cursor gaps are reported. Terminal control strings are rendered as text/state, never inserted as HTML or executed as browser code. OSC clipboard commands are not executed. The VT renderer is a useful subset, **not a claim of complete xterm conformance**; mouse reporting and all Unicode grapheme/terminal extension combinations are not covered. Terminals idle for 30 minutes are closed.
+Agent PTYs have explicit ownership; another agent cannot read/input a user's terminal. Output is bounded and cursor gaps are reported. Terminal control strings are rendered as text/state, never inserted as HTML or executed as browser code. OSC clipboard commands are not executed. The native renderer is pinned xterm.js 6.0.0, backed by the same headless engine even without a browser. It supports ncurses alternate screens, ACS line drawing, colors, Unicode, keyboard/mouse protocols and resize; scoped MCP screen/wait/key/paste/mouse tools operate the same applications. Reconnection restores sequence-stamped buffers and protocol state, not arbitrary truncated escape fragments. Terminals idle for 30 minutes are closed. See [Terminal and ncurses](terminal.md) for the complete contract, reproducible assets, API examples, security limits and validation.
 
 The separate **Browser shell** provides bounded utilities over the in-memory editor workspace: `help`, `pwd`, `cd`, `ls`, `cat`, `echo`, `printf`, `head`, `tail`, `wc`, `grep`, `find`, `sort`, `uniq`, `cut`, `tr`, `touch`, `mkdir`, `rm`, `cp`, `mv`, `basename`, `dirname`, `clear`, `history`, `true`, `false`, `date`, `env`, `export`, `which`. Quoting, variables, pipes, conditionals and redirection are supported with an explicitly limited option surface. It is not a POSIX/GNU implementation, OS emulator, network shell or Cargo runtime. Full installed Unix commands run through native PTYs / `process_exec`.
 
@@ -166,7 +167,7 @@ npm run test:browser
 npm run test:agent:browser
 ```
 
-Node tests cover provider stream fragmentation/signature preservation, incomplete-output rejection, secret redaction, retry/error behavior, compaction, ledger recovery, state ownership, schema validation, checkpoints/patches, workspace synchronization races, MCP lifecycle/metadata/authentication, real processes/PTYS, VT rendering and browser utility semantics. Browser acceptance drives real visible controls and a real local bridge with deterministic provider API fixtures; it verifies edits and approval previews, compiler execution, source synchronization, the trace/context/tool explorer, revision-checked IDE commands, native terminal input, fork and sign-out. CI additionally exercises installed Cargo/rust-analyzer and normal HTTP browser networking.
+Node tests cover provider stream fragmentation/signature preservation, incomplete-output rejection, secret redaction, retry/error behavior, compaction, ledger recovery, state ownership, schema validation, checkpoints/patches, workspace synchronization races, MCP lifecycle/metadata/authentication, real processes/PTYS, VT rendering and browser utility semantics. Browser acceptance drives real visible controls and a real local bridge with deterministic provider API fixtures; it verifies edits and approval previews, compiler execution, source synchronization, the trace/context/tool explorer, revision-checked IDE commands, native terminal input, actual ncurses keyboard/Unicode/mouse/resize/tab/reconnect interactions, alternate-screen restoration, fork and sign-out. CI additionally exercises installed Cargo/rust-analyzer and normal HTTP browser networking.
 
 For restricted test environments, `FERRITE_MEMORY_TEST=1` loads the same browser source in memory. In agent acceptance, that mode explicitly injects only HTTP transport through a Python binding; it does **not** establish that normal browser loopback/CORS networking works. Screenshots and machine-readable results are retained under `artifacts/agent-browser`.
 

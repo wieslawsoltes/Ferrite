@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Verify syntax and deterministic worker bundles
+      - name: Verify syntax, deterministic worker bundles and pinned terminal assets
         run: npm run check
       - name: Run compiler, runtime, project, service and sample tests
         run: npm test
@@ -43,10 +43,12 @@ jobs:
         env:
           FERRITE_NATIVE_TEST: '1'
         run: npm run test:browser
-      - name: Exercise agent API login, approvals, MCP commands and native PTY in Chromium
+      - name: Exercise agent login, MCP, native PTY and ncurses keyboard/mouse/resize/reconnect in Chromium
         run: npm run test:agent:browser
       - name: Exercise bridge-free browser agents, persistence, review and terminal harness
-        run: npm run test:browser-agent 2>&1 | tee artifacts/browser-agent.log
+        run: |
+          set -o pipefail
+          npm run test:browser-agent 2>&1 | tee artifacts/browser-agent.log
       - name: Record environment-dependent compiler timings
         run: |
           mkdir -p artifacts/performance

@@ -9,6 +9,9 @@ import {BrowserTaskState} from '../../agent/browser/BrowserTaskState.js';
 import {BrowserAgentPanels} from './BrowserAgentPanels.js';
 import {BrowserAgentTerminal} from './BrowserAgentTerminal.js';
 
+// Completion is authoritative even when an earlier poll invalidated a UI action's selection token.
+const isSessionResult = type => /^(?:session\.(?:completed|failed|paused|cancelled)|context\.compaction-finished)$/.test(type);
+
 /** IDE composition: authenticated transport, revision-safe commands and user-driven account/session actions. */
 export class AgentWorkbench {
   constructor(app) {
@@ -186,10 +189,10 @@ export class AgentWorkbench {
         if (event.type === 'ide.request' && event.clientId === this.client.clientId) { this.answer(event); continue; }
         if (!batch.gap) { this.view.handle(event); this.browserPanels.handle(event); }
         if (event.type === 'terminal.started') this.terminal.attach(event);
-        if (/^session\.(created|completed|failed|paused|cancelled)$/.test(event.type)) refresh = true;
+        if (event.type === 'session.created' || isSessionResult(event.type)) refresh = true;
         if (event.type === 'workspace.changed') this.lastSync = 0;
       }
-      if (refresh) { await this.refreshSessions(); if (this.selected && batch.events.some(event=>event.sessionId===this.selected&&/^session\.(completed|failed|paused|cancelled)$/.test(event.type))) await this.loadSession(this.selected); }
+      if (refresh) { await this.refreshSessions(); if (this.selected && batch.events.some(event=>event.sessionId===this.selected&&isSessionResult(event.type))) await this.loadSession(this.selected); }
       if (this.environment === 'native' && this.sync.enabled && Date.now() - this.lastSync > 2000) { this.lastSync = Date.now(); await this.sync.sync(); }
     } catch (error) { if (epoch !== this.generation) return; this.view.showError(error); if (error.code === 'IDE_OWNER' || error.status === 401) await this.disconnect(); }
     finally { this.polling = false; }

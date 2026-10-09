@@ -15,3 +15,10 @@
 .agent-rule{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--border,#424650)}
 .agent-rule>span{font:12px ui-monospace,monospace;overflow-wrap:anywhere}.agent-rule select{min-width:130px}
 .agent-permission-rules{overflow:auto}.agent-changes{overflow:auto}.agent-review-diff:empty{display:none}
+
+/* Xterm owns its viewport, cell layout, accessibility tree and IME textarea. */
+.terminal-viewport{position:relative;flex:1;min-height:80px;min-width:0;overflow:hidden;padding:6px;background:#17181b;color:#d4d4d4}
+.terminal-screen,.terminal-surface{height:100%;width:100%;min-width:0;white-space:normal;overflow:hidden}
+.terminal-surface .xterm{height:100%}.terminal-surface .xterm-helper-textarea{resize:none;border:0;padding:0;min-width:0;min-height:0}
+.terminal-controls{flex-wrap:wrap}.terminal-controls input[type=search]{width:140px;min-width:80px;flex:1}
+.terminal-surface .xterm-screen{font-variant-ligatures:none}

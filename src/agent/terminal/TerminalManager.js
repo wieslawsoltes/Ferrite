@@ -88,7 +88,8 @@ export class TerminalManager {
   }
   enqueue(session, operation) {
     const result = session.queue.then(operation);
-    session.queue = result.catch(error => { session.error = error.message; session.child?.kill('SIGTERM'); });
+    // Validation errors from a client must not poison or terminate the process.
+    session.queue = result.catch(() => {});
     return result;
   }
   append(session, text) {
@@ -97,6 +98,7 @@ export class TerminalManager {
     if (session.pendingCharacters > 512 * 1024) session.child.stdout.pause();
     this.enqueue(session, async () => {
       try { await session.screen.write(text); session.log.emit('data', {text}); session.lastUsed = Date.now(); }
+      catch (error) { session.error = error.message; session.child.kill('SIGTERM'); throw error; }
       finally { session.pendingCharacters -= text.length; if (session.pendingCharacters < 128 * 1024) session.child.stdout.resume(); }
     });
   }

@@ -49,7 +49,7 @@ test('wait is literal, bounded, cancellation-safe and leaves no listeners',nativ
 test('screen recovery does not depend on retained replay escape boundaries',native,async t=>{
   const m=manager(t), s=await m.start(); m.get(s.id).log.limit=1;
   m.input(s.id,"printf '\\033[?1049h\\033[HRECOVER_ME'; sleep .1; printf '\\033[2;1HLAST_ROW'; sleep 2\r");
-  await visible(m,s.id,'LAST_ROW'); const log=m.read(s.id); assert.equal(log.gap,true);
+  await visible(m,s.id,'RECOVER_ME\nLAST_ROW'); const log=m.read(s.id); assert.equal(log.gap,true);
   const state=await m.state(s.id), replica=new TerminalScreen(state.cols,state.rows); t.after(()=>replica.dispose()); await replica.write(state.ansi);
   assert.match(replica.text(),/RECOVER_ME/); assert.match(replica.text(),/LAST_ROW/); assert.equal(state.cursor,m.read(s.id).cursor);
 });

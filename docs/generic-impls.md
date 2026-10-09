@@ -107,7 +107,7 @@ candidate enumeration and asserts identical target/mapping results.
 
 ```sh
 node --test tests/generic-impls.test.js tests/generic-impl-index.test.js
-node tools/language-conformance.mjs --help
+node tools/language-conformance.mjs --output artifacts/language/conformance.json
 node tools/benchmark-impls.mjs --iterations 5 --output artifacts/performance/impls.json
 npm run build:workers
 npm run build:sdk

@@ -84,3 +84,15 @@ for (const backend of ['browser', 'native']) {
     assert.equal(await runtime.workspace.text(settings.settings.stylesheet, {optional: true}), null);
   });
 }
+
+for (const backend of ['browser', 'native']) {
+  test(`${backend} MCP native binary tools cannot downgrade execution through ide_command`, async t => {
+    const runtime = await fixture(t, backend);
+    const wasm = Buffer.from([0,97,115,109,1,0,0,0,5,4,1,1,1,2]).toString('base64');
+    await assert.rejects(runtime.tools.execute('ui_native_preview', {wasm}, {mode: 'ask', interactive: false}), {code: 'APPROVAL_REQUIRED'});
+    await assert.rejects(runtime.tools.execute('ide_command', {command: 'ui.native.preview', arguments: {wasm}}, {mode: 'ask', interactive: false}), {code: 'APPROVAL_REQUIRED'});
+    const exported = await complete(runtime, await runtime.tools.execute('ui_native_export_html', {wasm}));
+    assert.equal(exported.backend, 'native-wasm'); assert.match(exported.html, /connect-src 'none'/);
+    await assert.rejects(runtime.tools.execute('ui_native_export_html', {wasm: 'not-wasm'}));
+  });
+}

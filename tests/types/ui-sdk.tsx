@@ -42,3 +42,13 @@ const project = UIProject.load({'src/app.rs': source}, 'src/app.rs');
 const changed = project.changes({grid: 8}, 'button { padding: 4px }');
 designer.apply({op: 'setLayout', node: designer.nodes[0].id, rectangle: CanvasLayout.geometry({x: 1, y: 2, width: 80, height: 40})}, designer.revision);
 void initialMarkup; void rustMarkup; void hydrated; void changed;
+
+import {mountNativeUI, exportNativeHTML, decodeNativeBase64} from 'ferrite-compiler';
+const nativeBytes = new Uint8Array();
+const nativeSession = mountNativeUI(nativeBytes, node, {runtime: Ferrite.createUIRuntime()});
+Ferrite.mountNativeUI(nativeBytes, node); Ferrite.exportNativeHTML(nativeBytes);
+Ferrite.createNativeWasmHost(Ferrite.createUIRuntime()); Ferrite.decodeNativeBase64('');
+exportNativeHTML(nativeBytes); decodeNativeBase64('');
+// @ts-expect-error native imports accept Wasm bytes, not a source string.
+mountNativeUI('fn main() {}', node);
+void nativeSession;

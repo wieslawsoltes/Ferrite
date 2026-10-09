@@ -57,7 +57,7 @@ export class SourceDesigner {
   snapshot(): DesignSnapshot; apply(operation: DesignOperation, expectedRevision: number): DesignSnapshot;
   undo(expectedRevision: number): DesignSnapshot; redo(expectedRevision: number): DesignSnapshot;
 }
-export const Ferrite: Readonly<{version: string; createReactAdapter: typeof createReactAdapter; compileRust: typeof compileRust; compileUI: typeof compileUI; mountUI: typeof mountUI; runRust: typeof runRust; runScripts: typeof runScripts; exportHTML: typeof exportHTML; UI: RuntimeAPI; createUIRuntime: typeof createUIRuntime; SourceDesigner: typeof SourceDesigner; UIProject: typeof UIProject; CanvasLayout: typeof CanvasLayout; renderToString: typeof renderToString; renderToStaticMarkup: typeof renderToStaticMarkup; renderUIToString: typeof renderUIToString; exportHydratedHTML: typeof exportHydratedHTML}>;
+export const Ferrite: Readonly<{version: string; mountNativeUI: typeof mountNativeUI; exportNativeHTML: typeof exportNativeHTML; createNativeWasmHost: typeof createNativeWasmHost; decodeNativeBase64: typeof decodeNativeBase64; createReactAdapter: typeof createReactAdapter; compileRust: typeof compileRust; compileUI: typeof compileUI; mountUI: typeof mountUI; runRust: typeof runRust; runScripts: typeof runScripts; exportHTML: typeof exportHTML; UI: RuntimeAPI; createUIRuntime: typeof createUIRuntime; SourceDesigner: typeof SourceDesigner; UIProject: typeof UIProject; CanvasLayout: typeof CanvasLayout; renderToString: typeof renderToString; renderToStaticMarkup: typeof renderToStaticMarkup; renderUIToString: typeof renderUIToString; exportHydratedHTML: typeof exportHydratedHTML}>;
 
 export interface CanvasRectangle { x: number; y: number; width: number; height: number }
 export class CanvasLayout {
@@ -85,8 +85,9 @@ export function createReactAdapter<R extends {createElement: (...args: never[]) 
   renderToPipeableStream(node: ReturnType<R['createElement']>, options?: Record<string, unknown>): {pipe(destination: unknown): unknown; abort(reason?: unknown): void};
 };
 
-export interface NativeUIOptions { runtime?: typeof import('../ui-framework/React.js'); onError?: ((error: Error) => void) | null; maxBytes?: number; maxMemoryBytes?: number; }
+export interface NativeUIOptions { runtime?: RuntimeAPI; onError?: ((error: Error) => void) | null; maxBytes?: number; maxMemoryBytes?: number; }
 export interface NativeUISession { mount(bytes: Uint8Array, container: Element): Promise<NativeUISession>; validate(bytes: Uint8Array): Uint8Array; flush(): unknown; inspect(): unknown; dispose(): void; subscribe(listener: (event: {type: string; snapshot?: unknown}) => void): () => void; }
-export function createNativeWasmHost(runtime: unknown, options?: NativeUIOptions): NativeUISession;
+export function createNativeWasmHost(runtime: RuntimeAPI, options?: NativeUIOptions): NativeUISession;
 export function mountNativeUI(bytes: Uint8Array, container: Element, options?: NativeUIOptions): Promise<NativeUISession>;
 export function exportNativeHTML(bytes: Uint8Array, options?: {title?: string; css?: string; channel?: string | null}): string;
+export function decodeNativeBase64(value: string): Uint8Array;

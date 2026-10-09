@@ -1,9 +1,10 @@
+import {exportNativeHTML, decodeNativeBase64} from '../../ui-framework/NativeWasm.js';
 import {UIProject} from '../../ui-framework/UIProject.js';
 import {object, text, path, integer, hash} from './ToolSchemas.js';
 import {AgentError} from '../core/AgentError.js';
 import {contentHash} from '../core/Platform.js';
 
-export const UI_IDE_COMMANDS = ['ui.preview', 'ui.inspect', 'ui.select', 'ui.debug', 'ui.state.set'];
+export const UI_IDE_COMMANDS = ['ui.native.preview', 'ui.preview', 'ui.inspect', 'ui.select', 'ui.debug', 'ui.state.set'];
 const entry = {...text(200), pattern: '^[A-Za-z_]\\w*(?:::[A-Za-z_]\\w*)*$'};
 const backend = {enum: ['javascript', 'wasm', 'mir']};
 export const UI_EDIT_SCHEMA = object({op: {enum: ['setAttribute', 'removeAttribute', 'setText', 'setTag', 'insert', 'remove', 'duplicate', 'move', 'setLayout']},
@@ -71,6 +72,12 @@ export function registerUITools(registry, {workspace, compiler, ide}) {
   add('ui_preview', 'Compile and mount the live editor UI in an opaque-origin sandbox. This executes bounded Rust/UI callbacks, requires execution approval, and requires a connected IDE; it never fabricates a browser session.',
     object({path, entry, backend, expectedRevision: integer(0, Number.MAX_SAFE_INTEGER)}, ['path']), 'execute',
     ({path: file, ...args}, context) => ide.request('ui.preview', {file, ...args}, context));
+  add('ui_native_preview', 'Mount a trusted native Cargo UI Wasm artifact in the connected IDE sandbox. This runs real rustc output with bounded linear memory, but no instruction fuel; approval is required. No source design or MIR stepping is claimed for a binary. The MCP transfer is limited to 512 KiB base64; larger artifacts use the IDE file picker.',
+    object({wasm: text(524288), name: text(200), expectedRevision: integer(0, Number.MAX_SAFE_INTEGER)}, ['wasm']), 'execute',
+    (args, context) => ide.request('ui.native.preview', args, context));
+  add('ui_native_export_html', 'Serialize trusted Cargo UI Wasm as a self-contained offline HTML file without instantiating or executing it in the MCP host. Binary structure and memory budgets are checked. Large output is paged through artifact_read.',
+    object({wasm: text(524288), title: text(1000), css: text(500000)}, ['wasm']), 'read',
+    ({wasm, ...options}) => ({html: exportNativeHTML(decodeNativeBase64(wasm), options), backend: 'native-wasm'}));
   add('ui_inspect', 'Inspect the connected, current UI preview’s component tree, state handles, commit timings and debugger. Stale previews are rejected.',
     object(), 'read', (_, context) => ide.request('ui.inspect', {}, context));
   add('ui_debug', 'Arm the next UI event callback, step or reverse MIR instructions/source lines and staged state, restart retained history, continue with breakpoints from the editor or disarm. Rendering/effects remain synchronous; paused events cannot cancel a past browser default.',

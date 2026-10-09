@@ -3,6 +3,7 @@ import {BrowserCompiler} from '../../agent/browser/BrowserCompiler.js';
 import {UIProject} from '../../ui-framework/UIProject.js';
 import {SourceDesigner} from '../../ui-framework/SourceDesigner.js';
 import {UI_SAMPLES, UI_SAMPLE_CSS} from '../../ui-framework/Samples.js';
+import {exportNativeHTML, decodeNativeBase64} from '../../ui-framework/NativeWasm.js';
 import {PreviewChannel} from './PreviewChannel.js';
 
 /** IDE projection over real source files, bounded compilation and an isolated app. */
@@ -10,7 +11,7 @@ export class UIStudio {
   constructor(app) {
     this.app = app; this.model = app.model; this.root = app.panels.get('ui-studio'); this.root.classList.add('ui-studio');
     this.compiler = new BrowserCompiler(); this.file = 'src/app.ui.rs'; this.entryFile = this.file; this.project = null; this.savingProject = false; this.entry = 'app'; this.backend = 'javascript';
-    this.selected = null; this.snapshot = null; this.artifact = null; this.generation = 0; this.compiledSource = null;
+    this.nativeAsset = null; this.selected = null; this.snapshot = null; this.artifact = null; this.generation = 0; this.compiledSource = null;
     this.view();
     this.preview = new PreviewChannel(this.frame, {onEvent: message => this.event(message)});
     this.unsubscribe = this.model.subscribe(event => this.changed(event));
@@ -42,6 +43,19 @@ export class UIStudio {
     this.backendSelect.onchange = () => { this.backend = this.backendSelect.value; this.saveProject(); this.markStale(); };
     this.entryInput = this.input('UI entry function', 'app'); this.entryInput.onchange = () => { this.entry = this.entryInput.value; this.saveProject(); this.refreshSource(); };
     controls.append(this.entryFiles, this.files, this.backendSelect, this.entryInput, this.button('Preview', () => this.build(), 'run'), this.button('Export HTML', () => this.download(), 'export'), this.button('Export hydrated HTML', () => this.download({hydrate: true}), 'export'));
+    this.nativeInput = Dom.element('input'); this.nativeInput.type = 'file'; this.nativeInput.accept = '.wasm,application/wasm'; this.nativeInput.hidden = true;
+    this.nativeInput.setAttribute('aria-label', 'Load trusted Cargo UI Wasm');
+    this.nativeInput.onchange = () => {
+      const file = this.nativeInput.files?.[0]; this.nativeInput.value = '';
+      if (!file) return;
+      if (file.size > 8 * 1024 * 1024) { this.error(Error('Native UI binaries are limited to 8 MiB')); return; }
+      const generation = this.generation;
+      file.arrayBuffer().then(buffer => {
+        if (generation !== this.generation) throw Error('Editor changed while loading the native binary');
+        return this.buildNative(new Uint8Array(buffer), {name: file.name});
+      }).catch(error => this.error(error));
+    };
+    controls.append(this.button('Load Cargo Wasm', () => this.nativeInput.click(), 'run'), this.nativeInput);
     const samples = Dom.element('div', 'studio-toolbar'); samples.append(Dom.element('span', '', 'New example:'));
     for (const name of Object.keys(UI_SAMPLES)) samples.append(this.button(name, () => this.createExample(name), 'plus'));
     this.status = Dom.element('div', 'studio-status', 'Create an example or choose a Rust UI source file.'); this.status.setAttribute('role', 'status');
@@ -119,7 +133,7 @@ export class UIStudio {
     this.refreshSource({preserve: true, invalidate: false});
   }
   markStale() {
-    this.generation++; this.active?.abort(); this.artifact = null; this.snapshot = null; this.renderState();
+    this.generation++; this.active?.abort(); this.nativeAsset = null; this.artifact = null; this.snapshot = null; this.renderState();
     this.status.textContent = 'Source changed · Preview to compile. The previous preview is read-only to tooling.'; this.status.dataset.kind = 'stale';
   }
   error(error) {
@@ -135,7 +149,7 @@ export class UIStudio {
     this.refreshFiles(); this.refreshSource(); return this.build();
   }
   async build({signal} = {}) {
-    this.saveProject(); const source = this.model.files[this.entryFile]; if (typeof source !== 'string') throw Error('Create an example or select an existing UI source');
+    this.nativeAsset = null; this.saveProject(); const source = this.model.files[this.entryFile]; if (typeof source !== 'string') throw Error('Create an example or select an existing UI source');
     this.active?.abort(); this.active = new AbortController(); const combined = AbortSignal.any([this.active.signal, signal].filter(Boolean));
     const generation = ++this.generation, file = this.entryFile, channel = this.preview.reset();
     this.layoutMode.value = 'off'; this.picking = false; this.pickButton.setAttribute('aria-pressed', 'false'); this.artifact = null;
@@ -146,9 +160,24 @@ export class UIStudio {
     this.snapshot = null; this.preview.load(html, channel); this.status.textContent = 'Loading isolated preview…'; this.renderOutline();
     return {file, entry: artifact.entry, backend: this.backend, nodes: artifact.nodes.length, revision: this.model.revision};
   }
-  assertLive() { if (!this.artifact || this.compiledGeneration !== this.generation || this.compiledSource !== this.model.files[this.entryFile]) throw Error('UI preview is stale; compile the current source first'); }
+  buildNative(bytes, {name = 'native-app.wasm', signal} = {}) {
+    signal?.throwIfAborted();
+    if (typeof name !== 'string' || name.length > 200 || !name.endsWith('.wasm') || /[/\\\0]/.test(name)) throw Error('Invalid native Wasm filename');
+    // A loaded binary is never silently reinterpreted as editable browser-compiler source.
+    const channel = this.preview.reset(), html = exportNativeHTML(bytes, {title: name, css: this.css.value, channel});
+    this.active?.abort(); const generation = ++this.generation;
+    this.nativeAsset = {bytes: bytes.slice(), name}; this.compiledGeneration = generation;
+    this.artifact = {format: 'ferrite-native-ui-v1', nodes: []}; this.snapshot = null;
+    this.selected = null; this.picking = false; this.layoutMode.value = 'off'; this.pickButton.setAttribute('aria-pressed', 'false');
+    this.outline.replaceChildren(); this.properties.replaceChildren();
+    this.app.dock.open('ui-studio'); this.preview.load(html, channel); this.renderState();
+    this.status.dataset.kind = 'building'; this.status.textContent = 'Loading trusted rustc Wasm in an isolated origin…';
+    return {backend: 'native-wasm', name, bytes: bytes.length, revision: this.model.revision, sourceEditing: false, mirDebugging: false};
+  }
+  assertSourcePreview() { if (this.nativeAsset) throw Error('Native Cargo binaries support live inspection and export. Source design and MIR stepping require a browser-compiler project.'); }
+  assertLive() { if (!this.artifact || this.compiledGeneration !== this.generation || !this.nativeAsset && this.compiledSource !== this.model.files[this.entryFile]) throw Error('UI preview is stale; compile the current source first'); }
   async inspect(signal) { this.assertLive(); const snapshot = await this.preview.request('inspect', {}, {signal}); this.snapshot = snapshot; this.renderState(); return this.state(); }
-  state() { return {file: this.file, entryFile: this.entryFile, stylesheet: this.project?.settings.stylesheet, entry: this.entry, revision: this.model.revision, selected: this.selected, backend: this.backend, stale: !this.artifact, snapshot: this.snapshot}; }
+  state() { return {file: this.file, entryFile: this.entryFile, stylesheet: this.project?.settings.stylesheet, entry: this.entry, revision: this.model.revision, selected: this.selected, backend: this.nativeAsset ? 'native-wasm' : this.backend, nativeArtifact: this.nativeAsset?.name, stale: !this.artifact, snapshot: this.snapshot}; }
   event(message) {
     // A retained older preview cannot navigate or overwrite a newer source revision.
     if (!this.artifact) return;
@@ -157,7 +186,7 @@ export class UIStudio {
     if (message.event === 'select') { if (this.artifact) this.select(message.id); return; }
     if (message.event === 'ready' || message.event === 'snapshot') {
       this.snapshot = message.snapshot; this.renderState();
-      if (message.event === 'ready' && this.artifact) { this.status.dataset.kind = 'ready'; this.status.textContent = `Live ${this.backend} preview · ${this.artifact.nodes.length} source nodes · isolated origin`; }
+      if (message.event === 'ready' && this.artifact) { this.status.dataset.kind = 'ready'; this.status.textContent = this.nativeAsset ? `Live native rustc Wasm · ${this.nativeAsset.name} · isolated origin · inspection/export only` : `Live ${this.backend} preview · ${this.artifact.nodes.length} source nodes · isolated origin`; }
     } else if (message.event.startsWith('debug-')) {
       if (this.snapshot) this.snapshot.debugger = message.detail;
       this.renderState(); const span = message.detail?.state?.next ?? message.detail?.state?.last?.span;
@@ -165,6 +194,7 @@ export class UIStudio {
     }
   }
   select(id, reveal = true) {
+    this.assertSourcePreview();
     const target = this.artifact?.nodes.find(node => node.id === id);
     if (target?.span.file && target.span.file !== this.file) { this.file = target.span.file; this.refreshFiles(); this.refreshSource({invalidate: false}); }
     const node = this.designer?.index.get(id); if (!node) throw Error('Selected source node no longer exists');
@@ -173,7 +203,7 @@ export class UIStudio {
     return {id, span: node.span};
   }
   async pick() {
-    this.assertLive(); this.picking = !this.picking; await this.preview.request('pick', {value: this.picking});
+    this.assertLive(); this.assertSourcePreview(); this.picking = !this.picking; await this.preview.request('pick', {value: this.picking});
     this.pickButton.setAttribute('aria-pressed', String(this.picking));
   }
   renderOutline() {
@@ -221,6 +251,7 @@ export class UIStudio {
     this.properties.append(palette, this.button('Insert child', () => this.edit({op: 'insert', node: node.id, markup: palette.value}), 'plus'));
   }
   async edit(operation, {signal} = {}) {
+    this.assertSourcePreview();
     if (!this.designer) throw Error('Fix UI syntax before visual editing');
     const file = this.file, source = this.model.read(file), revision = this.model.revision;
     const result = await this.compiler.compile({...this.model.files}, 'ui-design', {file, entryFile: this.entryFile, entry: this.entry, operation, revision}, signal);
@@ -229,7 +260,7 @@ export class UIStudio {
     this.refreshSource({preserve: true}); return this.build({signal});
   }
   async debug(command, signal) {
-    this.assertLive(); const result = await this.preview.request(`debug.${command}`, command === 'arm' ? {breakpoints: this.model.breakpointList} : {}, {signal});
+    this.assertLive(); this.assertSourcePreview(); const result = await this.preview.request(`debug.${command}`, command === 'arm' ? {breakpoints: this.model.breakpointList} : {}, {signal});
     if (this.snapshot) this.snapshot.debugger = result; this.renderState(); return result;
   }
   renderState() {
@@ -244,14 +275,21 @@ export class UIStudio {
     this.debugOutput.textContent = JSON.stringify({calls: this.snapshot?.calls, handles: this.snapshot?.handles, debugger: this.snapshot?.debugger}, null, 2)?.slice(0, 100000) ?? 'Preview an app to inspect its state.';
   }
   async download({hydrate = false} = {}) {
-    this.saveProject(); const file = this.entryFile, source = this.model.read(file);
-    const {html} = await this.compiler.compile({...this.model.files}, hydrate ? 'ui-render' : 'ui-export', {file, entry: this.entry, backend: this.backend, css: this.css.value});
+    let file, html, backend = this.backend;
+    if (this.nativeAsset) {
+      this.assertLive(); if (hydrate) throw Error('Native Cargo exports mount Wasm; native server hydration is not implemented');
+      file = this.nativeAsset.name; backend = 'native-wasm'; html = exportNativeHTML(this.nativeAsset.bytes, {title: file, css: this.css.value});
+    } else {
+      this.saveProject(); file = this.entryFile;
+      ({html} = await this.compiler.compile({...this.model.files}, hydrate ? 'ui-render' : 'ui-export', {file, entry: this.entry, backend: this.backend, css: this.css.value}));
+    }
     const url = URL.createObjectURL(new Blob([html], {type: 'text/html;charset=utf-8'})); const link = document.createElement('a');
-    link.href = url; link.download = file.split('/').pop().replace(/\.rs$/, '.html'); document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-    return {characters: html.length, backend: this.backend};
+    link.href = url; link.download = file.split('/').pop().replace(/\.(?:rs|wasm)$/, '.html'); document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return {characters: html.length, backend};
   }
   async command(command, args = {}, {signal} = {}) {
     if (args.expectedRevision !== undefined && args.expectedRevision !== this.model.revision) throw Error('Stale IDE revision');
+    if (command === 'ui.native.preview') return this.buildNative(decodeNativeBase64(args.wasm), {name: args.name, signal});
     if (command === 'ui.inspect') return this.inspect(signal);
     if (command === 'ui.preview') {
       if (args.file !== undefined) { this.model.read(args.file); this.loadProject(args.file); }

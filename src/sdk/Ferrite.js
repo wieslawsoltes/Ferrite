@@ -1,4 +1,4 @@
-import {createNativeWasmHost, mountNativeUI, exportNativeHTML} from '../ui-framework/NativeWasm.js';
+import {createNativeWasmHost, mountNativeUI, exportNativeHTML, decodeNativeBase64} from '../ui-framework/NativeWasm.js';
 import {createReactAdapter} from '../ui-framework/ReactAdapter.js';
 import {renderToString, renderToStaticMarkup, renderUIToString, exportHydratedHTML} from '../ui-framework/ServerRenderer.js';
 import {UIProject} from '../ui-framework/UIProject.js';
@@ -54,5 +54,5 @@ export function runScripts({document: doc = globalThis.document, root = doc, onE
   }
   return results;
 }
-export const Ferrite = Object.freeze({version: '0.3.0', createNativeWasmHost, mountNativeUI, exportNativeHTML, createReactAdapter, compileRust, compileUI, mountUI, runRust, runScripts, exportHTML, UI, createUIRuntime, SourceDesigner, UIProject, CanvasLayout, renderToString, renderToStaticMarkup, renderUIToString, exportHydratedHTML});
-export {createNativeWasmHost, mountNativeUI, exportNativeHTML, createReactAdapter, exportHTML, UI, createUIRuntime, SourceDesigner, UICompiler, UISession, UIProject, CanvasLayout, renderToString, renderToStaticMarkup, renderUIToString, exportHydratedHTML};
+export const Ferrite = Object.freeze({version: '0.3.0', createNativeWasmHost, mountNativeUI, exportNativeHTML, decodeNativeBase64, createReactAdapter, compileRust, compileUI, mountUI, runRust, runScripts, exportHTML, UI, createUIRuntime, SourceDesigner, UIProject, CanvasLayout, renderToString, renderToStaticMarkup, renderUIToString, exportHydratedHTML});
+export {createNativeWasmHost, mountNativeUI, exportNativeHTML, decodeNativeBase64, createReactAdapter, exportHTML, UI, createUIRuntime, SourceDesigner, UICompiler, UISession, UIProject, CanvasLayout, renderToString, renderToStaticMarkup, renderUIToString, exportHydratedHTML};

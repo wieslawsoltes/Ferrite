@@ -174,3 +174,11 @@ host.mount(Uint8Array.from(atob(${scriptJSON(data)}),c=>c.charCodeAt(0)),documen
   if (/<\/script/i.test(script)) throw Error('Unexpected script terminator');
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>${safeTitle}</title></head><body><main id="app"></main><script>${script}</script></body></html>`;
 }
+
+/** Strict binary transport; no URL fetch or implicit execution. */
+export function decodeNativeBase64(value) {
+  if (typeof value !== 'string' || !value.length || value.length > 11184812 || value.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) throw Error('Invalid bounded native Wasm base64');
+  const binary = atob(value);
+  if (btoa(binary) !== value) throw Error('Noncanonical native Wasm base64');
+  return createNativeWasmHost(UI).validate(Uint8Array.from(binary, c => c.charCodeAt(0)));
+}

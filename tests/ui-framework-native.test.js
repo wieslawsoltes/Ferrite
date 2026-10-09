@@ -28,3 +28,10 @@ test('native SDK functions are available in the ESM and standalone surfaces', as
   const {Ferrite} = await import('../src/sdk/Ferrite.js');
   for (const name of ['mountNativeUI','exportNativeHTML','createNativeWasmHost']) assert.equal(typeof Ferrite[name], 'function');
 });
+
+test('native binary transport rejects noncanonical, oversized and invalid base64', async () => {
+  const {decodeNativeBase64} = await import('../src/ui-framework/NativeWasm.js');
+  const encoded = Buffer.from(bounded()).toString('base64');
+  assert.deepEqual(decodeNativeBase64(encoded), bounded());
+  for (const value of ['', '====', encoded + '\n', 'AA==', '*'.repeat(32), 'A'.repeat(11184816)]) assert.throws(() => decodeNativeBase64(value));
+});

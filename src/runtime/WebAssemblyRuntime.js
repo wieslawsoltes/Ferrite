@@ -36,6 +36,23 @@ export class WebAssemblyRuntime {
       case 'unary':return value=>r.unary(spec.operator,value,spec.type);
       case 'cast':return value=>r.cast(value,spec.type);
       case 'aggregate':return (...values)=>r.aggregate(spec.form,values,spec.names,spec.tag);
+      case 'aggregate_frame': {
+        if(!Array.isArray(spec.slots)||spec.slots.length>100000||spec.slots.some(slot=>!Number.isInteger(slot)||slot<0))
+          throw Error('Invalid Wasm aggregate register list');
+        const slots=spec.slots.slice();
+        return frame=>{
+          if(!Array.isArray(frame))r.fail('Invalid Wasm aggregate frame');
+          const values=new Array(slots.length);
+          for(let i=0;i<slots.length;i++){
+            const cell=frame[slots[i]];
+            if(slots[i]>=frame.length||cell===null||typeof cell!=='object'||!Object.hasOwn(cell,'value'))r.fail('Invalid Wasm aggregate register');
+            if(cell.value===undefined)r.fail('Uninitialized Wasm aggregate register','R_UNINITIALIZED');
+            values[i]=cell.value;
+          }
+          // Snapshot evaluated payloads, never retain the mutable activation frame.
+          return r.aggregate(spec.form,values,spec.names,spec.tag);
+        };
+      }
       case 'repeat':return value=>{if(!Number.isInteger(spec.count)||spec.count<0||spec.count>100000)r.fail('Invalid array repetition size');return Array.from({length:spec.count},()=>r.clone(value));};
       case 'get':return (value,index)=>r.get(value,spec.index?index:spec.field,spec.index,spec.deref,spec.copy);
       case 'tag':return value=>value.tag;

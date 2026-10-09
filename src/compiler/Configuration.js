@@ -54,6 +54,10 @@ export class Configuration {
       for(const [key,value] of Object.entries(node))if(!['attributes','configuration','span','loc','meta'].includes(key))node[key]=visit(value,context);
       // cfg removes tuple fields before their positional indices are assigned.
       if (node.kind === 'struct' && node.form === 'tuple') node.fields.forEach((field, i) => { field.name = String(i); });
+      if (node.kind === 'enumVariant' && node.members) {
+        if (node.form === 'tuple') node.members.forEach((field, i) => { field.name = String(i); });
+        node.fields = node.members.map(field => field.type);
+      }
       return node;
     };
     return {ast:visit(result,options)??{kind:'crate',items:[]},decisions};

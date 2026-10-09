@@ -29,7 +29,7 @@ export class PatternLowerer {
     } else if (['tuplePattern', 'arrayPattern'].includes(pattern.kind)) {
       pattern.items.forEach((p, i) => { if (p.kind !== 'wildcard') this.bind(p, ir.emit('get', {value, field: String(i), index: null, deref: false, copy: false}, p, p.type)); });
     } else if (pattern.kind === 'variantPattern') {
-      pattern.items.forEach((p, i) => this.bind(p, ir.emit('payload', {value, index: i}, p, p.type)));
+      pattern.items.forEach((p, i) => { if (p.kind !== 'wildcard') this.bind(p, ir.emit('payload', {value, index: i}, p, p.type)); });
     }
   }
 

@@ -63,6 +63,7 @@ export class PatternCoverage {
     if (enumeration) {
       const substitution = new Map(enumeration.generics.map((g, i) => [g.name, app.args[i]]));
       return enumeration.variants.map(variant => ({kind: 'variant', key: `${enumeration.name}::${variant.name}`,
+        fields: variant.form === 'record' ? variant.members.map(field => field.name) : null,
         types: variant.fields.map(t => this.index.type(T.substitute(t, substitution), enumeration.module))}));
     }
     const array = T.array(type);
@@ -109,7 +110,9 @@ export class PatternCoverage {
   }
 
   describe(constructor, fields) {
-    if (constructor.kind === 'variant') return constructor.key + (fields.length ? `(${fields.join(', ')})` : '');
+    if (constructor.kind === 'variant') return constructor.key + (constructor.fields
+      ? ` { ${constructor.fields.map((name, i) => `${name}: ${fields[i]}`).join(', ')} }`
+      : fields.length ? `(${fields.join(', ')})` : '');
     if (constructor.kind === 'array') return `[${fields.slice(0, 32).join(', ')}${fields.length > 32 ? ', ..' : ''}]`;
     if (constructor.kind === 'tuple') return `(${fields.join(', ')}${fields.length === 1 ? ',' : ''})`;
     if (constructor.kind === 'struct') return `${constructor.key} { ${constructor.fields.map((name, i) => `${name}: ${fields[i]}`).join(', ')} }`;

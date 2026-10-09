@@ -1,3 +1,4 @@
+import {EnumRecordAnalyzer} from '../EnumRecordAnalyzer.js';
 import {Diagnostic} from '../Diagnostic.js';
 import {TypeSystem as T} from '../TypeSystem.js';
 
@@ -100,6 +101,26 @@ export class AssigneeAnalyzer {
       delete node.args; delete node.callee; delete node.macro; return;
     }
     if (node.kind === 'structLiteral') {
+      const constructor = this.a.index.constructorFor(node.name, this.ctx.instance.fn.module, node);
+      if (constructor?.kind === 'enum') {
+        if (constructor.owner.variants.length !== 1)
+          throw new Diagnostic('E0005', 'An enum assignee must be irrefutable (a single-variant enum)', node.span);
+        const order = EnumRecordAnalyzer.fields(this.a.index, node, constructor, !!node.rest), {owner} = constructor;
+        const supplied = node.typeArguments?.map(type => this.a.normalize(type, this.ctx, node)) ?? constructor.typeArguments ?? [];
+        if (supplied.length && supplied.length !== owner.generics.length)
+          throw new Diagnostic('E0107', 'Incorrect number of assignee type arguments', node.span);
+        const substitution = new Map(owner.generics.map((g, i) => [g.name, supplied[i] ?? null]));
+        node.items = node.fields.map((field, i) => {
+          const item = field.value; item.assigneeIndex = order[i]; this.prepare(item, depth + 1);
+          const hint = this.hint(item);
+          if (!hint.includes('_')) T.unify(this.a.index.type(constructor.variant.fields[order[i]], owner.module,
+            null, new Set(substitution.keys()), item), hint, substitution, item);
+          return item;
+        });
+        node.kind = 'constructorAssignee'; node.assignee = 'variant'; node.name = owner.name; node.assigneeTag = constructor.tag;
+        node.assigneeHint = owner.name + (owner.generics.length ? '<' + owner.generics.map(g => substitution.get(g.name) ?? '_').join(',') + '>' : '');
+        delete node.fields; delete node.rest; return;
+      }
       node.assignee = 'struct'; const module = this.ctx.instance.fn.module;
       const alias = this.a.index.resolve(this.a.index.aliases, node.name, module, node, false);
       const spelling = node.name + (node.typeArguments?.length ? '<' + node.typeArguments.join(',') + '>' : '');

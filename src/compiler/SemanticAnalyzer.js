@@ -335,8 +335,9 @@ export class SemanticAnalyzer {
   }
   construct(node, constructor, args, ctx, expected) {
     const {owner, variant, tag, form} = constructor;
+    if (form === 'record' && node.kind !== 'structLiteral') throw new Diagnostic('E0533', `${tag} requires named-field braces`, node.span);
     if (form === 'unit' && node.kind === 'call') throw new Diagnostic('E0618', `${tag} is a value, not a callable constructor`, node.span);
-    if (form === 'tuple' && node.kind !== 'call') throw new Diagnostic('F_CONSTRUCTOR_VALUE', 'Call the tuple constructor directly; function-item values are not yet supported', node.span);
+    if (form === 'tuple' && !['call', 'structLiteral'].includes(node.kind)) throw new Diagnostic('F_CONSTRUCTOR_VALUE', 'Call the tuple constructor directly; function-item values are not yet supported', node.span);
     if (variant.fields.length !== args.length) throw new Diagnostic('E0061', `${tag} expects ${variant.fields.length} values`, node.span);
     const explicit = (node.callee?.typeArguments ?? node.typeArguments ?? []).map(type => this.normalize(type, ctx, node));
     if (explicit.length && explicit.length !== owner.generics.length) throw new Diagnostic('E0107', 'Incorrect number of constructor type arguments', node.span);
@@ -345,6 +346,14 @@ export class SemanticAnalyzer {
       const formal = this.index.type(T.substitute(variant.fields[i], substitution), owner.module, null, new Set(substitution.keys()), node);
       T.unify(formal, this.infer(arg, ctx, substitution.has(formal) ? null : formal), substitution, arg);
     });
+    for (const generic of owner.generics) {
+      const type = substitution.get(generic.name);
+      for (const bound of generic.bounds) this.structures.bound(type ?? '_', bound, owner, substitution, node);
+    }
+    for (const predicate of owner.predicates ?? []) {
+      const type = this.index.type(T.substitute(predicate.type, substitution), owner.module, owner.name);
+      for (const bound of predicate.bounds) this.structures.bound(type, bound, owner, substitution, node);
+    }
     const type = owner.name + (owner.generics.length ? '<' + owner.generics.map(g => substitution.get(g.name) ?? '_').join(',') + '>' : '');
     node.variant = tag; node.args = args;
     return type;

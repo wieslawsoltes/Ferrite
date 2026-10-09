@@ -127,8 +127,7 @@ constructors, constants, a generic swap and a single-variant enum assignment.
 ## Explicit remaining boundaries
 
 First-class constructor function values and function-pointer coercion produce
-`F_CONSTRUCTOR_VALUE`; call supported constructors directly. Enum record variants,
-full generic impls, reference/slice binding modes, delayed initialization,
+`F_CONSTRUCTOR_VALUE`; call supported constructors directly. full generic impls, reference/slice binding modes, delayed initialization,
 projection-sensitive partial moves/NLL, temporary-reference promotion,
 user-defined Drop and complete trait/standard-library semantics remain outside
 this increment. Reference-carrying destructuring transfers retain the explicit

@@ -51,3 +51,5 @@ The fixture corpus is read directly from source; counts may grow between commits
 compares indexed and linear field lookup, and also records paired cold compilation
 timings with byte-identical generated artifacts. Lookup stress speedups are not
 end-to-end compiler speedups.
+
+[Named enum variants](enum-records.md) add declaration-ordered payloads with source-ordered initialization, named coverage witnesses, and irrefutable record-variant assignment. Declaration-keyed field indices and the fixed-arity wide-aggregate Wasm path have cache, source-map, ownership-isolation and cross-backend regressions.

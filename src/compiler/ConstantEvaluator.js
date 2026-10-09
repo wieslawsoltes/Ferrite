@@ -75,8 +75,25 @@ export class ConstantEvaluator {
       const reachable = this.reachable(instance);
       for (const current of reachable) this.validate(current);
       OwnershipAnalyzer.analyze({instances: reachable});
-      const functions = MirLowerer.lower({instances: reachable});
-      this.analyzer.discriminants.requireLayouts(functions);
+      // Taking a function's address does not execute its body. Include referenced
+      // implementations for MIR signature verification without imposing const-call
+      // restrictions on those unreachable-at-evaluation targets.
+      const all=new Map(reachable.map(i=>[i.key,i]));
+      const include=key=>{
+        if(all.has(key))return;const value=this.analyzer.instances.get(key);
+        if(!value||value.substitution)throw new Diagnostic('E0391','Function address depends on incomplete type checking',origin?.span);
+        all.set(key,value);value.calls.forEach(call=>include(call.to));addresses(value.fn.body);
+      };
+      const addresses=node=>{if(!node||typeof node!=='object')return;
+        if(node.pointerTarget)include(node.pointerTarget);
+        for(const [key,value] of Object.entries(node))if(!['span','loc','binding'].includes(key))addresses(value);
+      };
+      reachable.forEach(i=>addresses(i.fn.body));
+      const functions = MirLowerer.lower({instances: [...all.values()]});
+      // Address-only targets are verified but not executed during CTFE.
+      // Requiring their local layouts would invent enum dependency cycles.
+      const executed = new Set(reachable.map(item => item.key));
+      this.analyzer.discriminants.requireLayouts(functions.filter(fn => executed.has(fn.instance)));
       MirVerifier.verify(functions, {allowDeferredDiscriminants: true});
       const remaining = Math.min(this.maxExpressionSteps, this.remainingSteps());
       if (remaining <= 0) throw new Diagnostic('F_CONST_BUDGET', 'Compilation-wide constant evaluation instruction budget exceeded', origin?.span);
@@ -133,10 +150,12 @@ export class ConstantEvaluator {
     const visit = node => {
       if (!node || typeof node !== 'object') return;
       if (Array.isArray(node)) { node.forEach(visit); return; }
+      if(node.kind==='functionCoercion'&&node.value.kind==='closure'&&!node.value.fields.length)return;
       if (node.kind === 'for' || node.kind === 'closure') throw new Diagnostic('E0015', `${node.kind} is not supported in browser const contexts`, node.span);
       if (node.kind === 'binary' && !T.numeric(node.operandType) && !['bool', 'char'].includes(node.operandType)) {
         throw new Diagnostic('E0015', 'This operator would require a non-const trait implementation', node.span);
       }
+      if(node.indirect)throw new Diagnostic('E0015','Function-item trait calls are not allowed in a constant context',node.span);
       if (node.kind === 'call' || node.kind === 'intrinsic') {
         if (node.resolved) {
           const fn = this.analyzer.instances.get(node.resolved)?.fn;
@@ -160,6 +179,7 @@ export class ConstantEvaluator {
     if (++budget.count > this.maxValues) throw new Diagnostic('F_CONST_BUDGET', 'Constant value exceeds the materialization budget', origin?.span);
     const node = {kind: 'literal', id: `${origin?.id}:const:${path}`, span: origin?.span, type, copy: this.analyzer.hasTrait(type, 'Copy')};
     if (T.numeric(type) || ['bool', 'char', '&str', '()'].includes(type)) return {...node, value: LiteralValue.encode(value)};
+    if(T.function(type))return {...node,kind:'functionPointer',pointerTarget:value.target,pointerSignature:type};
     const child = (v, t, key) => this.materialize(v, t, origin, `${path}.${key}`, budget);
     const array = T.array(type);
     if (array) {

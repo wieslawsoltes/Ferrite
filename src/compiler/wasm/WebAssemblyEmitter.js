@@ -37,6 +37,8 @@ export class WebAssemblyEmitter {
   }
   descriptor(i) {
     switch (i.op) {
+      case 'function':return [{op:'function',target:i.callee,type:i.signature},0];
+      case 'callIndirect':return [{op:'callIndirect',type:i.signature},1+i.args.length];
       case 'const': return [{op:'literal', value:LiteralValue.encode(i.value), type:i.type},0];
       case 'read': case 'borrow': return [{op:i.op,place:this.place(i.place),copy:!!i.copy},1+i.place.path.filter(p=>p.kind==='index').length];
       case 'write': return [{op:'write',place:this.place(i.place)},2+i.place.path.filter(p=>p.kind==='index').length,null];
@@ -87,7 +89,7 @@ export class WebAssemblyEmitter {
     const offset=module.section(10,code);
     this.mappings=mappings.map(m=>({...m,start:m.start+offset,end:m.end+offset}));
     const metadata={version:1,entry:this.entry,abi:'externref-checked-host-v1',imports:this.imports,spans:this.spans,
-      sourceMap:this.mappings,functions:this.functions.map(fn=>({name:fn.instance,params:fn.params.length,returnType:fn.returnType,span:fn.span}))};
+      sourceMap:this.mappings,functions:this.functions.map(fn=>({name:fn.instance,params:fn.params.length,parameterTypes:fn.params.map(slot=>fn.registers[slot].type),returnType:fn.returnType,span:fn.span}))};
     module.section(0,new Writer().string('ferrite.abi').append(new TextEncoder().encode(JSON.stringify(metadata))));
     const bytes=module.finish();
     if (typeof WebAssembly!=='undefined'&&!WebAssembly.validate(bytes)) throw Error('Generated WebAssembly failed binary validation');
@@ -125,7 +127,8 @@ export class WebAssemblyEmitter {
         else if(i.op==='copy') {get(i.value);if(i.copy)call(this.clone);put(i.target);synchronize(i.target);}
         else {
           switch(i.op){
-            case 'const':break;
+            case 'function':case 'const':break;
+            case 'callIndirect':get(i.value);i.args.forEach(get);break;
             case 'read':case 'borrow':frameGet();indices(i.place);break;
             case 'write':frameGet();get(i.value);indices(i.place);break;
             case 'binary':get(i.left);get(i.right);break;

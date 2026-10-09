@@ -3,6 +3,12 @@ import {Diagnostic} from './Diagnostic.js';
 
 /** Verifies edges, registers and definite initialization before either backend runs. */
 export class MirVerifier {
+  static argumentType(expected, actual) {
+    // A call may reborrow &mut T as &T, but cannot change the function
+    // pointer's stored signature or recursively weaken pointee types.
+    return expected === actual || actual === '!' ||
+      expected.startsWith('&') && !expected.startsWith('&mut ') && actual === '&mut ' + expected.slice(1);
+  }
   static successors(block) {
     const term = block.terminator;
     if (!term) return [];
@@ -39,7 +45,7 @@ export class MirVerifier {
     const map = new Map(fn.blocks.map(block => [block.id, block]));
     const fail = (message, span) => { throw new Diagnostic('F_MIR', `${fn.instance}: ${message}`, span ?? fn.span); };
     if (map.size !== fn.blocks.length || !map.has(fn.entry)) fail('Invalid block identities');
-    const operations = new Set(['const', 'read', 'borrow', 'write', 'copy', 'binary', 'unary', 'cast', 'aggregate', 'repeat', 'get', 'tag', 'payload', 'discriminant', 'builtin', 'call']);
+    const operations = new Set(['const', 'read', 'borrow', 'write', 'copy', 'binary', 'unary', 'cast', 'aggregate', 'repeat', 'get', 'tag', 'payload', 'discriminant', 'builtin', 'call', 'function', 'callIndirect']);
     const terms = new Set(['goto', 'branch', 'rangeSwitch', 'return', 'unreachable']);
     const register = (slot, span) => {
       if (!Number.isInteger(slot) || slot < 0 || slot >= fn.registers.length) fail(`Invalid register ${slot}`, span);
@@ -60,6 +66,21 @@ export class MirVerifier {
         }
         for (const slot of this.definitions(instruction)) register(slot, instruction.span);
         for (const slot of this.uses(instruction)) register(slot, instruction.span);
+        if (instruction.op === 'function' || instruction.op === 'callIndirect') {
+          const signature=T.function(instruction.signature);
+          if(!signature)fail('Invalid callable signature',instruction.span);
+          if(instruction.op==='function'){
+            const target=names.get(instruction.callee);
+            if(!target||target.params.length!==signature.params.length||target.returnType!==signature.result||
+                target.params.some((slot,i)=>target.registers[slot].type!==signature.params[i])||instruction.type!==instruction.signature)
+              fail('Function pointer target/signature mismatch',instruction.span);
+          }else{
+            if(register(instruction.value,instruction.span).type!==instruction.signature||!Array.isArray(instruction.args)||
+                instruction.args.length!==signature.params.length||instruction.type!==signature.result||
+                instruction.args.some((slot,i)=>!this.argumentType(signature.params[i],register(slot,instruction.span).type)))
+              fail('Indirect call signature mismatch',instruction.span);
+          }
+        }
         if (instruction.op === 'discriminant') {
           if (!T.integer(instruction.type) || typeof instruction.enumName !== 'string' || !instruction.enumName ||
               T.application(register(instruction.value).type).name !== instruction.enumName) fail('Invalid enum discriminant types', instruction.span);
@@ -78,6 +99,8 @@ export class MirVerifier {
           const target = names.get(instruction.callee);
           if (!target) fail(`Unresolved call ${instruction.callee}`, instruction.span);
           if (instruction.args.length !== target.params.length) fail(`Argument count mismatch for ${instruction.callee}`, instruction.span);
+          if (instruction.args.some((slot, i) => !this.argumentType(target.registers[target.params[i]].type, register(slot, instruction.span).type)))
+            fail(`Argument type mismatch for ${instruction.callee}`, instruction.span);
           if (instruction.type !== target.returnType) fail(`Call result type mismatch for ${instruction.callee}`, instruction.span);
         }
       }

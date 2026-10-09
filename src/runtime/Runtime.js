@@ -35,7 +35,23 @@ export class Runtime {
     if (type === 'f32' || type === 'f64') return this.normalize(Number(value), type);
     return value;
   }
+  functionPointer(target,signature) {
+    if(typeof target!=='string'||typeof signature!=='string'||!signature.startsWith('fn('))this.fail('Invalid function pointer','R_CALL');
+    return Object.freeze({__functionPointer:true,target,signature});
+  }
+  functionTarget(value,signature) {
+    if(!value||value.__functionPointer!==true||typeof value.target!=='string'||value.signature!==signature)this.fail('Invalid function pointer signature','R_CALL');
+    return value.target;
+  }
+  invokeFunction(functions,value,signature,args) {
+    const fn=functions.get(this.functionTarget(value,signature));
+    if(typeof fn!=='function')this.fail('Unknown indirect call target','R_CALL');
+    return fn(...args);
+  }
   binary(op, a, b, type) {
+    if(type?.startsWith('fn(')&&['==','!='].includes(op)){
+      const equal=this.functionTarget(a,type)===this.functionTarget(b,type);return op==='=='?equal:!equal;
+    }
     switch (op) {
       case '==': return a === b;
       case '!=': return a !== b;

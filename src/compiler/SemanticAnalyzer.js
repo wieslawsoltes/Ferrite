@@ -1,3 +1,4 @@
+import {FunctionValueAnalyzer} from './FunctionValueAnalyzer.js';
 import {EnumDiscriminants} from './EnumDiscriminants.js';
 import {StructAnalyzer} from './StructAnalyzer.js';
 import {AssigneeAnalyzer} from './assignments/AssigneeAnalyzer.js';
@@ -18,8 +19,8 @@ export class SemanticAnalyzer {
     this.index = new SymbolIndex(ast, {validate: false});
     // Synthesized closure declarations belong to this analysis session. Never replay
     // cached callers without their anonymous declaration/capture environment.
-    if(JSON.stringify(ast).includes('"kind":"closure"'))queryCache=null;
-    this.closures=new ClosureAnalyzer(this); this.structures = new StructAnalyzer(this);
+    if(JSON.stringify(ast).includes('"kind":"closure"')||FunctionValueAnalyzer.requiresFreshQueries(ast,this.index))queryCache=null;
+    this.functionValues=new FunctionValueAnalyzer(this);this.closures=new ClosureAnalyzer(this); this.structures = new StructAnalyzer(this);
     this.patterns = new PatternAnalyzer(this); this.coverage = new PatternCoverage(this.index); this.patternReports = [];
     this.queryCache = queryCache; this.environment = queryCache ? SemanticQueryCache.environment(this.index) : null;
     this.instances = new Map(); this.obligations = []; this.warnings = [];
@@ -44,9 +45,9 @@ export class SemanticAnalyzer {
       this.instantiate(fn, types, [], fn);
     }
     for (const instance of this.instances.values()) if (instance.fn.isConst) this.constants.validate(instance);
-    this.closures.finish();
+    this.closures.finish();this.functionValues.finish();
     this.discriminants.annotate(this.instances.values());
-    return {discriminants: this.discriminants.snapshot(), constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
+    return {discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
       symbols: this.index.symbols, structures: [...this.index.structs.values()],
       enums: [...this.index.enums.values()], warnings: this.warnings, entry: this.entryKey,
       capabilities: {ownership: 'conservative whole-local analysis', traits: 'concrete impls and built-in bounds'}};
@@ -56,7 +57,9 @@ export class SemanticAnalyzer {
   hasTrait(type, bound, depth = 0) {
     if (depth > 32) return false;
     const closure=this.closures.get(type);
-    if(ClosureAnalyzer.bound(bound))return this.closures.satisfies(type,bound);
+    if(ClosureAnalyzer.bound(bound))return (this.functionValues.get(type)||this.functionValues.pointer(type))?this.functionValues.satisfies(type,bound):this.closures.satisfies(type,bound);
+    if(!T.reference(type)&&this.functionValues.get(type))return ['Copy','Clone','Send','Sync'].includes(bound);
+    if(T.function(type))return ['Copy','Clone','Send','Sync','PartialEq','Eq'].includes(bound);
     if(closure&&['Copy','Clone'].includes(bound))return this.closures.copy(closure);
     bound = bound.split('::').at(-1);
     if (bound === 'Display') return T.numeric(type) || ['bool', 'char', '&str', 'String'].includes(type);
@@ -154,6 +157,8 @@ export class SemanticAnalyzer {
       }
       case 'assign': case 'return': case 'break': case 'continue':
       case 'while': case 'whileLet': case 'for': return this.statement(node, ctx);
+      case 'functionPointer':case 'functionCoercion':type=node.pointerSignature;break;
+      case 'functionItem': type=this.functionValues.canonical(node.itemType);break;
       case 'closure': type=this.closures.create(node,ctx);break;
       case 'literal': {
         type = node.type;
@@ -170,15 +175,18 @@ export class SemanticAnalyzer {
       }
       case 'variable': {
         const binding = ctx.lookup(node.name, node, false);
-        if (binding) { node.binding = binding; type = binding.type; break; }
+        if (binding) { node.binding = binding; type = this.functionValues.canonical(binding.type); break; }
         const constant = this.index.resolve(this.index.constants, node.name, ctx.instance.fn.module, node, false);
         if (constant) {
           const result = this.constants.constant(constant, node);
           node.constant = structuredClone(result.expression); type = result.type; break;
         }
         const constructor = this.index.constructorFor(node.name === 'Self' ? ctx.instance.fn.owner : node.name.startsWith('Self::') && ctx.instance.fn.owner ? ctx.instance.fn.owner + node.name.slice(4) : node.name, ctx.instance.fn.module, node);
+        if(constructor?.form==='tuple'){type=this.functionValues.create(node,constructor,ctx,expected);break;}
         if (constructor?.kind === 'struct') { type = this.structures.construct(node, constructor, [], ctx, expected); break; }
         if (constructor && !constructor.variant.fields.length) { type = this.construct(node, constructor, [], ctx, expected); break; }
+        const fn=this.index.resolve(this.index.functions,node.name,ctx.instance.fn.module,node,false);
+        if(fn){type=this.functionValues.create(node,fn,ctx,expected);break;}
         throw new Diagnostic('E0425', `Unresolved identifier '${node.name}'`, node.span);
       }
       case 'tuple': {
@@ -189,7 +197,14 @@ export class SemanticAnalyzer {
         const hint = T.array(expected ?? '')?.element;
         let itemType = node.items.length ? '!' : hint;
         if (!node.items.length && !hint) throw new Diagnostic('E0282', 'Empty array needs a type annotation', node.span);
-        for (const item of node.items) itemType = T.join(itemType, this.infer(item, ctx, itemType === '!' ? hint : itemType), item);
+        for (const item of node.items) {
+          // Preserve contextual inference for e.g. [Some(4), None]. Distinct
+          // item/closure types are instead joined at the array coercion site.
+          const contextual = hint ?? (itemType !== '!' && !this.functionValues.get(itemType) && !this.closures.get(itemType) ? itemType : null);
+          const actual = this.infer(item, ctx, contextual);
+          if (itemType === '!') itemType = actual;
+        }
+        if(node.items.length)itemType=this.functionValues.join(node.items,ctx,node);
         type = `[${itemType};${node.items.length}]`; break;
       }
       case 'repeatArray': {
@@ -239,7 +254,7 @@ export class SemanticAnalyzer {
           node.kind = 'literal'; node.value = literal.value; node.type = type;
           return type;
         }
-        const operand = this.infer(node.value, ctx, expected);
+        const operand = this.infer(node.value, ctx, node.op==='&'?null:expected);
         if (node.op === '&') { this.place(node.value, ctx, node.mutable); type = '&' + (node.mutable ? 'mut ' : '') + operand; }
         else if (node.op === '*') {
           if (!T.reference(operand) || operand === '&str') throw new Diagnostic('E0614', `Cannot dereference ${operand}`, node.span);
@@ -259,7 +274,7 @@ export class SemanticAnalyzer {
         if (!shift) T.unify(left, right, new Map(), node);
         if (logical) { T.unify('bool', left, new Map(), node); type = 'bool'; }
         else if (['==', '!=', '<', '>', '<=', '>='].includes(node.op)) {
-          if (!T.numeric(left) && !['bool', 'char', '&str', 'String'].includes(left))
+          if (!T.numeric(left) && !['bool', 'char', '&str', 'String'].includes(left) && !(T.function(left)&&['==','!='].includes(node.op)))
             throw new Diagnostic('F_COMPARE', `Comparison on ${left} is not implemented`, node.span);
           type = 'bool';
         } else if (shift) {
@@ -275,8 +290,9 @@ export class SemanticAnalyzer {
         node.operandType = left; break;
       }
       case 'cast': {
-        const source = this.infer(node.value, ctx);
         node.target = this.normalize(node.target, ctx, node);
+        const source = this.infer(node.value, ctx,T.function(node.target)?node.target:null);
+        if(T.function(node.target)){type=node.target;node.kind='pointerCast';break;}
         const enumeration = this.index.enums.get(T.application(source).name);
         if (enumeration && T.integer(node.target)) {
           this.discriminants.checkCast(enumeration, node);
@@ -298,13 +314,13 @@ export class SemanticAnalyzer {
         ctx.push(); this.pattern(node.pattern, scrutinee, ctx);
         const yes = this.block(node.then, ctx, expected); ctx.pop();
         const no = node.otherwise ? this.infer(node.otherwise, ctx, expected) : '()';
-        type = T.join(yes, no, node); break;
+        type=node.otherwise?this.functionValues.join([node.then,node.otherwise],ctx,node):T.join(yes,no,node);break;
       }
       case 'ifExpr': {
         T.unify('bool', this.infer(node.condition, ctx, 'bool'), new Map(), node.condition);
         const yes = this.block(node.then, ctx, expected);
         const no = node.otherwise ? this.infer(node.otherwise, ctx, expected) : '()';
-        type = T.join(yes, no, node); break;
+        type=node.otherwise?this.functionValues.join([node.then,node.otherwise],ctx,node):T.join(yes,no,node);break;
       }
       case 'loopExpr': case 'labelBlock': {
         const loop = {kind: node.kind === 'labelBlock' ? 'block' : 'loop', id: node.id, label: node.label, type: '!', expected};
@@ -325,7 +341,7 @@ export class SemanticAnalyzer {
           if (arm.guard) T.unify('bool', this.infer(arm.guard, ctx, 'bool'), new Map(), arm.guard);
           else { patterns.push(arm.pattern); wildcard = this.coverage.analyze(patterns, scrutinee, node).exhaustive; }
           const value = this.infer(arm.body, ctx, expected ?? (result === '!' ? null : result));
-          try { result = T.join(result, value, arm.body); }
+          try { result = this.functionValues.join(node.arms.slice(0,node.arms.indexOf(arm)+1).map(a=>a.body),ctx,arm.body); }
           catch { throw new Diagnostic('E0308', `Incompatible match arm types ${result} and ${value}`, arm.body.span); }
           ctx.pop();
         }
@@ -344,6 +360,7 @@ export class SemanticAnalyzer {
       case 'call': type = node.macro ? this.intrinsic({...node, name: node.callee.name}, ctx, expected, node) : this.call(node, ctx, expected); break;
       default: throw new Diagnostic('F0203', `No type rule for '${node.kind}'`, node.span);
     }
+    type=this.functionValues.coerce(node,type,expected,ctx);
     node.copy = this.hasTrait(type, 'Copy');
     if(this.closures.get(type)?.node.borrowCarrier)node.borrowCarrier=true;
     return this.annotate(node, type);
@@ -435,8 +452,10 @@ export class SemanticAnalyzer {
     return name === 'format' ? 'String' : name === 'panic' ? '!' : '()';
   }
   call(node, ctx, expected) {
-    if(!['variable','field'].includes(node.callee.kind)||(node.callee.kind==='variable'&&ctx.lookup(node.callee.name,node.callee,false))){
+    if(node.callee.parenthesized||!['variable','field'].includes(node.callee.kind)||(node.callee.kind==='variable'&&(ctx.lookup(node.callee.name,node.callee,false)||this.index.resolve(this.index.constants,node.callee.name,ctx.instance.fn.module,node.callee,false)))){
       const type=this.infer(node.callee,ctx),closure=this.closures.get(type);
+      if(this.functionValues.pointer(type))return this.functionValues.callPointer(node,ctx,type);
+      if(this.functionValues.get(type))return this.functionValues.call(node,ctx,type);
       if(closure)return this.closures.call(node,ctx,type);
       if(node.callee.kind!=='field')throw new Diagnostic('E0618',`${type} is not callable`,node.callee.span);
     }

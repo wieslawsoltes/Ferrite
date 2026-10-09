@@ -28,6 +28,12 @@ export class WebAssemblyRuntime {
       case 'tick':return index=>{if(!Number.isInteger(index)||index<0||index>=this.metadata.spans.length)r.fail('Invalid Wasm source position');r.tick(this.metadata.spans[index]);};
       case 'truth':return value=>{if(typeof value!=='boolean')r.fail('WebAssembly branch requires bool');return value?1:0;};
       case 'clone':return value=>r.clone(value);
+      case 'function':return ()=>r.functionPointer(spec.target,spec.type);
+      case 'callIndirect':return (value,...args)=>{
+        const target=r.functionTarget(value,spec.type),fn=this.metadata.functions.find(f=>f.name===target);
+        if(!fn||`fn(${fn.parameterTypes?.join(',')})->${fn.returnType}`!==spec.type||args.length!==fn.params||typeof this.instance.exports[target]!=='function')r.fail('Invalid Wasm indirect target','R_CALL');
+        return this.instance.exports[target](...args);
+      };
       case 'literal':return ()=>r.literal(spec.value,spec.type);
       case 'borrow':return (frame,...indices)=>this.reference(spec.place,frame,indices);
       case 'read':return (frame,...indices)=>r.read(this.reference(spec.place,frame,indices),spec.copy);

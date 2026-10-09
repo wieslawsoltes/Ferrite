@@ -1,0 +1,28 @@
+name: Retain pinned compiler oracle
+on:
+  push:
+    branches: [automation/compiler-discriminants-20261009]
+    paths: [.github/workflows/compiler-oracle.yml]
+permissions:
+  contents: read
+jobs:
+  retain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install the exact native conformance toolchain
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal
+          rustup run 1.99.0 rustc --version --verbose > "$RUNNER_TEMP/rustc-version.txt"
+          sysroot="$(rustup run 1.99.0 rustc --print sysroot)"
+          tar -C "$sysroot" -czf "$RUNNER_TEMP/rustc-oracle.tar.gz" bin/rustc lib
+          sha256sum "$RUNNER_TEMP/rustc-oracle.tar.gz" > "$RUNNER_TEMP/rustc-oracle.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ferrite-rustc-1-99-oracle
+          path: |
+            ${{ runner.temp }}/rustc-oracle.tar.gz
+            ${{ runner.temp }}/rustc-version.txt
+            ${{ runner.temp }}/rustc-oracle.sha256
+          compression-level: 0
+          retention-days: 1

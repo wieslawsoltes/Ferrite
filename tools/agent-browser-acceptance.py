@@ -143,6 +143,17 @@ def run():
             page.locator('#agent-terminal-tabs').select_option('browser')
             page.locator('#agent-terminal-tabs').select_option(terminal_id)
             expect(rendered).to_contain_text('Selected: 2')
+            # Compare every visible cell row with the headless authority, not
+            # merely a few text fragments that could hide a damaged right edge.
+            for _ in range(100):
+                page.wait_for_timeout(50)
+                screen=api('/v1/terminals/'+terminal_id+'/screen')
+                visible_rows=rendered.locator(':scope > div').evaluate_all("nodes => nodes.map(node => node.textContent.replace(/\\u00a0/g, ' ').trimEnd())")
+                if visible_rows==screen['lines']:break
+            assert visible_rows==screen['lines'],{'browser':visible_rows,'authority':screen['lines']}
+            assert screen['lines'][0].startswith('┌') and screen['lines'][0].endswith('┐'),screen['lines']
+            assert screen['lines'][-1].startswith('└') and screen['lines'][-1].endswith('┘'),screen['lines']
+            assert all(line.startswith('│') and line.endswith('│') for line in screen['lines'][1:-1]),screen['lines']
             page.screenshot(path=str(OUTPUT/'terminal-ncurses.png'),full_page=True)
             print('PASS actual browser ncurses: alternate screen, Unicode, arrows/F1, IME input, mouse, resize and tab restoration')
             # No bearer or API key may enter persistent web storage.

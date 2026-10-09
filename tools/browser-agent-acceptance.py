@@ -138,7 +138,11 @@ def run():
             fixture.mode='answer';page.locator('#agent-run').click();expect(page.locator('.agent-badge')).to_have_text('completed')
             page.locator('[data-agent-tab="context"]').click();page.get_by_role('button',name='Compact now',exact=True).click();expect(page.locator('[data-agent-content="context"] .agent-json')).to_contain_text('Preserved task')
             passed('explicit queued follow-up with no automatic send, continued session and model-assisted compaction')
-            page.locator('[data-tool="terminal"]').click();page.locator('#browser-terminal-input').fill('cargo run');page.locator('#browser-terminal-input').press('Enter');expect(page.locator('.terminal-screen')).to_contain_text('Before browser agent')
+            page.locator('[data-tool="terminal"]').click()
+            # xterm virtualizes scrollback: make the actual visible viewport large
+            # enough to inspect the whole structured status result without scrolling.
+            page.locator('.dock-layout').evaluate("node => node.style.setProperty('--bottom-size', '500px')")
+            page.locator('#browser-terminal-input').fill('cargo run');page.locator('#browser-terminal-input').press('Enter');expect(page.locator('.terminal-screen')).to_contain_text('Before browser agent')
             page.locator('#browser-terminal-input').fill('printf "a\\nb\\n" > notes.txt; cat notes.txt | wc -l');page.locator('#browser-terminal-input').press('Enter');expect(page.locator('.terminal-screen')).to_contain_text('2');page.wait_for_function('window.ferrite.getSnapshot().files["notes.txt"] === "a\\nb\\n"')
             page.locator('#browser-terminal-input').fill('agent status');page.locator('#browser-terminal-input').press('Enter');expect(page.locator('.terminal-screen')).to_contain_text(session_id)
             page.locator('#browser-terminal-input').fill('agent task \"Summarize terminal harness status\"');page.locator('#browser-terminal-input').press('Enter');expect(page.locator('.terminal-screen')).to_contain_text('Explicit follow-up completed in the browser')

@@ -63,3 +63,19 @@ test('soft reset updates reported cursor appearance', async t => {
   const s=screen(t); await s.write('\x1b[?25l\x1b[6 q'); await s.write('\x1b[!p');
   assert.equal(s.snapshot().cursorPosition.visible,true); assert.equal(s.modes().cursorStyle,0);
 });
+
+test('resized alternate snapshots do not erase the last column using hidden backing cells', async t => {
+  const source = screen(t, 40, 8), replica = screen(t, 30, 10);
+  await source.write('\x1b[?1049h\x1b[37;40mOLD');
+  source.resize(30, 10);
+  await source.write('\x1b[2J\x1b[H' +
+    Array.from({length: 10}, (_, row) => `│${String(row).padEnd(28, ' ')}│`).join('\r\n'));
+  const before = source.snapshot({cells: true});
+  const physicalLength = source.terminal.buffer.active.getLine(0).length;
+  assert.ok(physicalLength > source.terminal.cols, 'upstream intentionally retains alternate backing width');
+  await replica.write(source.serialize());
+  restoreTerminalState(replica.terminal, captureTerminalState(source.terminal));
+  compare(source, replica);
+  assert.deepEqual(source.snapshot({cells: true}), before);
+  assert.equal(source.terminal.buffer.active.getLine(0).length, physicalLength);
+});

@@ -62,3 +62,24 @@ export function restoreTerminalState(terminal, value) {
   core._charsetService._charsets = banks; core._charsetService.glevel = level; core._charsetService.charset = active;
   applyAttribute(core._inputHandler._curAttrData, attr); core._inputHandler._parser.precedingJoinState = join;
 }
+
+/** SerializeAddon walks BufferLine.length, but alternate-buffer lines retain
+ * their original storage width after shrinking. Reading that hidden tail emits
+ * ECH at the last visible column and erases borders. Restrict its public buffer
+ * view to actual columns; never resize/mutate the authoritative backing lines.
+ */
+export function serializationView(terminal) {
+  const wrapBuffer = buffer => new Proxy(buffer, {get(target, key) {
+    if (key === 'getLine') return index => {
+      const line = target.getLine(index); if (!line) return undefined;
+      return {length: Math.min(line.length, terminal.cols), isWrapped: line.isWrapped,
+        getCell: (column, cell) => column < terminal.cols ? line.getCell(column, cell) : undefined,
+        translateToString: (trimRight, start = 0, end = terminal.cols) => line.translateToString(trimRight, start, Math.min(end, terminal.cols))};
+    };
+    const result = Reflect.get(target, key, target); return typeof result === 'function' ? result.bind(target) : result;
+  }});
+  const buffers = new Proxy(terminal.buffer, {get(target, key) {
+    return ['normal', 'alternate', 'active'].includes(key) ? wrapBuffer(target[key]) : Reflect.get(target, key, target);
+  }});
+  return new Proxy(terminal, {get(target, key) { return key === 'buffer' ? buffers : Reflect.get(target, key, target); }});
+}

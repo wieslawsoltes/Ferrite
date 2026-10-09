@@ -1,3 +1,4 @@
+import {serializationView} from './XtermStateAdapter.js';
 import {Terminal} from '../../vendor/xterm/headless.mjs';
 import {SerializeAddon} from '../../vendor/xterm/addon-serialize.mjs';
 import {Unicode11Addon} from '../../vendor/xterm/addon-unicode11.mjs';
@@ -9,6 +10,7 @@ export class TerminalScreen {
   constructor(cols, rows, {scrollback = 2000, onReply = () => {}} = {}) {
     this.terminal = new Terminal({cols, rows, scrollback, allowProposedApi: true, logLevel: 'off', theme: {...TERMINAL_THEME}});
     this.serializer = new SerializeAddon(); this.terminal.loadAddon(this.serializer);
+    this.serializer.activate(serializationView(this.terminal));
     this.terminal.loadAddon(new Unicode11Addon()); this.terminal.unicode.activeVersion = '11';
     this.policy = installTerminalPolicy(this.terminal); this.title = ''; this.disposed = false;
     this.subscriptions = [this.terminal.onData(onReply), this.terminal.onTitleChange(title => { this.title = title.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 512); })];

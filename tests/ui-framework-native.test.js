@@ -35,3 +35,15 @@ test('native binary transport rejects noncanonical, oversized and invalid base64
   assert.deepEqual(decodeNativeBase64(encoded), bounded());
   for (const value of ['', '====', encoded + '\n', 'AA==', '*'.repeat(32), 'A'.repeat(11184816)]) assert.throws(() => decodeNativeBase64(value));
 });
+
+test('native Cargo artifact collection confines the target realpath to the project', async () => {
+  const {mkdtemp, mkdir, symlink, rm} = await import('node:fs/promises');
+  const {tmpdir} = await import('node:os'); const {join} = await import('node:path');
+  const {NativeUIArtifact} = await import('../src/native/NativeUIArtifact.js');
+  const temp = await mkdtemp(join(tmpdir(), 'ferrite-native-ui-'));
+  try {
+    await mkdir(join(temp, 'project')); await mkdir(join(temp, 'external'));
+    await symlink(join(temp, 'external'), join(temp, 'project/target'), 'junction');
+    await assert.rejects(NativeUIArtifact.collect('', join(temp, 'project')), /target directory escaped/);
+  } finally { await rm(temp, {recursive: true, force: true}); }
+});

@@ -200,6 +200,8 @@ export function createUIRuntime() {
     if (remove) removeRange(fiber);
   }
   function eventName(key, element) {
+    // Explicit native bindings preserve DOM names, without React-style aliases.
+    if (/^on:[a-z][a-z0-9]*$/.test(key)) return {event: key.slice(3), capture: false};
     let name = key.slice(2), capture = false;
     if (name.endsWith('Capture')) { name = name.slice(0, -7); capture = true; }
     const aliases = {DoubleClick: 'dblclick', Focus: 'focusin', Blur: 'focusout'};
@@ -230,7 +232,7 @@ export function createUIRuntime() {
     for (const key of new Set([...Object.keys(previous), ...Object.keys(next)])) {
       const value = next[key];
       if (['children', 'key', 'ref', '__source'].includes(key)) continue;
-      if (/^on[A-Z]/.test(key)) {
+      if (/^on[A-Z]/.test(key) || /^on:[a-z][a-z0-9]*$/.test(key)) {
         const spec = eventName(key, element), existing = fiber.listeners.get(key);
         if (existing && (value == null || existing.event !== spec.event || existing.capture !== spec.capture)) {
           element.removeEventListener(existing.event, existing.handler, existing.capture); fiber.listeners.delete(key);

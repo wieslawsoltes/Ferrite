@@ -9,7 +9,10 @@ import {UI} from '../ui-framework/Runtime.js';
 /** Collect complete, bounded rustc Wasm artifacts, never partial executable bytes. */
 export class NativeUIArtifact {
   static async collect(stdout, root) {
-    const directory = await realpath(resolve(root,'target')), artifacts = [], seen = new Set();
+    const project = await realpath(root), directory = await realpath(resolve(project, 'target'));
+    const targetRelative = relative(project, directory);
+    if (!targetRelative || targetRelative === '..' || targetRelative.startsWith('../') || targetRelative.startsWith('..\\') || isAbsolute(targetRelative)) throw Error('Cargo UI target directory escaped its project');
+    const artifacts = [], seen = new Set();
     const files = CargoOutputParser.parse(stdout).artifacts.flatMap(a=>a.filenames).filter(f=>f.endsWith('.wasm'));
     for (const filename of files) {
       const path = await realpath(filename), rel = relative(directory,path);

@@ -5,7 +5,8 @@ import {AttributeParser} from './AttributeParser.js';
 
 const PRECEDENCE = {'||': 1, '&&': 2, '|': 3, '^': 4, '&': 5, '==': 6, '!=': 6,
   '<': 6, '>': 6, '<=': 6, '>=': 6, '<<': 7, '>>': 7, '+': 8, '-': 8, '*': 9, '/': 9, '%': 9};
-const BLOCK_EXPRESSIONS = new Set(['ifExpr', 'ifLet', 'match', 'block', 'loopExpr']);
+const BLOCK_EXPRESSIONS = new Set(['ifExpr', 'ifLet', 'match', 'block', 'loopExpr', 'labelBlock', 'while', 'whileLet', 'for']);
+const ASSIGNMENTS = new Set(['=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '<<=', '>>=']);
 
 /** Recursive-descent items/statements and Pratt expressions with complete source spans. */
 export class Parser {
@@ -68,6 +69,7 @@ export class Parser {
     try { return this.parseType(); } finally { this.typeDepth--; }
   }
   parseType() {
+    if (this.c.match('!')) return '!';
     if(this.c.match('impl'))return 'impl '+this.bound();
     if (this.c.is('&&')) this.c.split('&');
     if (this.c.match('&')) {
@@ -196,40 +198,55 @@ export class Parser {
         body.push(this.c.node('let', start, {name: pattern.name, pattern, mutable, annotation, value, otherwise}));
         continue;
       }
-      if (this.c.is('return') || this.c.is('break') || this.c.is('continue')) {
-        const kind = this.c.take().value;
-        const value = this.c.is(';') || this.c.is('}') ? null : this.expr();
-        if (kind === 'continue' && value) throw new Diagnostic('E0571', 'continue does not take a value', start.span);
+      if (['return', 'break', 'continue'].includes(this.c.peek().value)) {
+        const value = this.controlExpression();
         if (!this.c.is('}')) this.c.eat(';');
-        body.push(this.c.node(kind, start, {value})); continue;
+        body.push(value); continue;
       }
-      if (this.c.match('while')) {
-        if (this.c.match('let')) {
-          const pattern = this.pattern(); this.c.eat('=');
-          const value = this.expr(0, false), then = this.block();
-          body.push(this.c.node('whileLet', start, {pattern, value, then})); continue;
-        }
-        const condition = this.expr(0, false), then = this.block();
-        body.push(this.c.node('while', start, {condition, then})); continue;
-      }
-      if (this.c.match('for')) {
-        const pattern = this.pattern(false); this.c.eat('in');
-        const from = this.expr(0, false);
-        let to = null, inclusive = false;
-        if (this.c.is('..') || this.c.is('..=')) { inclusive = this.c.take().value === '..='; to = this.expr(0, false); }
-        const then = this.block();
-        body.push(this.c.node('for', start, {name: pattern.name, pattern, from, to, inclusive, then})); continue;
+      if (this.c.is('while') || this.c.is('for')) {
+        body.push(this.loopLike(start)); continue;
       }
       const value = this.expr();
-      if (['=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '<<=', '>>='].includes(this.c.peek().value)) {
-        const op = this.c.take().value, rhs = this.expr(); this.c.eat(';');
-        body.push(this.c.node('assign', start, {target: value, op, value: rhs}));
-      } else if (this.c.match(';')) body.push(this.c.node('expression', start, {value}));
+      if (this.c.match(';')) body.push(value.kind === 'assign' ? value : this.c.node('expression', start, {value}));
       else if (this.c.is('}')) { tail = value; break; }
       else if (BLOCK_EXPRESSIONS.has(value.kind)) body.push(this.c.node('expression', start, {value}));
       else this.c.eat(';');
     }
     this.c.eat('}'); return this.c.node('block', start, {body, tail});
+  }
+  label() {
+    const token = this.c.take();
+    if (token.kind !== 'lifetime' || ["'_", "'static", "'self", "'Self", "'super", "'crate"].includes(token.value))
+      throw new Diagnostic('E0262', 'Invalid control-flow label', token.span);
+    return token.value;
+  }
+  controlExpression(allowRecord = true) {
+    const start = this.c.take(), kind = start.value;
+    const label = kind !== 'return' && this.c.peek().kind === 'lifetime' ? this.label() : null;
+    const ended = [';', '}', ')', ']', ',', 'EOF'].includes(this.c.peek().value);
+    const value = kind === 'continue' || ended ? null : this.expr(0, allowRecord);
+    return this.c.node(kind, start, {value, label});
+  }
+  loopLike(start, label = null) {
+    if (this.c.match('loop')) return this.c.node('loopExpr', start, {then: this.block(), label});
+    if (this.c.match('while')) {
+      if (this.c.match('let')) {
+        const pattern = this.pattern(); this.c.eat('=');
+        const value = this.expr(0, false), then = this.block();
+        return this.c.node('whileLet', start, {pattern, value, then, label});
+      }
+      const condition = this.expr(0, false), then = this.block();
+      return this.c.node('while', start, {condition, then, label});
+    }
+    if (this.c.match('for')) {
+      const pattern = this.pattern(false); this.c.eat('in');
+      const from = this.expr(0, false);
+      let to = null, inclusive = false;
+      if (this.c.is('..') || this.c.is('..=')) { inclusive = this.c.take().value === '..='; to = this.expr(0, false); }
+      return this.c.node('for', start, {name: pattern.name, pattern, from, to, inclusive, then: this.block(), label});
+    }
+    if (label && this.c.is('{')) return this.c.node('labelBlock', start, {then: this.block(), label});
+    throw new Diagnostic('E0262', 'A label must precede a loop or block', start.span);
   }
   pattern(allowOr = true) {
     if (++this.patternDepth > 256) throw new Diagnostic('F0102', 'Pattern nesting limit exceeded', this.c.peek().span);
@@ -336,6 +353,10 @@ export class Parser {
         }
         if (this.c.is('as') && minimum <= 10) { this.c.take(); left = this.c.node('cast', start, {value: left, target: this.type()}); continue; }
         if (this.c.match('?')) { left = this.c.node('try', start, {value: left}); continue; }
+        if (minimum === 0 && ASSIGNMENTS.has(this.c.peek().value)) {
+          const op = this.c.take().value;
+          left = this.c.node('assign', start, {target: left, op, value: this.expr(0, allowRecord)}); continue;
+        }
         const precedence = PRECEDENCE[this.c.peek().value];
         if (precedence == null || precedence < minimum) break;
         const op = this.c.take().value;
@@ -346,6 +367,9 @@ export class Parser {
   }
   prefix(allowRecord) {
     const start = this.c.peek();
+    if (['return', 'break', 'continue'].includes(start.value)) return this.controlExpression(allowRecord);
+    if (start.kind === 'lifetime') { const label = this.label(); this.c.eat(':'); return this.loopLike(start, label); }
+    if (['loop', 'while', 'for'].includes(start.value)) return this.loopLike(start);
     if (this.c.is('{')) return this.block();
     if (this.c.match('const')) return this.c.node('constBlock', start, {value: this.block()});
     if (this.c.match('if')) {
@@ -359,7 +383,6 @@ export class Parser {
       const otherwise = this.c.match('else') ? (this.c.is('if') ? this.expr() : this.block()) : null;
       return this.c.node('ifExpr', start, {condition, then, otherwise});
     }
-    if (this.c.match('loop')) return this.c.node('loopExpr', start, {then: this.block()});
     if (this.c.match('match')) {
       const value = this.expr(0, false); this.c.eat('{'); const arms = [];
       while (!this.c.is('}')) {

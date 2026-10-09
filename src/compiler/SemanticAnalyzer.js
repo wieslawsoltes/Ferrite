@@ -146,6 +146,8 @@ export class SemanticAnalyzer {
         const result = this.constants.expression(node.value, ctx.instance.fn.module, expected ?? '_', node);
         node.kind = 'constValue'; node.value = structuredClone(result.expression); type = result.type; break;
       }
+      case 'assign': case 'return': case 'break': case 'continue':
+      case 'while': case 'whileLet': case 'for': return this.statement(node, ctx);
       case 'closure': type=this.closures.create(node,ctx);break;
       case 'literal': {
         type = node.type;
@@ -177,9 +179,9 @@ export class SemanticAnalyzer {
       }
       case 'array': {
         const hint = /^\[(.+);\d+\]$/.exec(expected ?? '')?.[1];
-        const itemType = node.items.length ? this.infer(node.items[0], ctx, hint) : hint;
-        if (!itemType) throw new Diagnostic('E0282', 'Empty array needs a type annotation', node.span);
-        node.items.slice(1).forEach(n => T.unify(itemType, this.infer(n, ctx, itemType), new Map(), n));
+        let itemType = node.items.length ? '!' : hint;
+        if (!node.items.length && !hint) throw new Diagnostic('E0282', 'Empty array needs a type annotation', node.span);
+        for (const item of node.items) itemType = T.join(itemType, this.infer(item, ctx, itemType === '!' ? hint : itemType), item);
         type = `[${itemType};${node.items.length}]`; break;
       }
       case 'repeatArray': {
@@ -306,9 +308,14 @@ export class SemanticAnalyzer {
         const no = node.otherwise ? this.infer(node.otherwise, ctx, expected) : '()';
         type = T.join(yes, no, node); break;
       }
-      case 'loopExpr': {
-        const loop = {kind: 'loop', type: '!', breaks: []}; ctx.loops.push(loop);
-        this.block(node.then, ctx, '()'); ctx.loops.pop(); type = loop.type; break;
+      case 'loopExpr': case 'labelBlock': {
+        const loop = {kind: node.kind === 'labelBlock' ? 'block' : 'loop', id: node.id, label: node.label, type: '!', expected};
+        ctx.loops.push(loop);
+        const body = this.block(node.then, ctx, loop.kind === 'block' ? expected : '()');
+        ctx.loops.pop();
+        if (loop.kind === 'block') type = T.join(loop.type, body, node);
+        else { T.unify('()', body, new Map(), node.then); type = loop.type; }
+        break;
       }
       case 'match': {
         const scrutinee = this.infer(node.value, ctx); let result = '!';
@@ -538,11 +545,10 @@ export class SemanticAnalyzer {
         type = '!'; break;
       }
       case 'break': case 'continue': {
-        const loop = ctx.loops.at(-1);
-        if (!loop) throw new Diagnostic('E0268', `${node.kind} outside a loop`, node.span);
+        const loop = ctx.control(node);
         if (node.kind === 'break') {
-          const value = this.infer(node.value, ctx);
-          if (loop.kind !== 'loop' && value !== '()') throw new Diagnostic('E0571', 'Only loop expressions support break values', node.span);
+          const value = this.infer(node.value, ctx, loop.expected ?? (loop.type === '!' ? null : loop.type));
+          if (!['loop', 'block'].includes(loop.kind) && node.value) throw new Diagnostic('E0571', 'Only loop expressions and labeled blocks support break values', node.span);
           loop.type = T.join(loop.type, value, node);
         }
         type = '!'; break;
@@ -551,13 +557,13 @@ export class SemanticAnalyzer {
       case 'whileLet': {
         const scrutinee = this.infer(node.value, ctx);
         ctx.push(); this.pattern(node.pattern, scrutinee, ctx);
-        ctx.loops.push({kind: 'while', type: '!', breaks: []});
+        ctx.loops.push({kind: 'while', id: node.id, label: node.label, type: '!'});
         T.unify('()', this.block(node.then, ctx, '()'), new Map(), node.then);
         ctx.loops.pop(); ctx.pop(); break;
       }
       case 'while': {
         T.unify('bool', this.infer(node.condition, ctx, 'bool'), new Map(), node);
-        ctx.loops.push({kind: 'while', type: '!', breaks: []});
+        ctx.loops.push({kind: 'while', id: node.id, label: node.label, type: '!'});
         T.unify('()', this.block(node.then, ctx, '()'), new Map(), node.then);
         ctx.loops.pop(); break;
       }
@@ -572,7 +578,7 @@ export class SemanticAnalyzer {
           if (!element) throw new Diagnostic('E0277', `Cannot iterate ${from}`, node.span);
         }
         ctx.push(); this.pattern(node.pattern, element, ctx, false); this.checkCoverage([node.pattern], element, node, true); node.binding = node.pattern.binding;
-        ctx.loops.push({kind: 'for', type: '!', breaks: []});
+        ctx.loops.push({kind: 'for', id: node.id, label: node.label, type: '!'});
         T.unify('()', this.block(node.then, ctx, '()'), new Map(), node.then);
         ctx.loops.pop(); ctx.pop(); break;
       }

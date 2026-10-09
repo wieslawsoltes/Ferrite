@@ -1,4 +1,6 @@
-# Ferrite agent workbench
+# Ferrite native agent workbench
+
+**Ferrite 0.8 defaults to a bridge-free browser agent.** Open the Coding Agent window and use API sign in without installing or starting anything locally. See [Browser agent](browser-agent.md) for that mode. The Node/Python/bridge requirements below apply only to optional **native** mode, chosen with Connect.
 
 Ferrite 0.7 adds a local coding-agent runtime, a shared MCP tool server, and **Coding Agent** / **Terminal** tool windows. The static IDE remains usable without an agent, credentials, a server, or npm dependencies. Native tools operate on a persistent, explicitly selected checkout, not on a disposable copy.
 

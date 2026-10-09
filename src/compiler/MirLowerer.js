@@ -1,3 +1,4 @@
+import {AssigneeLowerer} from './assignments/AssigneeLowerer.js';
 import {LiteralValue} from './LiteralValue.js';
 import {PatternLowerer} from './patterns/PatternLowerer.js';
 /** Typed register MIR with explicit control flow; this IR is executed, not illustrative AST JSON. */
@@ -220,6 +221,7 @@ export class MirLowerer {
         this.bind(node.pattern, value, node); break;
       }
       case 'assign': {
+        if (node.destructuring) { AssigneeLowerer.lower(this, node); break; }
         // Rust evaluates RHS, then the assignee place. Primitive compound
         // assignment also reads the original destination only AFTER the RHS.
         let value = this.expr(node.value);

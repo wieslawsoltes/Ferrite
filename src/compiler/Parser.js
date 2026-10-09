@@ -313,13 +313,18 @@ export class Parser {
       let left = this.prefix(allowRecord);
       while (true) {
         const start = left;
-        if (allowRecord && this.c.is('{') && left.kind === 'variable' && (this.c.peek(2).value === ':' || this.c.peek(1).value === '}')) {
-          this.c.take(); const fields = this.list('}', () => {
-            const start = this.c.peek(), name = this.c.identifier();
-            const value = this.c.match(':') ? this.expr() : this.c.node('variable', start, {name});
-            return {name, value};
-          });
-          left = this.c.node('structLiteral', start, {name: left.name, fields, typeArguments: left.typeArguments}); continue;
+        if (allowRecord && this.c.is('{') && left.kind === 'variable' &&
+            ([':', ',', '}'].includes(this.c.peek(2).value) || ['}', '..'].includes(this.c.peek(1).value))) {
+          this.c.take(); const fields = []; let rest = false;
+          while (!this.c.is('}')) {
+            if (this.c.match('..')) { rest = true; break; }
+            const at = this.c.peek(), name = this.c.identifier();
+            const value = this.c.match(':') ? this.expr() : this.c.node('variable', at, {name});
+            fields.push({name, value});
+            if (!this.c.match(',')) break;
+          }
+          this.c.eat('}');
+          left = this.c.node('structLiteral', start, {name: left.name, fields, rest, typeArguments: left.typeArguments}); continue;
         }
         if (this.c.match('::')) {
           this.c.eat('<'); const typeArguments = this.list('>', () => this.type());
@@ -367,6 +372,7 @@ export class Parser {
   }
   prefix(allowRecord) {
     const start = this.c.peek();
+    if (this.c.match('..')) return this.c.node('assigneeRest', start);
     if (['return', 'break', 'continue'].includes(start.value)) return this.controlExpression(allowRecord);
     if (start.kind === 'lifetime') { const label = this.label(); this.c.eat(':'); return this.loopLike(start, label); }
     if (['loop', 'while', 'for'].includes(start.value)) return this.loopLike(start);
@@ -401,7 +407,7 @@ export class Parser {
     if (this.c.match('(')) {
       if (this.c.match(')')) return this.c.node('literal', start, {value: null, type: '()'});
       const first = this.expr();
-      if (!this.c.match(',')) { this.c.eat(')'); return first.kind === 'restPattern' ? this.c.node('tuplePattern', start, {items: [first]}) : first; }
+      if (!this.c.match(',')) { this.c.eat(')'); return first.kind === 'assigneeRest' ? this.c.node('tuple', start, {items: [first]}) : first; }
       const rest = this.list(')', () => this.expr());
       return this.c.node('tuple', start, {items: [first, ...rest]});
     }

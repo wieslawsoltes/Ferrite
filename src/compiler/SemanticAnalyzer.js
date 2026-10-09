@@ -1,3 +1,4 @@
+import {AssigneeAnalyzer} from './assignments/AssigneeAnalyzer.js';
 import {ConstantEvaluator} from './ConstantEvaluator.js';
 import {PatternAnalyzer} from './patterns/PatternAnalyzer.js';
 import {PatternCoverage} from './patterns/PatternCoverage.js';
@@ -179,7 +180,7 @@ export class SemanticAnalyzer {
         type = T.tupleName(node.items.map((n, i) => this.infer(n, ctx, hints[i]))); break;
       }
       case 'array': {
-        const hint = /^\[(.+);\d+\]$/.exec(expected ?? '')?.[1];
+        const hint = T.array(expected ?? '')?.element;
         let itemType = node.items.length ? '!' : hint;
         if (!node.items.length && !hint) throw new Diagnostic('E0282', 'Empty array needs a type annotation', node.span);
         for (const item of node.items) itemType = T.join(itemType, this.infer(item, ctx, itemType === '!' ? hint : itemType), item);
@@ -190,11 +191,13 @@ export class SemanticAnalyzer {
         node.count = structuredClone(evaluated.expression);
         const count = Number(node.count.value);
         if (!Number.isSafeInteger(count) || count < 0 || count > 100000) throw new Diagnostic('F0202', 'Array length exceeds the budget', node.span);
-        const element = this.infer(node.value, ctx, /^\[(.+);\d+\]$/.exec(expected ?? '')?.[1]);
+        const element = this.infer(node.value, ctx, T.array(expected ?? '')?.element);
         if (count > 1 && !this.hasTrait(element, 'Copy')) throw new Diagnostic('E0277', 'Repeated array element must implement Copy', node.span);
         node.length = count; type = `[${element};${count}]`; break;
       }
+      case 'assigneeRest': throw new Diagnostic('E0070', 'Rest is only valid inside a destructuring assignee', node.span);
       case 'structLiteral': {
+        if (node.rest) throw new Diagnostic('E0070', 'Bare struct rest is only valid in a destructuring assignee', node.span);
         const alias = this.index.resolve(this.index.aliases, node.name, ctx.instance.fn.module, node, false);
         const resolvedAlias = alias ? this.index.type(node.name + (node.typeArguments?.length ? '<' + node.typeArguments.join(',') + '>' : ''), ctx.instance.fn.module, null, new Set(), node) : null;
         const aliasApplication = resolvedAlias ? T.application(resolvedAlias) : null;
@@ -530,6 +533,7 @@ export class SemanticAnalyzer {
         node.binding = node.pattern.binding; break;
       }
       case 'assign': {
+        if (AssigneeAnalyzer.accepts(node.target)) { type = new AssigneeAnalyzer(this, ctx).analyze(node); break; }
         const target = this.infer(node.target, ctx); this.place(node.target, ctx, true);
         const shift = ['<<=', '>>='].includes(node.op), bitwise = ['&=', '|=', '^='].includes(node.op);
         const actual = this.infer(node.value, ctx, shift ? null : target);

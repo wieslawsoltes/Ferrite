@@ -16,7 +16,7 @@ export class StructAnalyzer {
     if (args.length !== owner.fields.length)
       throw new Diagnostic('E0061', `${owner.name} expects ${owner.fields.length} arguments, got ${args.length}`, node.span);
     for (const field of owner.fields) this.index.fieldVisible(owner, field, context.instance.fn.module, node);
-    const typeArguments = node.callee?.typeArguments ?? node.typeArguments;
+    const typeArguments = node.callee?.typeArguments ?? node.typeArguments ?? descriptor.typeArguments;
     node.kind = 'structLiteral'; node.name = owner.name; node.typeArguments = typeArguments;
     node.fields = args.map((value, i) => ({name: String(i), value}));
     delete node.callee; delete node.args; delete node.macro;
@@ -26,13 +26,14 @@ export class StructAnalyzer {
   literal(node, context, expected) {
     if (node.rest) throw new Diagnostic('E0070', 'Bare struct rest is only valid in a destructuring assignee', node.span);
     const module = context.instance.fn.module;
-    const spelling = node.name === 'Self' ? context.instance.fn.owner : node.name;
+    const spelling = node.name === 'Self' ? context.instance.fn.owner : node.name.startsWith('Self::') ? context.instance.fn.owner + node.name.slice(4) : node.name;
     const constructor = this.index.constructorFor(spelling, module, node);
     if (constructor?.kind === 'enum') return EnumRecordAnalyzer.literal(this.a, node, constructor, context, expected);
-    const alias = this.index.resolve(this.index.aliases, spelling, module, node, false);
-    const explicit = (node.typeArguments ?? []).map(type => this.a.normalize(type, context, node));
+    const selfType = node.name === 'Self' ? T.application(spelling) : null;
+    const alias = this.index.resolve(this.index.aliases, selfType?.name ?? spelling, module, node, false);
+    const explicit = (node.typeArguments ?? selfType?.args ?? []).map(type => this.a.normalize(type, context, node));
     const app = alias ? T.application(this.index.type(spelling + (explicit.length ? `<${explicit.join(',')}>` : ''), module, null, new Set(), node)) : null;
-    const shape = this.index.resolve(this.index.structs, app?.name ?? spelling, module, node);
+    const shape = this.index.resolve(this.index.structs, app?.name ?? selfType?.name ?? spelling, module, node);
     const supplied = app?.args ?? explicit;
     if (supplied.length && supplied.length !== shape.generics.length)
       throw new Diagnostic('E0107', `${shape.name} expects ${shape.generics.length} type arguments`, node.span);

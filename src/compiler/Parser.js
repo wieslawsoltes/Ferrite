@@ -170,13 +170,13 @@ export class Parser {
       return [this.c.node('enum', start, {name, generics, predicates, variants, attributes, visibility})];
     }
     if (this.c.match('impl')) {
-      const first = this.type();
+      const generics = this.generics(), first = this.type();
       const forTrait = this.c.match('for') ? first : null;
-      const target = forTrait ? this.type() : first;
+      const target = forTrait ? this.type() : first, predicates = this.whereClause();
       this.c.eat('{'); const methods = [];
       while (!this.c.is('}')) methods.push(...this.item(target, forTrait));
       this.c.eat('}');
-      return [this.c.node('impl', start, {target, trait: forTrait, methods, attributes})];
+      return [this.c.node('impl', start, {target, generics, predicates, trait: forTrait, methods, attributes})];
     }
     if (this.c.match('trait')) {
       const name = this.c.identifier(); this.c.eat('{'); const methods = [];
@@ -370,11 +370,21 @@ export class Parser {
             if (!this.c.match(',')) break;
           }
           this.c.eat('}');
-          left = this.c.node('structLiteral', start, {name: left.name, fields, rest, typeArguments: left.typeArguments}); continue;
+          left = this.c.node('structLiteral', start, {name: left.name, fields, rest, typeArguments: left.typeArguments, ownerTypeArguments: left.ownerTypeArguments}); continue;
         }
         if (this.c.match('::')) {
-          this.c.eat('<'); const typeArguments = this.list('>', () => this.type());
-          left.typeArguments = typeArguments; continue;
+          if (this.c.match('<')) {
+            if (left.typeArguments) throw new Diagnostic('E0107', 'Repeated generic arguments on the same path segment', left.span);
+            left.typeArguments = this.list('>', () => this.type());
+          } else {
+            if (left.kind !== 'variable') throw new Diagnostic('E0223', 'An associated path requires a type or module', left.span);
+            if (left.typeArguments) {
+              if (left.ownerTypeArguments) throw new Diagnostic('F_PATH_GENERIC', 'Generic arguments on multiple enclosing path segments are not yet supported', left.span);
+              left.ownerTypeArguments = left.typeArguments; delete left.typeArguments;
+            }
+            left.name += '::' + this.path();
+          }
+          continue;
         }
         if (this.c.match('!')) {
           if (left.kind !== 'variable') throw new Diagnostic('E0005', 'Expected a macro name', left.span);

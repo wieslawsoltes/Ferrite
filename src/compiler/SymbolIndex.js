@@ -48,9 +48,22 @@ export class SymbolIndex {
         this.imports.set(item.module, imports); continue;
       }
       if (item.kind === 'impl') {
-        this.impls.push(item);
-        this.addItems(item.methods.map(method => ({...method, owner: prefix + item.target,
-          crateRoot: item.crateRoot, dependency: item.dependency, implementedTrait: item.trait, name: `${item.target}::${method.localName}`})), item.module);
+        const implIndex = this.impls.length; this.impls.push(item);
+        for (const method of item.methods) {
+          if (method.kind !== 'fn') throw new Diagnostic('F_IMPL_ITEM', 'Associated constants and types are not yet supported', method.span);
+          const inherited = item.generics ?? [], names = new Set();
+          for (const parameter of [...inherited, ...method.generics]) {
+            if (names.has(parameter.name)) throw new Diagnostic('E0403', `Duplicate generic parameter ${parameter.name}`, method.span);
+            names.add(parameter.name);
+          }
+          let name = `${item.target}::${method.localName}`;
+          // Preserve distinct declarations until overlap analysis can distinguish
+          // disjoint impl targets from genuinely duplicate associated items.
+          if (this.functions.has(prefix + name)) name = `${item.target}::__impl${implIndex}::${method.localName}`;
+          this.addItems([{...method, owner: item.target, implIndex, implGenericCount: inherited.length,
+            generics: [...inherited, ...method.generics], predicates: [...(item.predicates ?? []), ...(method.predicates ?? [])],
+            crateRoot: item.crateRoot, dependency: item.dependency, implementedTrait: item.trait, name}], item.module);
+        }
         continue;
       }
       item.name = prefix + item.name;
@@ -98,7 +111,9 @@ export class SymbolIndex {
     const candidates = this.candidates(name, module);
     if (aliases[name]) candidates.push(aliases[name]);
     for (const candidate of candidates) {
-      const structure = this.structs.get(candidate);
+      const path = T.split(candidate, ':').filter(Boolean), last = path.pop();
+      const applied = T.application(last);
+      const structure = this.structs.get([...path, applied.name].join('::'));
       if (structure && ['tuple', 'unit'].includes(structure.form)) {
         this.visible(structure, module, node);
         let descriptor = this.structConstructors.get(structure);
@@ -107,17 +122,21 @@ export class SymbolIndex {
             variant: Object.freeze({name: structure.name, fields: Object.freeze(structure.fields.map(field => field.type))})});
           this.structConstructors.set(structure, descriptor);
         }
-        return descriptor;
+        return applied.args.length ? {...descriptor, typeArguments: applied.args} : descriptor;
       }
-      const parts = candidate.split('::'), variantName = parts.pop(), typeName = parts.join('::');
-      const alias = this.aliases.has(typeName) ? this.type(typeName, module) : null;
-      const application = alias ? T.application(alias) : null;
-      const owner = this.enums.get(application?.name ?? typeName);
+      const variantName = last, typeName = path.join('::');
+      const typeApplication = T.application(typeName);
+      const aliasDeclaration = this.aliases.get(typeApplication.name);
+      const aliasType = aliasDeclaration && !typeApplication.args.length && aliasDeclaration.generics.length ?
+        typeName + '<' + aliasDeclaration.generics.map(() => '_').join(',') + '>' : typeName;
+      const alias = aliasDeclaration ? this.type(aliasType, module) : null;
+      const application = alias ? T.application(alias) : typeApplication;
+      const owner = this.enums.get(application.name);
       const variant = this.variant(owner, variantName);
       if (variant) {
         this.visible(owner, module, node);
         return {owner, variant, form: variant.form ?? (variant.fields.length ? 'tuple' : 'unit'),
-          kind: 'enum', typeArguments: application?.args, tag: `${owner.name}::${variant.name}`};
+          kind: 'enum', typeArguments: application?.args?.length ? application.args : undefined, tag: `${owner.name}::${variant.name}`};
       }
     }
     return null;

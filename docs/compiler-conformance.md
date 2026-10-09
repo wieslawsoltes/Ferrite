@@ -42,3 +42,12 @@ trait/associated-type solving, reference/slice patterns, native ABI/code generat
 and the complete standard library remain outside this browser-compiler scope.
 
 The follow-on [destructuring assignment](destructuring-assignment.md) scope adds typed tuple/array/record assignees, staged RHS projections and sequential destination stores. Its shared fixtures also compare pre-panic output with native rustc. Reference-carrier transfers and projection-sensitive partial moves remain explicit boundaries.
+
+[Nominal constructors](nominal-constructors.md) add tuple/unit structs, generic
+construction, numeric fields, constructor patterns and irrefutable constructor
+assignees. Stored field declarations are checked even when never constructed.
+The fixture corpus is read directly from source; counts may grow between commits.
+`node tools/benchmark-nominal.mjs --iterations 25 --output artifacts/performance/nominal.json`
+compares indexed and linear field lookup, and also records paired cold compilation
+timings with byte-identical generated artifacts. Lookup stress speedups are not
+end-to-end compiler speedups.

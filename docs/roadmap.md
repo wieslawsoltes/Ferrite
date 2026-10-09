@@ -12,13 +12,17 @@ local tools. These must not be confused with full Rust conformance in JavaScript
 Still incomplete: user `macro_rules!`/procedural macro engines, general async and
 generator state-machine lowering, associated types and full trait coherence,
 higher-ranked and region/lifetime solving, arbitrary generic impls, const
-generics/evaluation, complete numeric inference, platform-specific standard
+generics and the full const-evaluation surface, complete numeric inference, platform-specific standard
 library and unsafe/FFI/ABI semantics. Type aliases and function where bounds are
 implemented, but do not claim all generic Rust constructs.
 
-Patterns now include nested enums/tuples/records, alternatives, bounded integer
-and character ranges, and let-else. Reference binding modes, @ bindings, slice
-patterns, open-ended ranges and arbitrary computed constants remain unfinished.
+Patterns now include nested enums/tuples/records, tuple and unit constructors,
+alternatives, @ bindings, array/tuple rests, bounded and open-ended integer/character
+pattern ranges, computed scalar constant patterns and let-else. Reference binding
+modes, slice patterns and general structural constant equality remain unfinished.
+Typed tuple/array/record/constructor assignment, checked const functions, inline
+const and computed array sizes are implemented; general range values and const
+generics remain separate work.
 The move/loan analysis is conservative and whole-local, not full field-sensitive
 rustc NLL. Passing tests must never be described as a soundness or compatibility
 proof for arbitrary Rust.

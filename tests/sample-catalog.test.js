@@ -14,3 +14,9 @@ for(const sample of SampleCatalog.projects){
     if(sample.expected!==undefined)assert.equal(actual,sample.expected);
   });
 }
+
+test('adding catalog examples does not change the default multi-file workspace', () => {
+  assert.equal(SampleCatalog.projects[0].name, 'Geometry lab · traits & modules');
+  assert.equal(typeof SampleCatalog.projects[0].files['src/geometry.rs'], 'string');
+  assert(SampleCatalog.projects.some(sample => sample.name === 'Nominal values · tuple/unit structs & assignments'));
+});

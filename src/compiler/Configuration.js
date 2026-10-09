@@ -52,6 +52,8 @@ export class Configuration {
       const context=node.configuration??inherited;
       if(node.attributes){const evaluator=new Configuration(context),state=evaluator.attributes(node.attributes);decisions.push(...evaluator.decisions);if(!state.enabled)return null;node.attributes=state.attributes;}
       for(const [key,value] of Object.entries(node))if(!['attributes','configuration','span','loc','meta'].includes(key))node[key]=visit(value,context);
+      // cfg removes tuple fields before their positional indices are assigned.
+      if (node.kind === 'struct' && node.form === 'tuple') node.fields.forEach((field, i) => { field.name = String(i); });
       return node;
     };
     return {ast:visit(result,options)??{kind:'crate',items:[]},decisions};

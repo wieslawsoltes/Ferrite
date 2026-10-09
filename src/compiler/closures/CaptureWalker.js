@@ -32,6 +32,8 @@ export class CaptureWalker {
       const scope = new Set([...names, ...this.bindings(arm.pattern)]);
       return {...arm, guard: walk(arm.guard, scope), body: walk(arm.body, scope, 'consume')};
     })};
+    if (node.kind === 'call' && use === 'mutate')
+      return {...node, args: node.args.map(arg => walk(arg, names, 'mutate'))};
     if (node.kind === 'call' || node.kind === 'intrinsic') {
       const name = node.name ?? node.callee?.name;
       const borrows = ['println', 'print', 'format', 'assert_eq', 'dbg'].includes(name);

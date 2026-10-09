@@ -205,6 +205,14 @@ def run():
                 assert after > before, (before, after)
             case('dock move, floating tool, redock, reset and keyboard resize', docking)
 
+            def nominal_constructors():
+                select_sample('Nominal values · tuple/unit structs & assignments')
+                run_program('port=443 swap=2/1 event=9\n')
+                show_tool('Compiler')
+                page.locator('#stage-select').select_option(label='Typed HIR')
+                expect(page.locator('#inspector-content')).not_to_be_empty()
+            case('nominal constructors and staged assignment execute from the catalog', nominal_constructors)
+
             def debugger():
                 select_sample('Control-flow and Fibonacci')
                 page.locator('#debug').click()

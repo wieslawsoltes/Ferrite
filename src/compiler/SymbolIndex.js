@@ -8,12 +8,19 @@ export class SymbolIndex {
     this.functions = new Map(); this.structs = new Map(); this.enums = new Map();
     this.aliases = new Map(); this.constants = new Map(); this.traits = new Map(); this.imports = new Map(); this.impls = [];
     this.symbols = []; this.moduleRoots = new Map(); this.moduleVisibility = new Map();
+    // Side tables are declaration-index-local, never attached to reusable AST/HIR.
+    this.fieldIndexes = new WeakMap(); this.variantIndexes = new WeakMap(); this.structConstructors = new WeakMap();
     this.enums.set('Option', {kind: 'enum', name: 'Option', generics: [{name: 'T', bounds: []}],
       variants: [{name: 'Some', fields: ['T']}, {name: 'None', fields: []}], attributes: []});
     this.enums.set('Result', {kind: 'enum', name: 'Result', generics: [{name: 'T', bounds: []}, {name: 'E', bounds: []}],
       variants: [{name: 'Ok', fields: ['T']}, {name: 'Err', fields: ['E']}], attributes: []});
     this.addItems(ast.items, '');
     this.typeResolver = new TypeResolver(this); if (validate) this.typeResolver.validate();
+    // Tuple/unit constructors occupy the value namespace; record types do not.
+    for (const shape of this.structs.values()) if (shape.form === 'tuple' || shape.form === 'unit') {
+      if (this.functions.has(shape.name) || this.constants.has(shape.name))
+        throw new Diagnostic('E0428', `Duplicate value declaration ${shape.name}`, shape.span);
+    }
     // Trait methods inherit the trait's visibility, not an absent `pub` on impl methods.
     for (const method of this.functions.values()) if (method.implementedTrait) {
       const trait = this.resolve(this.traits, method.implementedTrait, method.module, method, false);
@@ -81,17 +88,57 @@ export class SymbolIndex {
     if (required) throw new Diagnostic('E0425', `Unresolved name '${name}'`, node?.span);
     return null;
   }
-  constructorFor(name, module) {
+  constructorFor(name, module, node = null) {
     const aliases = {Some: 'Option::Some', None: 'Option::None', Ok: 'Result::Ok', Err: 'Result::Err'};
-    for (const candidate of this.candidates(aliases[name] ?? name, module)) {
+    const candidates = this.candidates(name, module);
+    if (aliases[name]) candidates.push(aliases[name]);
+    for (const candidate of candidates) {
+      const structure = this.structs.get(candidate);
+      if (structure && ['tuple', 'unit'].includes(structure.form)) {
+        this.visible(structure, module, node);
+        let descriptor = this.structConstructors.get(structure);
+        if (!descriptor) {
+          descriptor = Object.freeze({owner: structure, form: structure.form, kind: 'struct', tag: structure.name,
+            variant: Object.freeze({name: structure.name, fields: Object.freeze(structure.fields.map(field => field.type))})});
+          this.structConstructors.set(structure, descriptor);
+        }
+        return descriptor;
+      }
       const parts = candidate.split('::'), variantName = parts.pop(), typeName = parts.join('::');
       const alias = this.aliases.has(typeName) ? this.type(typeName, module) : null;
       const application = alias ? T.application(alias) : null;
       const owner = this.enums.get(application?.name ?? typeName);
-      const variant = owner?.variants.find(v => v.name === variantName);
-      if (variant) return {owner, variant, typeArguments: application?.args, tag: `${owner.name}::${variant.name}`};
+      const variant = this.variant(owner, variantName);
+      if (variant) {
+        this.visible(owner, module, node);
+        return {owner, variant, form: variant.form ?? (variant.fields.length ? 'tuple' : 'unit'),
+          kind: 'enum', typeArguments: application?.args, tag: `${owner.name}::${variant.name}`};
+      }
     }
     return null;
+  }
+  /** Resolve a member once in O(width), then in expected O(1) per use. Retain
+   * first-match semantics even for a malformed declaration awaiting diagnostics. */
+  member(table, owner, entries, name) {
+    if (!owner) return undefined;
+    let members = table.get(owner);
+    if (!members) {
+      members = new Map();
+      for (const entry of entries) if (!members.has(entry.name)) members.set(entry.name, entry);
+      table.set(owner, members);
+    }
+    return members.get(name);
+  }
+  field(shape, name) { return this.member(this.fieldIndexes, shape, shape?.fields, name); }
+  variant(shape, name) { return this.member(this.variantIndexes, shape, shape?.variants, name); }
+
+  visible(item, module = '', node = null) {
+    if (item.visibility === 'private' && item.module && module !== item.module && !module.startsWith(item.module + '::'))
+      throw new Diagnostic('E0603', `Item '${item.name}' is private`, node?.span ?? item.span);
+  }
+  fieldVisible(shape, field, module = '', node = null) {
+    if (field.visibility === 'private' && module !== shape.module && !module.startsWith((shape.module ? shape.module + '::' : '')))
+      throw new Diagnostic('E0616', `Field '${shape.name}.${field.name}' is private`, node?.span ?? field.span);
   }
   type(type, module, self = null, parameters = new Set(), node = null) {
     return this.typeResolver.resolve(type, module, self, parameters, [], node);

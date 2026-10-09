@@ -1,3 +1,4 @@
+import {StructAnalyzer} from './StructAnalyzer.js';
 import {AssigneeAnalyzer} from './assignments/AssigneeAnalyzer.js';
 import {ConstantEvaluator} from './ConstantEvaluator.js';
 import {PatternAnalyzer} from './patterns/PatternAnalyzer.js';
@@ -17,7 +18,7 @@ export class SemanticAnalyzer {
     // Synthesized closure declarations belong to this analysis session. Never replay
     // cached callers without their anonymous declaration/capture environment.
     if(JSON.stringify(ast).includes('"kind":"closure"'))queryCache=null;
-    this.closures=new ClosureAnalyzer(this);
+    this.closures=new ClosureAnalyzer(this); this.structures = new StructAnalyzer(this);
     this.patterns = new PatternAnalyzer(this); this.coverage = new PatternCoverage(this.index); this.patternReports = [];
     this.queryCache = queryCache; this.environment = queryCache ? SemanticQueryCache.environment(this.index) : null;
     this.instances = new Map(); this.obligations = []; this.warnings = [];
@@ -171,7 +172,8 @@ export class SemanticAnalyzer {
           const result = this.constants.constant(constant, node);
           node.constant = structuredClone(result.expression); type = result.type; break;
         }
-        const constructor = this.index.constructorFor(node.name, ctx.instance.fn.module);
+        const constructor = this.index.constructorFor(node.name === 'Self' ? ctx.instance.fn.owner : node.name, ctx.instance.fn.module, node);
+        if (constructor?.kind === 'struct') { type = this.structures.construct(node, constructor, [], ctx, expected); break; }
         if (constructor && !constructor.variant.fields.length) { type = this.construct(node, constructor, [], ctx, expected); break; }
         throw new Diagnostic('E0425', `Unresolved identifier '${node.name}'`, node.span);
       }
@@ -196,31 +198,7 @@ export class SemanticAnalyzer {
         node.length = count; type = `[${element};${count}]`; break;
       }
       case 'assigneeRest': throw new Diagnostic('F_RANGE_VALUE', 'Full range values are not yet implemented; rest is supported inside destructuring assignees', node.span);
-      case 'structLiteral': {
-        if (node.rest) throw new Diagnostic('E0070', 'Bare struct rest is only valid in a destructuring assignee', node.span);
-        const alias = this.index.resolve(this.index.aliases, node.name, ctx.instance.fn.module, node, false);
-        const resolvedAlias = alias ? this.index.type(node.name + (node.typeArguments?.length ? '<' + node.typeArguments.join(',') + '>' : ''), ctx.instance.fn.module, null, new Set(), node) : null;
-        const aliasApplication = resolvedAlias ? T.application(resolvedAlias) : null;
-        const shape = this.index.resolve(this.index.structs, aliasApplication?.name ?? node.name, ctx.instance.fn.module, node);
-        const substitution = new Map(shape.generics.map((g, i) => [g.name, aliasApplication?.args[i] ?? null]));
-        if (expected) {
-          const application = T.application(expected);
-          if (application.name === shape.name) shape.generics.forEach((g, i) => substitution.set(g.name, application.args[i]));
-        }
-        if (node.fields.length !== shape.fields.length) throw new Diagnostic('E0063', `Incorrect number of fields for ${shape.name}`, node.span);
-        const seen = new Set();
-        for (const field of node.fields) {
-          const definition = shape.fields.find(f => f.name === field.name);
-          if (!definition || seen.has(field.name)) throw new Diagnostic('E0062', `Unknown or duplicate field ${field.name}`, node.span);
-          seen.add(field.name);
-          const formal = this.index.type(T.substitute(definition.type, substitution), shape.module);
-          const actual = this.infer(field.value, ctx, substitution.has(formal) ? null : formal);
-          try { T.unify(formal, actual, substitution, field.value); }
-          catch { throw new Diagnostic('E0308', `Field ${shape.name}.${field.name} expects ${formal}, got ${actual}`, field.value.span); }
-        }
-        type = shape.name + (shape.generics.length ? '<' + shape.generics.map(g => substitution.get(g.name)).join(',') + '>' : '');
-        node.name = shape.name; break;
-      }
+      case 'structLiteral': type = this.structures.literal(node, ctx, expected); break;
       case 'field': {
         const object = this.infer(node.object, ctx), base = T.reference(object) && object !== '&str' ? T.target(object) : object;
         node.autoDeref = base !== object;
@@ -229,8 +207,9 @@ export class SemanticAnalyzer {
           if (!type || !/^\d+$/.test(node.field)) throw new Diagnostic('E0609', `Unknown tuple field ${node.field}`, node.span);
         } else {
           const application = T.application(base), shape = this.index.structs.get(application.name);
-          const field = shape?.fields.find(f => f.name === node.field);
+          const field = this.index.field(shape, node.field);
           if (!field) throw new Diagnostic('E0609', `Unknown field ${base}.${node.field}`, node.span);
+          this.index.fieldVisible(shape, field, ctx.instance.fn.module, node);
           type = this.index.type(T.substitute(field.type, new Map(shape.generics.map((g, i) => [g.name, application.args[i]]))), shape.module);
         }
         break;
@@ -355,11 +334,15 @@ export class SemanticAnalyzer {
     return this.annotate(node, type);
   }
   construct(node, constructor, args, ctx, expected) {
-    const {owner, variant, tag} = constructor;
+    const {owner, variant, tag, form} = constructor;
+    if (form === 'unit' && node.kind === 'call') throw new Diagnostic('E0618', `${tag} is a value, not a callable constructor`, node.span);
+    if (form === 'tuple' && node.kind !== 'call') throw new Diagnostic('F_CONSTRUCTOR_VALUE', 'Call the tuple constructor directly; function-item values are not yet supported', node.span);
     if (variant.fields.length !== args.length) throw new Diagnostic('E0061', `${tag} expects ${variant.fields.length} values`, node.span);
-    const hint = T.application(expected ?? ''), substitution = new Map(owner.generics.map((g, i) => [g.name, constructor.typeArguments?.[i] ?? (hint.name === owner.name ? hint.args[i] : null)]));
+    const explicit = (node.callee?.typeArguments ?? node.typeArguments ?? []).map(type => this.normalize(type, ctx, node));
+    if (explicit.length && explicit.length !== owner.generics.length) throw new Diagnostic('E0107', 'Incorrect number of constructor type arguments', node.span);
+    const hint = T.application(expected ?? ''), substitution = new Map(owner.generics.map((g, i) => [g.name, explicit[i] ?? constructor.typeArguments?.[i] ?? (hint.name === owner.name ? hint.args[i] : null)]));
     args.forEach((arg, i) => {
-      const formal = T.substitute(variant.fields[i], substitution);
+      const formal = this.index.type(T.substitute(variant.fields[i], substitution), owner.module, null, new Set(substitution.keys()), node);
       T.unify(formal, this.infer(arg, ctx, substitution.has(formal) ? null : formal), substitution, arg);
     });
     const type = owner.name + (owner.generics.length ? '<' + owner.generics.map(g => substitution.get(g.name) ?? '_').join(',') + '>' : '');
@@ -454,7 +437,8 @@ export class SemanticAnalyzer {
       if (!this.hasTrait(type, 'Clone')) throw new Diagnostic('E0277', `${type} does not implement Clone`, node.span);
       node.builtin = 'clone'; return type;
     }
-    const constructor = this.index.constructorFor(name, ctx.instance.fn.module);
+    const constructor = this.index.constructorFor(name === 'Self' ? ctx.instance.fn.owner : name, ctx.instance.fn.module, node);
+    if (constructor?.kind === 'struct') return this.structures.construct(node, constructor, node.args, ctx, expected);
     if (constructor) return this.construct(node, constructor, node.args, ctx, expected);
     const fn = this.index.resolve(this.index.functions, name, ctx.instance.fn.module, node);
     const explicit = (callee.typeArguments ?? []).map(t => this.normalize(t, ctx, callee));

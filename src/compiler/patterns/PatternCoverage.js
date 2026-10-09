@@ -14,7 +14,7 @@ export class PatternCoverage {
   }
 
   analyze(patterns, type, node) {
-    this.states = 0; this.witnessCache = new Map();
+    this.states = 0; this.witnessCache = new Map(); this.fieldIndexes = new WeakMap();
     this.node = node;
     const witness = this.uncovered(patterns.map(pattern => [pattern]), [type]);
     return {exhaustive: witness === null, witness: witness?.[0] ?? null, states: this.states};
@@ -98,7 +98,12 @@ export class PatternCoverage {
     if (constructor.kind === 'array') return pattern.kind === 'arrayPattern' ? pattern.items : null;
     if (constructor.kind === 'tuple') return pattern.kind === 'tuplePattern' ? pattern.items : null;
     if (constructor.kind === 'struct' && pattern.kind === 'structPattern' && pattern.name === constructor.key) {
-      return constructor.fields.map(name => pattern.fields.find(f => f.name === name)?.pattern ?? null);
+      let fields = this.fieldIndexes.get(pattern);
+      if (!fields) {
+        fields = new Map(pattern.fields.map(field => [field.name, field.pattern]));
+        this.fieldIndexes.set(pattern, fields);
+      }
+      return constructor.fields.map(name => fields.get(name) ?? null);
     }
     return null;
   }

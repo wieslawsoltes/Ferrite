@@ -72,8 +72,12 @@ export class JavaScriptEmitter {
       this.add('default: r.fail("Invalid block"); } } } finally { r.leave(); } }');
     }
     const entry = Object.hasOwn(this.options, 'entry') ? this.options.entry : 'main<>';
-    if (entry && this.names.has(entry)) this.add(`${this.names.get(entry)}();`);
-    this.add('if (typeof postMessage === "function") postMessage(r.output);');
+    if (this.options.library) {
+      this.add(`return {runtime:r,functions:{${[...this.names].map(([key,name])=>`${this.json(key)}:${name}`).join(',')}}};`);
+    } else {
+      if (entry && this.names.has(entry)) this.add(`${this.names.get(entry)}();`);
+      this.add('if (typeof postMessage === "function") postMessage(r.output);');
+    }
     return {code: this.lines.join('\n'), sourceMap: this.map};
   }
 }

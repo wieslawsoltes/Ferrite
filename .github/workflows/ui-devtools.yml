@@ -1,0 +1,34 @@
+name: Prepare reproducible UI development inputs
+on:
+  push:
+    branches: [automation/ui-compatibility-publish]
+    paths: [.github/workflows/ui-devtools.yml]
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Retain Git objects and staged publication files
+        run: |
+          mkdir -p inputs
+          git bundle create inputs/repository.bundle --all
+          tar -czf inputs/publication.tar.gz .github
+      - name: Prepare pinned Rust compiler and Wasm standard library
+        run: |
+          rustup toolchain install 1.90.0 --profile minimal
+          rustup target add --toolchain 1.90.0 wasm32-unknown-unknown
+          SYSROOT=$(rustc +1.90.0 --print sysroot)
+          tar -C "$SYSROOT" -czf inputs/rust-1.90.0-linux-x64.tar.gz bin lib
+          rustc +1.90.0 --version > inputs/environment.txt
+          cargo +1.90.0 --version >> inputs/environment.txt
+          sha256sum inputs/* > inputs/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-development-inputs
+          path: inputs/
+          retention-days: 3

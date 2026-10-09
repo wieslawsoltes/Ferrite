@@ -1,0 +1,35 @@
+name: Prepare UI compatibility reference dependencies
+on:
+  push:
+    branches: [automation/ui-compatibility-publish]
+    paths: [.github/workflows/ui-reference.yml]
+permissions:
+  contents: read
+jobs:
+  reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned reference packages without lifecycle scripts
+        run: |
+          mkdir -p "$RUNNER_TEMP/ui-reference"
+          cd "$RUNNER_TEMP/ui-reference"
+          npm init -y
+          npm install --ignore-scripts --no-audit --no-fund --save-exact react@19.2.0 react-dom@19.2.0 @radix-ui/react-dialog@1.1.15 esbuild@0.25.10
+          cat > reference.js <<'JS'
+          export * as React from 'react';
+          export * as ReactDOMClient from 'react-dom/client';
+          export * as ReactDOM from 'react-dom';
+          export * as ReactDOMServer from 'react-dom/server.browser';
+          export * as Dialog from '@radix-ui/react-dialog';
+          JS
+          node_modules/.bin/esbuild reference.js --bundle --format=iife --global-name=FerriteReactReference --define:process.env.NODE_ENV='"development"' --outfile=reference.bundle.js
+          tar -czf "$RUNNER_TEMP/ui-reference.tar.gz" package.json package-lock.json reference.js reference.bundle.js node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-reference-dependencies
+          path: ${{ runner.temp }}/ui-reference.tar.gz
+          retention-days: 7

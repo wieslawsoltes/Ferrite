@@ -45,7 +45,7 @@ jobs:
           payload['commits'].extend(manifest.get('appendCommits', []))
           (evidence / 'payload.json').write_text(json.dumps(payload))
           target = payload.get('target', 'feat/compiler-language-toolchain')
-          if target not in ['feat/compiler-language-toolchain', 'feat/compiler-destructuring-assignment', 'feat/compiler-nominal-constructors', 'feat/compiler-enum-records', 'feat/compiler-callable-items', 'feat/compiler-range-values', 'feat/compiler-delayed-initialization']:
+          if target not in ['feat/compiler-language-toolchain', 'feat/compiler-destructuring-assignment', 'feat/compiler-nominal-constructors', 'feat/compiler-enum-records', 'feat/compiler-callable-items', 'feat/compiler-range-values', 'feat/compiler-delayed-initialization', 'feat/compiler-enum-discriminants', 'feat/compiler-let-chains']:
               raise SystemExit('Invalid feature branch')
           def git(*args, **kwargs):
               return subprocess.check_output(['git', *args], **kwargs).decode().strip()

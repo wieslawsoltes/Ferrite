@@ -62,8 +62,14 @@ jobs:
                   merged = subprocess.run(['git', 'merge', '--no-commit', '--no-ff', change['merge']])
                   if merged.returncode:
                       conflicts = git('diff', '--name-only', '--diff-filter=U').splitlines()
-                      if not conflicts or any(not re.fullmatch(r'(?:src/ui/workers/[a-z-]+|src/sdk/ferrite)\.bundle\.js', p) for p in conflicts):
+                      generated = [p for p in conflicts if re.fullmatch(r'(?:src/ui/workers/[a-z-]+|src/sdk/ferrite)\.bundle\.js', p)]
+                      source = sorted(set(conflicts) - set(generated))
+                      resolutions = change.get('resolveFromOurs', [])
+                      allowed = {'src/compiler/ConstantEvaluator.js', 'src/compiler/MirVerifier.js', 'src/compiler/SemanticAnalyzer.js', 'src/engine.js', 'tests/fixtures/language-conformance.js'}
+                      if not conflicts or source != sorted(resolutions) or not set(source).issubset(allowed):
                           raise SystemExit('Unexpected source merge conflict')
+                      if source and not change.get('patch'):
+                          raise SystemExit('Explicit source resolution patch is required')
                       git('checkout', '--ours', '--', *conflicts)
                       git('add', '--', *conflicts)
               if change.get('patch'):

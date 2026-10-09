@@ -84,3 +84,9 @@ export function createReactAdapter<R extends {createElement: (...args: never[]) 
   renderToReadableStream(node: ReturnType<R['createElement']>, options?: Record<string, unknown>): Promise<ReadableStream<Uint8Array> & {allReady: Promise<void>}>;
   renderToPipeableStream(node: ReturnType<R['createElement']>, options?: Record<string, unknown>): {pipe(destination: unknown): unknown; abort(reason?: unknown): void};
 };
+
+export interface NativeUIOptions { runtime?: typeof import('../ui-framework/React.js'); onError?: ((error: Error) => void) | null; maxBytes?: number; maxMemoryBytes?: number; }
+export interface NativeUISession { mount(bytes: Uint8Array, container: Element): Promise<NativeUISession>; validate(bytes: Uint8Array): Uint8Array; flush(): unknown; inspect(): unknown; dispose(): void; subscribe(listener: (event: {type: string; snapshot?: unknown}) => void): () => void; }
+export function createNativeWasmHost(runtime: unknown, options?: NativeUIOptions): NativeUISession;
+export function mountNativeUI(bytes: Uint8Array, container: Element, options?: NativeUIOptions): Promise<NativeUISession>;
+export function exportNativeHTML(bytes: Uint8Array, options?: {title?: string; css?: string; channel?: string | null}): string;

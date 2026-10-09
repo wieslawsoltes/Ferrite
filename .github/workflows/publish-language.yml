@@ -42,7 +42,7 @@ jobs:
               payload = json.loads(gzip.decompress(compressed))
           (evidence / 'payload.json').write_text(json.dumps(payload))
           target = payload.get('target', 'feat/compiler-language-toolchain')
-          if target not in ['feat/compiler-language-toolchain', 'feat/compiler-destructuring-assignment']:
+          if target not in ['feat/compiler-language-toolchain', 'feat/compiler-destructuring-assignment', 'feat/compiler-nominal-constructors']:
               raise SystemExit('Invalid feature branch')
           def git(*args, **kwargs):
               return subprocess.check_output(['git', *args], **kwargs).decode().strip()

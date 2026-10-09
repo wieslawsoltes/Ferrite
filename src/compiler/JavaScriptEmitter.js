@@ -26,6 +26,8 @@ export class JavaScriptEmitter {
   expression(i) {
     const v = slot => this.value(slot), j = value => this.json(value);
     switch (i.op) {
+      case 'function':return `r.functionPointer(${j(i.callee)},${j(i.signature)})`;
+      case 'callIndirect':return `r.invokeFunction(functions,${v(i.value)},${j(i.signature)},[${i.args.map(v)}])`;
       case 'const': return `r.literal(${j(LiteralValue.encode(i.value))},${j(i.type)})`;
       case 'read': return `r.read(${this.place(i.place)},${!!i.copy})`;
       case 'borrow': return this.place(i.place);
@@ -71,6 +73,7 @@ export class JavaScriptEmitter {
       }
       this.add('default: r.fail("Invalid block"); } } } finally { r.leave(); } }');
     }
+    this.add(`const functions=new Map([${[...this.names].map(([key,value])=>`[${this.json(key)},${value}]`).join(',')}]);`);
     const entry = Object.hasOwn(this.options, 'entry') ? this.options.entry : 'main<>';
     if (entry && this.names.has(entry)) this.add(`${this.names.get(entry)}();`);
     this.add('if (typeof postMessage === "function") postMessage(r.output);');

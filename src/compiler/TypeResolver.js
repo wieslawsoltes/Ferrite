@@ -18,11 +18,12 @@ export class TypeResolver {
     let result;
     if (type.startsWith('impl ')) result = 'impl ' + next(type.slice(5));
     else if (T.reference(type)) result = (type.startsWith('&mut ') ? '&mut ' : '&') + next(T.target(type));
+    else if (T.function(type)) {const fn=T.function(type);result=T.functionName(fn.params.map(next),next(fn.result));}
     else if (T.tuple(type)) result = T.tupleName(T.tuple(type).map(next));
     else if (T.array(type)) { const {element, length} = T.array(type); const size = this.index.constantEvaluator?.length(length, module, node, parameters) ?? length; result = `[${next(element)};${size}]`; }
     else {
-      const callable = /^(Fn|FnMut|FnOnce)\((.*)\)->(.+)$/.exec(type);
-      if (callable) result = `${callable[1]}(${T.split(callable[2]).map(next).join(',')})->${next(callable[3])}`;
+      const prefix=/^(Fn|FnMut|FnOnce)(?=\()/.exec(type), callable=prefix?T.function('fn'+type.slice(prefix[1].length)):null;
+      if (callable) result = `${prefix[1]}(${callable.params.map(next).join(',')})->${next(callable.result)}`;
       else {
         const {name, args} = T.application(type), arguments_ = args.map(next);
         const alias = parameters.has(name) ? null : this.find(this.index.aliases, name, module, node);
@@ -65,10 +66,11 @@ export class TypeResolver {
     const next = value => this.validateKnown(value, parameters, node);
     if (type.startsWith('impl ')) return next(type.slice(5));
     if (T.reference(type)) return next(T.target(type));
+    const fn=T.function(type);if(fn){fn.params.forEach(next);next(fn.result);return;}
     const tuple = T.tuple(type); if (tuple) { tuple.forEach(next); return; }
     const array = T.array(type); if (array) return next(array.element);
-    const callable = /^(Fn|FnMut|FnOnce)\((.*)\)->(.+)$/.exec(type);
-    if (callable) { T.split(callable[2]).forEach(next); next(callable[3]); return; }
+    const prefix=/^(Fn|FnMut|FnOnce)(?=\()/.exec(type), callable=prefix?T.function('fn'+type.slice(prefix[1].length)):null;
+    if (callable) { callable.params.forEach(next); next(callable.result); return; }
     const {name, args} = T.application(type);
     if (!parameters.has(name) && !T.numeric(name) && !['bool', 'char', 'str', 'String', 'Vec', '!', '_'].includes(name) && !this.index.structs.has(name) && !this.index.enums.has(name))
       throw new Diagnostic('E0412', `Unknown type '${name}' in declaration ${node.name}`, node.span);
@@ -90,10 +92,11 @@ export class TypeResolver {
   validateNominals() {
     const used = (type, parameters, found) => {
       if (T.reference(type)) return used(T.target(type), parameters, found);
+      const fn=T.function(type);if(fn){[...fn.params,fn.result].forEach(t=>used(t,parameters,found));return;}
       const tuple = T.tuple(type); if (tuple) { tuple.forEach(t => used(t, parameters, found)); return; }
       const array = T.array(type); if (array) return used(array.element, parameters, found);
-      const callable = /^(Fn|FnMut|FnOnce)\((.*)\)->(.+)$/.exec(type);
-      if (callable) { [...T.split(callable[2]), callable[3]].forEach(t => used(t, parameters, found)); return; }
+      const prefix=/^(Fn|FnMut|FnOnce)(?=\()/.exec(type), callable=prefix?T.function('fn'+type.slice(prefix[1].length)):null;
+      if (callable) { [...callable.params, callable.result].forEach(t => used(t, parameters, found)); return; }
       const app = T.application(type);
       if (parameters.has(app.name)) found.add(app.name);
       app.args.forEach(t => used(t, parameters, found));

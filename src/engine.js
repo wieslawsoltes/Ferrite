@@ -38,8 +38,8 @@ export function compile(source, options = {}) {
   const wasm = pass('Emit WebAssembly', () => new WebAssemblyEmitter(optimized.functions, {entry: semantic.entry ?? null}).build());
   // Plain byte arrays keep cached artifacts deeply immutable and structured-cloneable.
   wasm.bytes = Array.from(wasm.bytes);
-  const sem = {instances: semantic.instances.map(({key, name, fn, typeArguments, returnType, calls, locals}) => ({key, name, typeArguments, returnType, calls, locals, span: fn.span, loc: fn.loc})),
-    constants: semantic.constants, typeResolution:semantic.typeResolution, patterns:semantic.patterns, closures:semantic.closures, symbols: semantic.symbols, structures: semantic.structures, enums: semantic.enums,
+  const sem = {instances: semantic.instances.map(({key, name, fn, typeArguments, returnType, calls, indirectCalls, locals}) => ({key, name, typeArguments, returnType, calls, indirectCalls, locals, span: fn.span, loc: fn.loc})),
+    functionItems:semantic.functionItems, constants: semantic.constants, typeResolution:semantic.typeResolution, patterns:semantic.patterns, closures:semantic.closures, symbols: semantic.symbols, structures: semantic.structures, enums: semantic.enums,
     obligations: semantic.obligations.map(o => `${o.type}: ${o.trait}`), traitObligations: semantic.obligations, warnings: semantic.warnings};
   return {version: '0.8.0', wasm, configuration:configured.decisions, tokens, ast, expanded: expansion.ast, expansions: expansion.expansions,
     hir: semantic.instances.map(({key, fn}) => ({instance: key, body: fn.body, span: fn.span})), sem, ownership, mir,

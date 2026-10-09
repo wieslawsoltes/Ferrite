@@ -25,12 +25,20 @@ export class TypeSystem {
       else if (c === '(') stack.push(')');
       else if (c === '[') stack.push(']');
       else if (c === '<' && !braces) stack.push('>');
-      else if (c === stack.at(-1)) { stack.pop(); if (c === '}') braces--; }
+      else if (c === stack.at(-1) && !(c === '>' && text[i-1] === '-')) { stack.pop(); if (c === '}') braces--; }
       else if (c === separator && !stack.length) { parts.push(text.slice(start, i)); start = i + 1; }
     }
     if (text.slice(start)) parts.push(text.slice(start));
     return parts;
   }
+  static function(type) {
+    if(typeof type!=='string'||!type.startsWith('fn('))return null;
+    let depth=1,end=3;
+    for(;end<type.length;end++){if(type[end]==='(')depth++;else if(type[end]===')'&&!--depth)break;}
+    if(depth||type.slice(end+1,end+3)!=='->'||end+3===type.length)return null;
+    return {params:this.split(type.slice(3,end)),result:type.slice(end+3)};
+  }
+  static functionName(params,result='()'){return `fn(${params.join(',')})->${result}`;}
   static tuple(type) { return type.startsWith('(') && type.endsWith(')') ? this.split(type.slice(1, -1)) : null; }
   static tupleName(items) { return '(' + items.join(',') + (items.length === 1 ? ',' : '') + ')'; }
   static array(type) {
@@ -66,6 +74,12 @@ export class TypeSystem {
       this.unify(this.target(expected), this.target(actual), generics, node);
       return expected;
     }
+    const ef=this.function(expected),af=this.function(actual);
+    if(ef||af){
+      if(!ef||!af||ef.params.length!==af.params.length)this.mismatch(expected,actual,node);
+      ef.params.forEach((type,i)=>this.unify(type,af.params[i],generics,node));
+      this.unify(ef.result,af.result,generics,node);return this.substitute(expected,generics);
+    }
     const et = this.tuple(expected), at = this.tuple(actual);
     if ((et || at) && (!et || !at || et.length !== at.length)) this.mismatch(expected, actual, node);
     if (et && at && et.length === at.length) {
@@ -86,7 +100,7 @@ export class TypeSystem {
   }
   static mismatch(expected, actual, node) { throw new Diagnostic('E0308', `Type mismatch: expected ${expected}, got ${actual}`, node?.span); }
   static primitiveCopy(type) {
-    return this.numeric(type) || ['bool', 'char', '&str', '()'].includes(type) || (this.reference(type) && !type.startsWith('&mut '));
+    return this.numeric(type) || !!this.function(type) || ['bool', 'char', '&str', '()'].includes(type) || (this.reference(type) && !type.startsWith('&mut '));
   }
   static join(a, b, node) {
     if (a === '!') return b;

@@ -6,8 +6,9 @@ import {CaptureWalker} from './CaptureWalker.js';
 export class ClosureAnalyzer {
   constructor(analyzer) { this.analyzer = analyzer; this.records = new Map(); this.sequence = 0; }
   static bound(text) {
-    const match = /^(Fn|FnMut|FnOnce)\((.*)\)->(.+)$/.exec(text ?? '');
-    return match ? {trait: match[1], params: T.split(match[2]), result: match[3]} : null;
+    const prefix=/^(Fn|FnMut|FnOnce)(?=\()/.exec(text??'');
+    const signature=prefix?T.function('fn'+text.slice(prefix[1].length)):null;
+    return signature?{trait:prefix[1],...signature}:null;
   }
   get(type) { return this.records.get(T.reference(type) ? T.target(type) : type); }
   create(node, ctx) {
@@ -38,7 +39,7 @@ export class ClosureAnalyzer {
     }
     const body = CaptureWalker.transform(node.body, names, variable => {
       const capture = captures.get(variable.name); if (!capture) return variable;
-      const access = {kind:'field', object:{kind:'variable', name:environmentName, span:variable.span, loc:variable.loc}, field:capture.field, span:variable.span, loc:variable.loc};
+      const access = {kind:'field', object:{kind:'variable', name:environmentName, span:variable.span, loc:variable.loc}, field:capture.field, parenthesized:true, span:variable.span, loc:variable.loc};
       return capture.mode === 'move' ? access : {kind:'unary', op:'*', value:access, span:variable.span, loc:variable.loc};
     }, 'consume');
     const record = {type:name, node, trait, captures:descriptions, body, environmentName, module:ctx.instance.fn.module, ctx, instance:null, preparing:false};

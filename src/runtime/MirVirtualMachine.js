@@ -23,6 +23,7 @@ export class MirVirtualMachine {
   evaluate(instruction, frame) {
     const r = this.runtime, cells = frame.cells, value = slot => cells[slot].value;
     switch (instruction.op) {
+      case 'function':return r.functionPointer(instruction.callee,instruction.signature);
       case 'const': return r.literal(instruction.value, instruction.type);
       case 'read': return r.read(this.reference(frame, instruction.place), instruction.copy);
       case 'borrow': return this.reference(frame, instruction.place);
@@ -50,7 +51,8 @@ export class MirVirtualMachine {
     if (instruction) {
       this.runtime.tick(instruction.span);
       this.last = {function: frame.fn.instance, block: frame.block, instruction: instruction.id, operation: instruction.op, span: instruction.span};
-      if (instruction.op === 'call') this.push(instruction.callee, instruction.args.map(slot => frame.cells[slot].value), instruction.dest);
+      if(instruction.op==='callIndirect')this.push(this.runtime.functionTarget(frame.cells[instruction.value].value,instruction.signature),instruction.args.map(slot=>frame.cells[slot].value),instruction.dest);
+      else if (instruction.op === 'call') this.push(instruction.callee, instruction.args.map(slot => frame.cells[slot].value), instruction.dest);
       else {
         const result = this.evaluate(instruction, frame);
         if (instruction.dest != null) frame.cells[instruction.dest].value = result;

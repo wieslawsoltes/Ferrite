@@ -30,8 +30,8 @@ for (const [name, source, code, output] of nominalPanicCases) test(name, () => {
     assert.equal(vm.runInContext('r.output', context), output);
   }
 });
-test('first-class tuple constructor has an explicit unsupported diagnostic', () => {
-  assert.throws(() => compile('struct P(i32);fn main(){let f=P;let _=f(1);}'), error => error.code === 'F_CONSTRUCTOR_VALUE');
+test('first-class tuple constructor compiles through shared MIR', () => {
+  assert.doesNotThrow(() => compile('struct P(i32);fn main(){let f=P;let _=f(1);}'));
 });
 test('constructor parsing never modifies the reusable token stream', () => {
   const tokens = tokenize('struct P((i32,i32));fn main(){let p=P((1,2));println!("{}",p.0.1);}');

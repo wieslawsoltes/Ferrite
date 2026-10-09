@@ -66,8 +66,8 @@ jobs:
               with tempfile.NamedTemporaryFile(mode='w', suffix='.patch') as patch:
                   patch.write(change['patch']); patch.flush()
                   paths = [line.split('\t', 2)[-1] for line in git('apply', '--numstat', patch.name).splitlines()]
-                  if not paths or any(not p.startswith(('src/compiler/', 'tests/', 'docs/', 'tools/')) for p in paths):
-                      raise SystemExit('Only compiler, test, documentation and tool sources may be patched')
+                  if not paths or any(not p.startswith(('src/compiler/', 'tests/', 'docs/', 'tools/')) and p != 'src/ui/studio/UIStudio.js' for p in paths):
+                      raise SystemExit('Unexpected source path in compiler or UIStudio integration patch')
                   git('apply', '--index', '--whitespace=error', patch.name)
               if git('diff', '--cached', '--name-only', '--', '.github'):
                   raise SystemExit('Workflow updates require the authorized contents API before integration')

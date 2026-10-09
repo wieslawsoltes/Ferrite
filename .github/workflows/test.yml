@@ -24,10 +24,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Verify syntax, deterministic worker bundles and pinned terminal assets
+      - name: Verify syntax, deterministic worker/SDK bundles and pinned terminal assets
         run: npm run check
       - name: Run compiler, runtime, project, service and sample tests
         run: npm test
+      - name: Validate public SDK and JSX declarations with pinned TypeScript
+        run: |
+          npm install --global typescript@5.8.3
+          npm run test:ui:types
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -53,6 +57,10 @@ jobs:
         run: |
           set -o pipefail
           npm run test:browser-agent 2>&1 | tee artifacts/browser-agent.log
+      - name: Exercise UI Studio, JSX/compiler SDK and offline exports in Chromium
+        run: |
+          set -o pipefail
+          npm run test:ui:browser 2>&1 | tee artifacts/ui-browser.log
       - name: Record environment-dependent compiler timings
         run: |
           mkdir -p artifacts/performance

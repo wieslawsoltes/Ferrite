@@ -1,4 +1,5 @@
 import {Diagnostic} from './Diagnostic.js';
+import {Lexer} from './Lexer.js';
 
 /** Interned type names are structural keys, not JavaScript constructor names. */
 export class TypeSystem {
@@ -6,13 +7,26 @@ export class TypeSystem {
   static numeric(type) { return this.integer(type) || type === 'f32' || type === 'f64'; }
   static reference(type) { return type?.startsWith('&'); }
   static target(type) { return type.replace(/^&(?:mut )?/, ''); }
-  static split(text) {
-    let depth = 0, start = 0;
-    const parts = [];
+  static split(text, separator = ',') {
+    const parts = [], stack = []; let start = 0, braces = 0;
     for (let i = 0; i < text.length; i++) {
-      if ('<(['.includes(text[i])) depth++;
-      if ('>)]'.includes(text[i])) depth--;
-      if (text[i] === ',' && depth === 0) { parts.push(text.slice(start, i)); start = i + 1; }
+      const c = text[i];
+      if (c === '"' || c === "'") {
+        // Constant expressions inside a type are braced; punctuation in their
+        // literals is data, not structural type delimiters.
+        let hashes = 0, before = i - 1;
+        while (text[before] === '#') { hashes++; before--; }
+        const raw = c === '"' && text[before] === 'r';
+        if (raw) { const end = text.indexOf('"' + '#'.repeat(hashes), i + 1); i = end < 0 ? text.length : end + hashes; }
+        else while (++i < text.length) { if (text[i] === '\\') i++; else if (text[i] === c) break; }
+        continue;
+      }
+      if (c === '{') { stack.push('}'); braces++; }
+      else if (c === '(') stack.push(')');
+      else if (c === '[') stack.push(']');
+      else if (c === '<' && !braces) stack.push('>');
+      else if (c === stack.at(-1)) { stack.pop(); if (c === '}') braces--; }
+      else if (c === separator && !stack.length) { parts.push(text.slice(start, i)); start = i + 1; }
     }
     if (text.slice(start)) parts.push(text.slice(start));
     return parts;
@@ -21,20 +35,24 @@ export class TypeSystem {
   static tupleName(items) { return '(' + items.join(',') + (items.length === 1 ? ',' : '') + ')'; }
   static array(type) {
     if (!type.startsWith('[') || !type.endsWith(']')) return null;
-    let depth = 0;
-    for (let i = 1; i < type.length - 1; i++) {
-      if ('<(['.includes(type[i])) depth++;
-      else if ('>)]'.includes(type[i])) depth--;
-      else if (type[i] === ';' && depth === 0) return {element: type.slice(1, i), length: type.slice(i + 1, -1)};
-    }
-    return null;
+    const parts = this.split(type.slice(1, -1), ';');
+    return parts.length === 2 ? {element: parts[0], length: parts[1]} : null;
   }
   static application(type) {
     const i = type.indexOf('<');
     return i < 0 ? {name: type, args: []} : {name: type.slice(0, i), args: this.split(type.slice(i + 1, -1))};
   }
   static substitute(type, map) {
-    return type.replace(/(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*/g, token => map.get(token) ?? token);
+    if (!map.size || ![...map.keys()].some(key => type.includes(key))) return type;
+    const tokens = Lexer.tokenize(type), parts = []; let offset = 0;
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      if (token.kind !== 'identifier' && token.value !== 'Self') continue;
+      let name = token.value, end = token.span.end;
+      while (tokens[i + 1]?.value === '::' && tokens[i + 2]?.kind === 'identifier') { i += 2; name += '::' + tokens[i].value; end = tokens[i].span.end; }
+      parts.push(type.slice(offset, token.span.start), map.get(name) ?? type.slice(token.span.start, end)); offset = end;
+    }
+    parts.push(type.slice(offset)); return parts.join('');
   }
   static unify(expected, actual, generics = new Map(), node = null) {
     if (expected === actual || actual === '!' || expected === '_') return actual;

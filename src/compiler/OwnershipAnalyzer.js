@@ -6,6 +6,7 @@ export class OwnershipAnalyzer {
   constructor(instance) {
     this.instance = instance;
     this.lastUse = new Map(); this.moved = new Set(); this.loans = []; this.references = new Map(); this.events = [];
+    this.controls = [];
     this.scan(instance.fn.body);
   }
   static analyze(semantic) {
@@ -41,9 +42,20 @@ export class OwnershipAnalyzer {
     }
   }
   value(node, consume = true, destination = null) {
+    const roots = this.evaluateValue(node, consume, destination);
+    if (destination != null && roots.length) {
+      this.references.set(destination, roots);
+      for (const loan of this.loans) if (roots.includes(loan.root)) {
+        loan.borrower = destination;
+        loan.until = Math.max(loan.until, this.lastUse.get(destination) ?? node.span.end);
+      }
+    }
+    return roots;
+  }
+  evaluateValue(node, consume = true, destination = null) {
     if (!node) return [];
     this.expire(node);
-    if (node.kind === 'literal') return [];
+    if (node.kind === 'literal' || node.kind === 'constValue') return [];
     if (node.kind === 'closure') {
       const roots=node.fields.flatMap(field=>this.value(field.value,true,destination));
       if(destination!=null&&roots.length)this.references.set(destination,roots);
@@ -86,23 +98,31 @@ export class OwnershipAnalyzer {
       }
       return [];
     }
-    if (node.kind === 'block') { this.block(node); return []; }
+    if (node.kind === 'block') return this.block(node);
+    if (node.kind === 'assign') { this.assignment(node); return []; }
+    if (node.kind === 'return') { this.returnValue(node.value, node); return []; }
+    if (node.kind === 'break') {
+      const roots = this.value(node.value);
+      this.controls.findLast(frame => frame.id === node.controlTarget)?.roots.push(...roots);
+      return [];
+    }
+    if (node.kind === 'continue') return [];
     if (node.kind === 'ifExpr' || node.kind === 'ifLet') {
       this.value(node.kind === 'ifLet' ? node.value : node.condition);
-      const before = new Set(this.moved); this.block(node.then); const yes = new Set(this.moved);
-      this.moved = new Set(before); if (node.otherwise) this.value(node.otherwise);
-      this.moved = new Set([...yes, ...this.moved]); return [];
+      const before = new Set(this.moved), yesRoots = this.block(node.then), yes = new Set(this.moved);
+      this.moved = new Set(before); const noRoots = this.value(node.otherwise);
+      this.moved = new Set([...yes, ...this.moved]); return [...new Set([...yesRoots, ...noRoots])];
     }
     if (node.kind === 'match') {
       this.value(node.value);
-      const before = new Set(this.moved), merged = new Set(before);
+      const before = new Set(this.moved), merged = new Set(before), roots = [];
       for (const arm of node.arms) {
-        this.moved = new Set(before); this.value(arm.guard); this.value(arm.body);
+        this.moved = new Set(before); this.value(arm.guard); roots.push(...this.value(arm.body));
         this.moved.forEach(slot => merged.add(slot));
       }
-      this.moved = merged; return [];
+      this.moved = merged; return [...new Set(roots)];
     }
-    if (node.kind === 'loopExpr') { this.block(node.then); return []; }
+    if (['loopExpr', 'labelBlock', 'while', 'whileLet', 'for'].includes(node.kind)) return this.controlValue(node);
     if (node.kind === 'intrinsic' || node.kind === 'call') {
       if(node.temporaryCallee)this.value(node.temporaryCallee.value,true,node.temporaryCallee.binding.slot);
       const name = node.builtin ?? node.name;
@@ -130,33 +150,48 @@ export class OwnershipAnalyzer {
         if (node.otherwise) { const moved = new Set(this.moved); this.block(node.otherwise); this.moved = moved; }
         this.value(node.value, true, node.binding?.slot);
         if (node.binding) { this.moved.delete(node.binding.slot); this.event('initialize', node, node.binding.slot, node.binding.type); }
-      } else if (node.kind === 'assign') {
-        if (node.target.kind === 'unary' && node.target.op === '*') this.value(node.target.value, false);
-        else {
-          const roots = this.roots(node.target);
-          const previouslyMoved = new Set(this.moved); roots.forEach(root => this.moved.delete(root));
-          this.access(node.target, 'mutate'); this.moved = previouslyMoved;
-        }
-        this.value(node.value);
-        this.roots(node.target).forEach(root => { this.moved.delete(root); this.event('assign', node, root); });
-      } else if (node.kind === 'return') {
-        const roots = this.value(node.value);
-        if ((T.reference(node.value?.type) && node.value?.type !== '&str' || node.value?.borrowCarrier) && roots.some(root => node.value?.borrowCarrier || !this.instance.locals[root]?.parameter || !T.reference(this.instance.locals[root]?.type)))
-          throw new Diagnostic('E0515', 'Cannot return a reference to a local value', node.span);
-      } else if (['while', 'whileLet', 'for'].includes(node.kind)) {
-        if (node.kind === 'whileLet') this.value(node.value);
-        if (node.condition) this.value(node.condition);
-        if (node.from) this.value(node.from);
-        if (node.to) this.value(node.to);
-        const before = new Set(this.moved); this.block(node.then);
-        for (const root of this.moved) if (!before.has(root) && this.instance.locals[root].span.start < node.span.start)
-          throw new Diagnostic('E0382', 'A non-Copy outer value may be moved on an earlier loop iteration', node.span);
-      } else if (node.value) this.value(node.value);
+      } else if (node.kind === 'assign') this.assignment(node);
+      else if (['return', 'break', 'continue', 'while', 'whileLet', 'for'].includes(node.kind)) this.value(node);
+      else if (node.value) this.value(node.value);
     }
-    if (block.tail) {
-      const roots = this.value(block.tail);
-      if (block === this.instance.fn.body && (T.reference(block.tail.type) && block.tail.type !== '&str' || block.tail.borrowCarrier) && roots.some(root => block.tail.borrowCarrier || !this.instance.locals[root]?.parameter || !T.reference(this.instance.locals[root]?.type)))
-        throw new Diagnostic('E0515', 'Cannot return a reference to a local value', block.tail.span);
-    }
+    const roots = this.value(block.tail);
+    if (block === this.instance.fn.body) this.checkReturn(block.tail, roots, block.tail ?? block);
+    return roots;
+  }
+  checkReturn(value, roots, origin) {
+    if ((T.reference(value?.type) && value?.type !== '&str' || value?.borrowCarrier) && roots.some(root => value?.borrowCarrier || !this.instance.locals[root]?.parameter || !T.reference(this.instance.locals[root]?.type)))
+      throw new Diagnostic('E0515', 'Cannot return a reference to a local value', origin.span);
+  }
+  returnValue(value, origin) { this.checkReturn(value, this.value(value), origin); }
+  assignment(node) {
+    const destination = node.target.kind === 'variable' ? node.target.binding?.slot : null;
+    this.value(node.value, true, destination);
+    // Index/deref operands are evaluated once, after the RHS. Only a plain
+    // whole-local assignment may reinitialize a previously moved local.
+    const evaluatePlace = target => {
+      if (target.kind === 'index' || target.kind === 'field') {
+        this.value(target.object, false);
+        if (target.index) this.value(target.index);
+      } else if (target.kind === 'unary' && target.op === '*') this.value(target.value, false);
+    };
+    evaluatePlace(node.target);
+    const roots = this.roots(node.target), previouslyMoved = new Set(this.moved);
+    if (node.op === '=' && destination != null) this.moved.delete(destination);
+    this.access(node.target, 'mutate', node.target.kind === 'unary' ? node.target.value.binding?.slot : null);
+    this.moved = previouslyMoved;
+    roots.forEach(root => { this.moved.delete(root); this.event('assign', node, root); });
+  }
+  controlValue(node) {
+    if (node.kind === 'whileLet') this.value(node.value);
+    if (node.condition) this.value(node.condition);
+    if (node.from) this.value(node.from);
+    if (node.to) this.value(node.to);
+    const before = new Set(this.moved), frame = {id: node.id, roots: []};
+    this.controls.push(frame);
+    const tailRoots = this.block(node.then); this.controls.pop();
+    if (node.kind !== 'labelBlock' && node.then.type !== '!') for (const root of this.moved)
+      if (!before.has(root) && this.instance.locals[root].span.start < node.span.start)
+        throw new Diagnostic('E0382', 'A non-Copy outer value may be moved on an earlier loop iteration', node.span);
+    return [...new Set([...frame.roots, ...(node.kind === 'labelBlock' ? tailRoots : [])])];
   }
 }

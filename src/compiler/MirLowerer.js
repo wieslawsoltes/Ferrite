@@ -1,3 +1,4 @@
+import {LiteralValue} from './LiteralValue.js';
 import {PatternLowerer} from './patterns/PatternLowerer.js';
 /** Typed register MIR with explicit control flow; this IR is executed, not illustrative AST JSON. */
 export class MirLowerer {
@@ -16,12 +17,13 @@ export class MirLowerer {
     const slot = this.registers.length; this.registers.push({type, name: `%${slot}`, span: node?.span}); return slot;
   }
   emit(op, data, node, type = null) {
+    if (!this.current) return null;
     const dest = type === null ? null : this.register(type, node);
     if (this.current) this.current.instructions.push({id: `${this.instance.key}:i${this.sequence++}`, op, dest, type,
       ...data, span: node?.span, sourceId: node?.id});
     return dest;
   }
-  literal(value, type, node) { return this.emit('const', {value}, node, type); }
+  literal(value, type, node) { return this.emit('const', {value: LiteralValue.encode(value)}, node, type); }
   unit(node) { return this.literal(null, '()', node); }
   terminate(kind, data, node) {
     if (this.current) this.current.terminator = {kind, ...data, span: node?.span};
@@ -43,6 +45,7 @@ export class MirLowerer {
     this.terminate(kind, {condition, true: yes.id, false: no.id}, node);
   }
   conditional(condition, whenTrue, whenFalse, node, type = node.type) {
+    if (!this.current) return null;
     const yes = this.newBlock('then', node), no = this.newBlock('else', node), done = this.newBlock('merge', node);
     const result = this.register(type, node);
     this.branch(condition, yes, no, node);
@@ -57,11 +60,18 @@ export class MirLowerer {
   bind(pattern, value, node = pattern) { this.patterns.bind(pattern, value, node); }
   patternTest(pattern, value) { return this.patterns.test(pattern, value); }
   expr(node, borrowed = false) {
+    if (!this.current) return null;
+    const value = this.expression(node, borrowed);
+    if (node?.type === '!' && this.current) this.terminate('unreachable', {}, node);
+    return value;
+  }
+  expression(node, borrowed = false) {
     if (!node) return this.unit(node);
     if (node.variant) {
       return this.emit('aggregate', {form: 'enum', values: (node.args ?? []).map(n => this.expr(n)), tag: node.variant}, node, node.type);
     }
     switch (node.kind) {
+      case 'constValue': return this.expr(node.value);
       case 'literal': return this.literal(node.value, node.type, node);
       case 'variable': return node.constant ? this.expr(node.constant) : this.emit('read', {place: this.place(node), copy: !borrowed && node.copy}, node, node.type);
       case 'tuple': case 'array': return this.emit('aggregate', {form: node.kind, values: node.items.map(n => this.expr(n))}, node, node.type);
@@ -90,6 +100,9 @@ export class MirLowerer {
       case 'ifExpr': return this.conditional(this.expr(node.condition), () => this.block(node.then),
         () => node.otherwise ? this.expr(node.otherwise) : this.unit(node), node);
       case 'loopExpr': return this.loopExpression(node);
+      case 'labelBlock': return this.labeledBlock(node);
+      case 'assign': case 'return': case 'break': case 'continue':
+      case 'while': case 'whileLet': case 'for': this.statement(node); return this.current ? this.unit(node) : null;
       case 'match': return this.matchExpression(node);
       case 'try': {
         const value = this.expr(node.value), tag = this.emit('tag', {value}, node, '&str');
@@ -114,7 +127,9 @@ export class MirLowerer {
     }
   }
   matchExpression(node) {
-    const value = this.expr(node.value), result = this.register(node.type, node), done = this.newBlock('match merge', node);
+    const value = this.expr(node.value);
+    if (!this.current) return null;
+    const result = this.register(node.type, node), done = this.newBlock('match merge', node);
     let reaches = false;
     for (const arm of node.arms) {
       const body = this.newBlock('match arm', arm), next = this.newBlock('next pattern', arm);
@@ -132,32 +147,47 @@ export class MirLowerer {
     if (reaches) this.current = done; else done.terminator = {kind: 'unreachable', span: node.span};
     return result;
   }
+  labeledBlock(node) {
+    const done = this.newBlock('labeled block exit', node), result = this.register(node.type, node);
+    const frame = {id: node.id, break: done, continue: null, result, hasBreak: false};
+    this.loops.push(frame);
+    const value = this.block(node.then); this.loops.pop();
+    const fallsThrough = !!this.current;
+    if (fallsThrough) { this.move(result, value, node); this.goto(done, node); }
+    if (fallsThrough || frame.hasBreak) this.current = done;
+    else done.terminator = {kind: 'unreachable', span: node.span};
+    return result;
+  }
   whileLet(node) {
     const test = this.newBlock('while-let test', node), body = this.newBlock('pattern matched', node), done = this.newBlock('while-let exit', node);
     this.goto(test, node); this.current = test;
     const value = this.expr(node.value), condition = this.patternTest(node.pattern, value);
+    if (!this.current) { for (const block of [body, done]) block.terminator = {kind: 'unreachable', span: node.span}; return; }
     this.branch(condition, body, done, node); this.current = body;
     this.bind(node.pattern, value);
-    this.loops.push({break: done, continue: test, result: null, hasBreak: false});
+    this.loops.push({id: node.id, break: done, continue: test, result: null, hasBreak: false});
     this.block(node.then); this.loops.pop();
     if (this.current) this.goto(test, node); this.current = done;
   }
   loopExpression(node) {
     const body = this.newBlock('loop', node), done = this.newBlock('loop exit', node), result = this.register(node.type, node);
     this.goto(body, node); this.current = body;
-    const frame = {break: done, continue: body, result, hasBreak: false}; this.loops.push(frame);
+    const frame = {id: node.id, break: done, continue: body, result, hasBreak: false}; this.loops.push(frame);
     this.block(node.then); this.goto(body, node); this.loops.pop();
     if (frame.hasBreak) this.current = done; else done.terminator = {kind: 'unreachable', span: node.span};
     return result;
   }
   whileLoop(node) {
     const test = this.newBlock('while test', node), body = this.newBlock('while body', node), done = this.newBlock('while exit', node);
-    this.goto(test, node); this.current = test; this.branch(this.expr(node.condition), body, done, node);
-    this.current = body; this.loops.push({break: done, continue: test, result: null});
+    this.goto(test, node); this.current = test; const condition = this.expr(node.condition);
+    if (!this.current) { for (const block of [body, done]) block.terminator = {kind: 'unreachable', span: node.span}; return; }
+    this.branch(condition, body, done, node);
+    this.current = body; this.loops.push({id: node.id, break: done, continue: test, result: null});
     this.block(node.then); this.goto(test, node); this.loops.pop(); this.current = done;
   }
   forLoop(node) {
     const from = this.expr(node.from), to = node.to ? this.expr(node.to) : this.emit('builtin', {name: 'method::len', args: [], receiver: from}, node, 'usize');
+    if (!this.current) return;
     const counterType = node.to ? node.from.type : 'usize';
     const counter = this.register(counterType, node);
     this.move(counter, node.to ? from : this.literal('0', 'usize', node), node);
@@ -166,7 +196,7 @@ export class MirLowerer {
     const condition = this.emit('binary', {operator: node.inclusive ? '<=' : '<', left: counter, right: to, operandType: counterType}, node, 'bool');
     this.branch(condition, body, done, node, 'rangeSwitch'); this.current = body;
     const value = node.to ? counter : this.emit('get', {value: from, index: counter, field: null}, node, node.pattern.type);
-    this.bind(node.pattern, value); this.loops.push({break: done, continue: step, result: null});
+    this.bind(node.pattern, value); this.loops.push({id: node.id, break: done, continue: step, result: null});
     this.block(node.then); this.goto(step, node); this.loops.pop(); this.current = step;
     if (node.inclusive) {
       const increment = this.newBlock('inclusive increment', node);
@@ -190,23 +220,28 @@ export class MirLowerer {
         this.bind(node.pattern, value, node); break;
       }
       case 'assign': {
+        // Rust evaluates RHS, then the assignee place. Primitive compound
+        // assignment also reads the original destination only AFTER the RHS.
+        let value = this.expr(node.value);
+        if (!this.current) break;
         const place = this.place(node.target);
-        let value;
-        if (node.op === '=') value = this.expr(node.value);
-        else {
+        if (node.op !== '=') {
           const original = this.emit('read', {place, copy: false}, node.target, node.target.type);
-          value = this.emit('binary', {operator: node.op.slice(0, -1), left: original, right: this.expr(node.value), operandType: node.target.type}, node, node.target.type);
+          value = this.emit('binary', {operator: node.op.slice(0, -1), left: original, right: value, operandType: node.target.type}, node, node.target.type);
         }
         this.emit('write', {place, value}, node); break;
       }
       case 'expression': this.expr(node.value); break;
       case 'return': this.terminate('return', {value: this.expr(node.value)}, node); break;
       case 'break': {
-        const frame = this.loops.at(-1); frame.hasBreak = true;
-        if (frame.result !== null) this.move(frame.result, this.expr(node.value), node);
+        const frame = this.loops.findLast(loop => loop.id === node.controlTarget);
+        const value = this.expr(node.value);
+        if (!this.current) break;
+        frame.hasBreak = true;
+        if (frame.result !== null) this.move(frame.result, value, node);
         this.goto(frame.break, node); break;
       }
-      case 'continue': this.goto(this.loops.at(-1).continue, node); break;
+      case 'continue': this.goto(this.loops.findLast(loop => loop.id === node.controlTarget).continue, node); break;
       case 'whileLet': this.whileLet(node); break;
       case 'while': this.whileLoop(node); break;
       case 'for': this.forLoop(node); break;

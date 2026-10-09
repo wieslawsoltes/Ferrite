@@ -4,7 +4,7 @@ import {Diagnostic} from './Diagnostic.js';
 
 /** Declaration indexing and namespace resolution are independent of expression typing. */
 export class SymbolIndex {
-  constructor(ast) {
+  constructor(ast, {validate = true} = {}) {
     this.functions = new Map(); this.structs = new Map(); this.enums = new Map();
     this.aliases = new Map(); this.constants = new Map(); this.traits = new Map(); this.imports = new Map(); this.impls = [];
     this.symbols = []; this.moduleRoots = new Map(); this.moduleVisibility = new Map();
@@ -13,7 +13,7 @@ export class SymbolIndex {
     this.enums.set('Result', {kind: 'enum', name: 'Result', generics: [{name: 'T', bounds: []}, {name: 'E', bounds: []}],
       variants: [{name: 'Ok', fields: ['T']}, {name: 'Err', fields: ['E']}], attributes: []});
     this.addItems(ast.items, '');
-    this.typeResolver = new TypeResolver(this); this.typeResolver.validate();
+    this.typeResolver = new TypeResolver(this); if (validate) this.typeResolver.validate();
     // Trait methods inherit the trait's visibility, not an absent `pub` on impl methods.
     for (const method of this.functions.values()) if (method.implementedTrait) {
       const trait = this.resolve(this.traits, method.implementedTrait, method.module, method, false);

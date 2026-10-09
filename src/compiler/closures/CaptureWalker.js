@@ -2,7 +2,9 @@
 export class CaptureWalker {
   static bindings(pattern) {
     if (!pattern) return [];
-    return pattern.kind === 'bindingPattern' ? [pattern.name] : (pattern.items ?? []).flatMap(p => this.bindings(p));
+    if (pattern.kind === 'bindingPattern') return [pattern.name];
+    if (pattern.kind === 'atPattern') return [...this.bindings(pattern.binder), ...this.bindings(pattern.pattern)];
+    return [...(pattern.items ?? []).flatMap(p => this.bindings(p)), ...(pattern.fields ?? []).flatMap(f => this.bindings(f.pattern))];
   }
   static transform(node, names, onFree, use = 'read') {
     if (!node || typeof node !== 'object') return node;

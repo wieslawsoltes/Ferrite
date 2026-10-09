@@ -13,7 +13,7 @@ export class SemanticQueryCache {
   static environment(index) {
     const signature = fn => ({name: fn.name, module: fn.module, owner: fn.owner, visibility: fn.visibility,
       generics: fn.generics, predicates: fn.predicates, params: fn.params.map(p => ({name: p.name, type: p.type, mutable: p.mutable})),
-      returnType: fn.returnType, async: !!fn.async, attributes: fn.attributes, implementedTrait: fn.implementedTrait});
+      returnType: fn.returnType, isConst: !!fn.isConst, constBody: fn.isConst ? fn.body : undefined, async: !!fn.async, attributes: fn.attributes, implementedTrait: fn.implementedTrait});
     const map = value => [...value].sort(([a], [b]) => a.localeCompare(b));
     return JSON.stringify({functions: map(index.functions).map(([name, fn]) => [name, signature(fn)]),
       aliases: map(index.aliases), structs: map(index.structs), enums: map(index.enums), constants: map(index.constants),

@@ -4,12 +4,13 @@ import {TokenCursor} from './TokenCursor.js';
 import {AttributeParser} from './AttributeParser.js';
 
 const PRECEDENCE = {'||': 1, '&&': 2, '|': 3, '^': 4, '&': 5, '==': 6, '!=': 6,
-  '<': 7, '>': 7, '<=': 7, '>=': 7, '+': 8, '-': 8, '*': 9, '/': 9, '%': 9};
-const BLOCK_EXPRESSIONS = new Set(['ifExpr', 'ifLet', 'match', 'block', 'loopExpr']);
+  '<': 6, '>': 6, '<=': 6, '>=': 6, '<<': 7, '>>': 7, '+': 8, '-': 8, '*': 9, '/': 9, '%': 9};
+const BLOCK_EXPRESSIONS = new Set(['ifExpr', 'ifLet', 'match', 'block', 'loopExpr', 'labelBlock', 'while', 'whileLet', 'for']);
+const ASSIGNMENTS = new Set(['=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '<<=', '>>=']);
 
 /** Recursive-descent items/statements and Pratt expressions with complete source spans. */
 export class Parser {
-  constructor(tokens) { this.c = new TokenCursor(tokens); this.depth = 0; this.typeDepth = 0; }
+  constructor(tokens) { this.c = new TokenCursor(tokens); this.depth = 0; this.typeDepth = 0; this.patternDepth = 0; }
   static parse(tokens) { return new Parser(tokens).parse(); }
   parse() {
     const attributes = AttributeParser.read(this.c, {inner:true}), items = [];
@@ -68,7 +69,9 @@ export class Parser {
     try { return this.parseType(); } finally { this.typeDepth--; }
   }
   parseType() {
+    if (this.c.match('!')) return '!';
     if(this.c.match('impl'))return 'impl '+this.bound();
+    if (this.c.is('&&')) this.c.split('&');
     if (this.c.match('&')) {
       if (this.c.peek().kind === 'lifetime') this.c.take();
       const mutable = !!this.c.match('mut');
@@ -84,8 +87,10 @@ export class Parser {
     if (this.c.match('[')) {
       const type = this.type();
       this.c.eat(';');
-      const length = this.c.take().value;
-      if (!/^\d+$/.test(length)) throw new Diagnostic('F0100', 'Array sizes must currently be integer literals', this.c.peek().span);
+      const begin = this.c.index; this.expr();
+      const tokens = this.c.tokens.slice(begin, this.c.index);
+      const source = tokens.map(token => token.raw ? 'r#' + token.value : token.value).join(' ');
+      const length = tokens.length === 1 ? source : `{ ${source} }`;
       this.c.eat(']'); return `[${type};${length}]`;
     }
     let type = this.path();
@@ -95,6 +100,7 @@ export class Parser {
   item(owner = null, trait = null) {
     const start = this.c.peek(), attributes = this.attributes();
     const visibility = this.c.match('pub') ? 'pub' : 'private';
+    if (this.c.is('const') && this.c.peek(1).value === 'fn') { this.c.take(); this.c.take(); return [this.fn(start, {owner, trait, attributes, visibility, isConst: true})]; }
     if (this.c.match('fn')) return [this.fn(start, {owner, trait, attributes, visibility})];
     if (this.c.match('type')) {
       const name = this.c.identifier(), generics = this.generics(), predicates = this.whereClause();
@@ -192,54 +198,87 @@ export class Parser {
         body.push(this.c.node('let', start, {name: pattern.name, pattern, mutable, annotation, value, otherwise}));
         continue;
       }
-      if (this.c.is('return') || this.c.is('break') || this.c.is('continue')) {
-        const kind = this.c.take().value;
-        const value = this.c.is(';') || this.c.is('}') ? null : this.expr();
-        if (kind === 'continue' && value) throw new Diagnostic('E0571', 'continue does not take a value', start.span);
+      if (['return', 'break', 'continue'].includes(this.c.peek().value)) {
+        const value = this.controlExpression();
         if (!this.c.is('}')) this.c.eat(';');
-        body.push(this.c.node(kind, start, {value})); continue;
+        body.push(value); continue;
       }
-      if (this.c.match('while')) {
-        if (this.c.match('let')) {
-          const pattern = this.pattern(); this.c.eat('=');
-          const value = this.expr(0, false), then = this.block();
-          body.push(this.c.node('whileLet', start, {pattern, value, then})); continue;
-        }
-        const condition = this.expr(0, false), then = this.block();
-        body.push(this.c.node('while', start, {condition, then})); continue;
-      }
-      if (this.c.match('for')) {
-        const pattern = this.pattern(false); this.c.eat('in');
-        const from = this.expr(0, false);
-        let to = null, inclusive = false;
-        if (this.c.is('..') || this.c.is('..=')) { inclusive = this.c.take().value === '..='; to = this.expr(0, false); }
-        const then = this.block();
-        body.push(this.c.node('for', start, {name: pattern.name, pattern, from, to, inclusive, then})); continue;
+      if (this.c.is('while') || this.c.is('for')) {
+        body.push(this.loopLike(start)); continue;
       }
       const value = this.expr();
-      if (['=', '+=', '-=', '*=', '/=', '%='].includes(this.c.peek().value)) {
-        const op = this.c.take().value, rhs = this.expr(); this.c.eat(';');
-        body.push(this.c.node('assign', start, {target: value, op, value: rhs}));
-      } else if (this.c.match(';')) body.push(this.c.node('expression', start, {value}));
+      if (this.c.match(';')) body.push(value.kind === 'assign' ? value : this.c.node('expression', start, {value}));
       else if (this.c.is('}')) { tail = value; break; }
       else if (BLOCK_EXPRESSIONS.has(value.kind)) body.push(this.c.node('expression', start, {value}));
       else this.c.eat(';');
     }
     this.c.eat('}'); return this.c.node('block', start, {body, tail});
   }
+  label() {
+    const token = this.c.take();
+    if (token.kind !== 'lifetime' || ["'_", "'static", "'self", "'Self", "'super", "'crate"].includes(token.value))
+      throw new Diagnostic('E0262', 'Invalid control-flow label', token.span);
+    return token.value;
+  }
+  controlExpression(allowRecord = true) {
+    const start = this.c.take(), kind = start.value;
+    const label = kind !== 'return' && this.c.peek().kind === 'lifetime' ? this.label() : null;
+    const ended = [';', '}', ')', ']', ',', 'EOF'].includes(this.c.peek().value);
+    const value = kind === 'continue' || ended ? null : this.expr(0, allowRecord);
+    return this.c.node(kind, start, {value, label});
+  }
+  loopLike(start, label = null) {
+    if (this.c.match('loop')) return this.c.node('loopExpr', start, {then: this.block(), label});
+    if (this.c.match('while')) {
+      if (this.c.match('let')) {
+        const pattern = this.pattern(); this.c.eat('=');
+        const value = this.expr(0, false), then = this.block();
+        return this.c.node('whileLet', start, {pattern, value, then, label});
+      }
+      const condition = this.expr(0, false), then = this.block();
+      return this.c.node('while', start, {condition, then, label});
+    }
+    if (this.c.match('for')) {
+      const pattern = this.pattern(false); this.c.eat('in');
+      const from = this.expr(0, false);
+      let to = null, inclusive = false;
+      if (this.c.is('..') || this.c.is('..=')) { inclusive = this.c.take().value === '..='; to = this.expr(0, false); }
+      return this.c.node('for', start, {name: pattern.name, pattern, from, to, inclusive, then: this.block(), label});
+    }
+    if (label && this.c.is('{')) return this.c.node('labelBlock', start, {then: this.block(), label});
+    throw new Diagnostic('E0262', 'A label must precede a loop or block', start.span);
+  }
   pattern(allowOr = true) {
-    const start = this.c.peek();
-    let pattern = this.patternAtom();
-    if (this.c.is('..') || this.c.is('..=')) {
-      const inclusive = this.c.take().value === '..=';
-      pattern = this.c.node('rangePattern', start, {from: pattern, to: this.patternAtom(), inclusive});
-    }
-    if (allowOr && this.c.match('|')) {
-      const items = [pattern];
-      do { items.push(this.pattern(false)); } while (this.c.match('|'));
-      return this.c.node('orPattern', start, {items});
-    }
-    return pattern;
+    if (++this.patternDepth > 256) throw new Diagnostic('F0102', 'Pattern nesting limit exceeded', this.c.peek().span);
+    try {
+      const start = this.c.peek();
+      if (allowOr) this.c.match('|');
+      const ended = () => [',', ')', ']', '}', '|', '=', '=>', 'if', ':', ';', 'EOF'].includes(this.c.peek().value);
+      let pattern;
+      if (this.c.is('..') || this.c.is('..=')) {
+        const inclusive = this.c.take().value === '..=';
+        if (ended()) {
+          if (inclusive) throw new Diagnostic('E0586', 'An inclusive range requires an upper endpoint', start.span);
+          pattern = this.c.node('restPattern', start);
+        } else pattern = this.c.node('rangePattern', start, {from: null, to: this.patternAtom(), inclusive});
+      } else {
+        pattern = this.patternAtom();
+        if (this.c.match('@')) {
+          if (pattern.kind !== 'bindingPattern') throw new Diagnostic('E0308', "Expected a binding before '@'", pattern.span);
+          pattern = this.c.node('atPattern', start, {binder: pattern, pattern: this.pattern(false)});
+        } else if (this.c.is('..') || this.c.is('..=')) {
+          const inclusive = this.c.take().value === '..=';
+          if (ended() && inclusive) throw new Diagnostic('E0586', 'An inclusive range requires an upper endpoint', start.span);
+          pattern = this.c.node('rangePattern', start, {from: pattern, to: ended() ? null : this.patternAtom(), inclusive});
+        }
+      }
+      if (allowOr && this.c.match('|')) {
+        const items = [pattern];
+        do { items.push(this.pattern(false)); } while (this.c.match('|'));
+        return this.c.node('orPattern', start, {items});
+      }
+      return pattern;
+    } finally { this.patternDepth--; }
   }
   patternAtom() {
     const start = this.c.peek();
@@ -247,11 +286,12 @@ export class Parser {
     if (this.c.match('(')) {
       if (this.c.match(')')) return this.c.node('tuplePattern', start, {items: []});
       const first = this.pattern();
-      if (!this.c.match(',')) { this.c.eat(')'); return first; }
+      if (!this.c.match(',')) { this.c.eat(')'); return first.kind === 'restPattern' ? this.c.node('tuplePattern', start, {items: [first]}) : first; }
       return this.c.node('tuplePattern', start, {items: [first, ...this.list(')', () => this.pattern())]});
     }
+    if (this.c.match('[')) return this.c.node('arrayPattern', start, {items: this.list(']', () => this.pattern())});
     if (this.c.match('mut')) return this.c.node('bindingPattern', start, {name: this.c.identifier(), mutable: true});
-    if (['number', 'string', 'char'].includes(start.kind) || ['true', 'false', '-'].includes(start.value)) return this.expr(10);
+    if (['number', 'string', 'char', 'byte'].includes(start.kind) || ['true', 'false', '-'].includes(start.value)) return this.expr(10);
     const name = this.path();
     if (this.c.match('{')) {
       const fields = []; let rest = false;
@@ -299,11 +339,24 @@ export class Parser {
         if (this.c.match('(')) { left = this.c.node('call', start, {callee: left, args: this.list(')', () => this.expr()), macro: false}); continue; }
         if (this.c.match('[')) { const index = this.expr(); this.c.eat(']'); left = this.c.node('index', start, {object: left, index}); continue; }
         if (this.c.match('.')) {
-          const field = this.c.peek().kind === 'number' ? this.c.take().value : this.c.identifier();
+          let field;
+          if (this.c.peek().kind === 'number') {
+            // The lexer sees `value.0.1` as `value`, `.`, `0.1`. Split only in
+            // tuple-field position, leaving the cached token stream untouched.
+            const token = this.c.peek(), match = /^(\d+)\.(\d+)$/.exec(token.value);
+            if (match) this.c.split(match[1]);
+            field = this.c.take().value;
+            if (match) this.c.split('.');
+            if (!/^\d+$/.test(field)) throw new Diagnostic('E0609', 'Tuple indices must be unsuffixed decimal integers', token.span);
+          } else field = this.c.identifier();
           left = this.c.node('field', start, {object: left, field}); continue;
         }
         if (this.c.is('as') && minimum <= 10) { this.c.take(); left = this.c.node('cast', start, {value: left, target: this.type()}); continue; }
         if (this.c.match('?')) { left = this.c.node('try', start, {value: left}); continue; }
+        if (minimum === 0 && ASSIGNMENTS.has(this.c.peek().value)) {
+          const op = this.c.take().value;
+          left = this.c.node('assign', start, {target: left, op, value: this.expr(0, allowRecord)}); continue;
+        }
         const precedence = PRECEDENCE[this.c.peek().value];
         if (precedence == null || precedence < minimum) break;
         const op = this.c.take().value;
@@ -314,7 +367,11 @@ export class Parser {
   }
   prefix(allowRecord) {
     const start = this.c.peek();
+    if (['return', 'break', 'continue'].includes(start.value)) return this.controlExpression(allowRecord);
+    if (start.kind === 'lifetime') { const label = this.label(); this.c.eat(':'); return this.loopLike(start, label); }
+    if (['loop', 'while', 'for'].includes(start.value)) return this.loopLike(start);
     if (this.c.is('{')) return this.block();
+    if (this.c.match('const')) return this.c.node('constBlock', start, {value: this.block()});
     if (this.c.match('if')) {
       if (this.c.match('let')) {
         const pattern = this.pattern(); this.c.eat('=');
@@ -326,7 +383,6 @@ export class Parser {
       const otherwise = this.c.match('else') ? (this.c.is('if') ? this.expr() : this.block()) : null;
       return this.c.node('ifExpr', start, {condition, then, otherwise});
     }
-    if (this.c.match('loop')) return this.c.node('loopExpr', start, {then: this.block()});
     if (this.c.match('match')) {
       const value = this.expr(0, false); this.c.eat('{'); const arms = [];
       while (!this.c.is('}')) {
@@ -345,7 +401,7 @@ export class Parser {
     if (this.c.match('(')) {
       if (this.c.match(')')) return this.c.node('literal', start, {value: null, type: '()'});
       const first = this.expr();
-      if (!this.c.match(',')) { this.c.eat(')'); return first; }
+      if (!this.c.match(',')) { this.c.eat(')'); return first.kind === 'restPattern' ? this.c.node('tuplePattern', start, {items: [first]}) : first; }
       const rest = this.list(')', () => this.expr());
       return this.c.node('tuple', start, {items: [first, ...rest]});
     }
@@ -360,6 +416,10 @@ export class Parser {
       return this.c.node('array', start, {items});
     }
     if (['true', 'false'].includes(start.value)) { this.c.take(); return this.c.node('literal', start, {value: start.value === 'true', type: 'bool'}); }
+    if (start.kind === 'byte') {
+      this.c.take(); return this.c.node('literal', start, {value: String(Lexer.decode(start.value).charCodeAt(0)), type: 'u8', suffix: 'u8'});
+    }
+    if (start.kind === 'byteString') throw new Diagnostic('F_BYTE_STRING', 'Byte-string references require browser static allocation support; use native Cargo', start.span);
     if (start.kind === 'string' || start.kind === 'char') {
       this.c.take(); const value = Lexer.decode(start.value);
       if (start.kind === 'char' && [...value].length !== 1) throw new Diagnostic('E0762', 'A char must contain one Unicode scalar', start.span);

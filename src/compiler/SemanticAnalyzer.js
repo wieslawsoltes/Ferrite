@@ -1,3 +1,4 @@
+import {ConstantEvaluator} from './ConstantEvaluator.js';
 import {PatternAnalyzer} from './patterns/PatternAnalyzer.js';
 import {PatternCoverage} from './patterns/PatternCoverage.js';
 import {Diagnostic} from './Diagnostic.js';
@@ -10,8 +11,8 @@ import {ClosureAnalyzer} from './closures/ClosureAnalyzer.js';
 
 /** Monomorphized typed HIR. Every local has an identity independent of its spelling. */
 export class SemanticAnalyzer {
-  constructor(ast, {entry = 'main', mode = 'run', maxInstances = 2048, queryCache = null} = {}) {
-    this.index = new SymbolIndex(ast);
+  constructor(ast, {entry = 'main', mode = 'run', maxInstances = 2048, queryCache = null, constEvaluation = {}} = {}) {
+    this.index = new SymbolIndex(ast, {validate: false});
     // Synthesized closure declarations belong to this analysis session. Never replay
     // cached callers without their anonymous declaration/capture environment.
     if(JSON.stringify(ast).includes('"kind":"closure"'))queryCache=null;
@@ -20,10 +21,13 @@ export class SemanticAnalyzer {
     this.queryCache = queryCache; this.environment = queryCache ? SemanticQueryCache.environment(this.index) : null;
     this.instances = new Map(); this.obligations = []; this.warnings = [];
     this.entry = entry; this.mode = mode; this.maxInstances = maxInstances; this.depth = 0;
-    this.constantStack = new Set();
+    this.constants = new ConstantEvaluator(this, constEvaluation);
+    this.index.constantEvaluator = this.constants;
+    this.index.typeResolver.validate();
   }
   static analyze(ast, options) { return new SemanticAnalyzer(ast, options).analyze(); }
   analyze() {
+    for (const constant of this.index.constants.values()) this.constants.constant(constant);
     if (this.mode !== 'library') {
       const main = this.index.resolve(this.index.functions, this.entry, '', null);
       if (main.params.length) throw new Diagnostic('E0580', 'Entry point must not take parameters', main.span);
@@ -34,14 +38,15 @@ export class SemanticAnalyzer {
       const types = fn.params.map(p => this.index.type(p.type, fn.module, fn.owner));
       this.instantiate(fn, types, [], fn);
     }
+    for (const instance of this.instances.values()) if (instance.fn.isConst) this.constants.validate(instance);
     this.closures.finish();
-    return {typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
+    return {constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
       symbols: this.index.symbols, structures: [...this.index.structs.values()],
       enums: [...this.index.enums.values()], warnings: this.warnings, entry: this.entryKey,
       capabilities: {ownership: 'conservative whole-local analysis', traits: 'concrete impls and built-in bounds'}};
   }
   annotate(node, type) { node.type = type; return type; }
-  normalize(type, ctx) { return this.index.type(T.substitute(type, ctx.instance.substitution), ctx.instance.fn.module, ctx.instance.fn.owner); }
+  normalize(type, ctx, node = null) { return this.index.type(T.substitute(type, ctx.instance.substitution), ctx.instance.fn.module, ctx.instance.fn.owner, new Set(), node); }
   hasTrait(type, bound, depth = 0) {
     if (depth > 32) return false;
     const closure=this.closures.get(type);
@@ -106,7 +111,7 @@ export class SemanticAnalyzer {
     const warningStart = this.warnings.length, patternStart = this.patternReports.length;
     const copy = structuredClone(fn);
     const instance = {key, name: fn.name, fn: copy, substitution, typeArguments: Object.fromEntries(substitution),
-      returnType: this.index.type(T.substitute(fn.returnType, substitution), fn.module, fn.owner), calls: [], locals: []};
+      returnType: this.index.type(T.substitute(fn.returnType, substitution), fn.module, fn.owner, new Set(), fn), calls: [], locals: []};
     this.instances.set(key, instance);
     const ctx = new FunctionContext(instance);
     copy.params.forEach((p, i) => { p.type = argumentTypes[i]; p.binding = ctx.declare(p.name, p.type, p.mutable, p, true); });
@@ -137,10 +142,17 @@ export class SemanticAnalyzer {
     if (!node) return '()';
     let type;
     switch (node.kind) {
+      case 'constBlock': {
+        const result = this.constants.expression(node.value, ctx.instance.fn.module, expected ?? '_', node);
+        node.kind = 'constValue'; node.value = structuredClone(result.expression); type = result.type; break;
+      }
+      case 'assign': case 'return': case 'break': case 'continue':
+      case 'while': case 'whileLet': case 'for': return this.statement(node, ctx);
       case 'closure': type=this.closures.create(node,ctx);break;
       case 'literal': {
         type = node.type;
-        if (type === '{integer}') type = expected && T.numeric(expected) ? expected : 'i32';
+        if (type === '{integer}') type = expected && T.integer(expected) ? expected : 'i32';
+        if (type === 'f64' && node.suffix == null && expected === 'f32') type = 'f32';
         if (T.integer(type)) {
           const value = BigInt(node.value);
           const bits = type.endsWith('size') ? 32 : Number(type.slice(1));
@@ -155,11 +167,8 @@ export class SemanticAnalyzer {
         if (binding) { node.binding = binding; type = binding.type; break; }
         const constant = this.index.resolve(this.index.constants, node.name, ctx.instance.fn.module, node, false);
         if (constant) {
-          if (this.constantStack.has(constant.name)) throw new Diagnostic('E0391', 'Cyclic constant definition', node.span);
-          this.constantStack.add(constant.name);
-          node.constant = structuredClone(constant.value);
-          type = this.infer(node.constant, ctx, constant.type); T.unify(constant.type, type, new Map(), node);
-          this.constantStack.delete(constant.name); break;
+          const result = this.constants.constant(constant, node);
+          node.constant = structuredClone(result.expression); type = result.type; break;
         }
         const constructor = this.index.constructorFor(node.name, ctx.instance.fn.module);
         if (constructor && !constructor.variant.fields.length) { type = this.construct(node, constructor, [], ctx, expected); break; }
@@ -171,14 +180,14 @@ export class SemanticAnalyzer {
       }
       case 'array': {
         const hint = /^\[(.+);\d+\]$/.exec(expected ?? '')?.[1];
-        const itemType = node.items.length ? this.infer(node.items[0], ctx, hint) : hint;
-        if (!itemType) throw new Diagnostic('E0282', 'Empty array needs a type annotation', node.span);
-        node.items.slice(1).forEach(n => T.unify(itemType, this.infer(n, ctx, itemType), new Map(), n));
+        let itemType = node.items.length ? '!' : hint;
+        if (!node.items.length && !hint) throw new Diagnostic('E0282', 'Empty array needs a type annotation', node.span);
+        for (const item of node.items) itemType = T.join(itemType, this.infer(item, ctx, itemType === '!' ? hint : itemType), item);
         type = `[${itemType};${node.items.length}]`; break;
       }
       case 'repeatArray': {
-        this.infer(node.count, ctx, 'usize');
-        if (node.count.kind !== 'literal') throw new Diagnostic('F0202', 'Array repeat length must be a constant literal', node.span);
+        const evaluated = this.constants.expression(node.count, ctx.instance.fn.module, 'usize', node.count);
+        node.count = structuredClone(evaluated.expression);
         const count = Number(node.count.value);
         if (!Number.isSafeInteger(count) || count < 0 || count > 100000) throw new Diagnostic('F0202', 'Array length exceeds the budget', node.span);
         const element = this.infer(node.value, ctx, /^\[(.+);\d+\]$/.exec(expected ?? '')?.[1]);
@@ -237,8 +246,10 @@ export class SemanticAnalyzer {
       case 'unary': {
         // Negate literal magnitudes before range checking, including i32::MIN.
         if (node.op === '-' && node.value.kind === 'literal' && typeof node.value.value === 'string') {
-          const literal = {...node.value, value: '-' + node.value.value};
+          const magnitude = node.value.value;
+          const literal = {...node.value, value: /^0[xbo]/i.test(magnitude) ? (-BigInt(magnitude)).toString() : '-' + magnitude};
           type = this.infer(literal, ctx, expected);
+          if (type.startsWith('u')) throw new Diagnostic('E0600', 'Cannot negate an unsigned integer', node.span);
           node.kind = 'literal'; node.value = literal.value; node.type = type;
           return type;
         }
@@ -250,30 +261,38 @@ export class SemanticAnalyzer {
         } else if (node.op === '!') {
           if (operand !== 'bool' && !T.integer(operand)) throw new Diagnostic('E0600', `Cannot apply ! to ${operand}`, node.span);
           type = operand;
-        } else { if (!T.numeric(operand)) throw new Diagnostic('E0600', 'Negation requires a number', node.span); type = operand; }
+        } else { if (!T.numeric(operand) || operand.startsWith('u')) throw new Diagnostic('E0600', 'Negation requires a signed integer or floating-point number', node.span); type = operand; }
         break;
       }
       case 'binary': {
-        const logical = ['&&', '||'].includes(node.op);
-        const left = this.infer(node.left, ctx, logical ? 'bool' : expected && T.numeric(expected) ? expected : null);
-        const right = this.infer(node.right, ctx, left);
-        T.unify(left, right, new Map(), node);
+        const logical = ['&&', '||'].includes(node.op), shift = ['<<', '>>'].includes(node.op);
+        const bitwise = ['&', '|', '^'].includes(node.op);
+        const left = this.infer(node.left, ctx, logical ? 'bool' : expected && (T.numeric(expected) || bitwise && expected === 'bool') ? expected : null);
+        // Shift RHS has its own integer type; unlike arithmetic, u64 << u8 is legal.
+        const right = this.infer(node.right, ctx, shift ? null : left);
+        if (!shift) T.unify(left, right, new Map(), node);
         if (logical) { T.unify('bool', left, new Map(), node); type = 'bool'; }
         else if (['==', '!=', '<', '>', '<=', '>='].includes(node.op)) {
           if (!T.numeric(left) && !['bool', 'char', '&str', 'String'].includes(left))
             throw new Diagnostic('F_COMPARE', `Comparison on ${left} is not implemented`, node.span);
           type = 'bool';
+        } else if (shift) {
+          if (!T.integer(left) || !T.integer(right)) throw new Diagnostic('E0369', 'Shifts require integer operands', node.span);
+          type = left;
+        } else if (bitwise) {
+          if (!T.integer(left) && left !== 'bool') throw new Diagnostic('E0369', 'Bitwise operators require integers or booleans', node.span);
+          type = left;
         } else {
           if (!T.numeric(left)) throw new Diagnostic('E0369', `Arithmetic requires numeric operands, got ${left}`, node.span);
           type = left;
         }
-        if (['&', '|', '^'].includes(node.op) && !T.integer(left))
-          throw new Diagnostic('E0369', 'Bitwise operators require integer operands', node.span);
         node.operandType = left; break;
       }
       case 'cast': {
         const source = this.infer(node.value, ctx);
-        if (!T.numeric(source) || !T.numeric(node.target)) throw new Diagnostic('E0605', 'Only numeric casts are supported', node.span);
+        node.target = this.normalize(node.target, ctx, node);
+        const allowed = T.numeric(source) && T.numeric(node.target) || ['bool', 'char'].includes(source) && T.integer(node.target) || source === 'u8' && node.target === 'char';
+        if (!allowed) throw new Diagnostic('E0605', `Invalid primitive cast from ${source} to ${node.target}`, node.span);
         type = node.target; break;
       }
       case 'block': return this.block(node, ctx, expected);
@@ -290,9 +309,14 @@ export class SemanticAnalyzer {
         const no = node.otherwise ? this.infer(node.otherwise, ctx, expected) : '()';
         type = T.join(yes, no, node); break;
       }
-      case 'loopExpr': {
-        const loop = {kind: 'loop', type: '!', breaks: []}; ctx.loops.push(loop);
-        this.block(node.then, ctx, '()'); ctx.loops.pop(); type = loop.type; break;
+      case 'loopExpr': case 'labelBlock': {
+        const loop = {kind: node.kind === 'labelBlock' ? 'block' : 'loop', id: node.id, label: node.label, type: '!', expected};
+        ctx.loops.push(loop);
+        const body = this.block(node.then, ctx, loop.kind === 'block' ? expected : '()');
+        ctx.loops.pop();
+        if (loop.kind === 'block') type = T.join(loop.type, body, node);
+        else { T.unify('()', body, new Map(), node.then); type = loop.type; }
+        break;
       }
       case 'match': {
         const scrutinee = this.infer(node.value, ctx); let result = '!';
@@ -430,7 +454,7 @@ export class SemanticAnalyzer {
     const constructor = this.index.constructorFor(name, ctx.instance.fn.module);
     if (constructor) return this.construct(node, constructor, node.args, ctx, expected);
     const fn = this.index.resolve(this.index.functions, name, ctx.instance.fn.module, node);
-    const explicit = (callee.typeArguments ?? []).map(t => this.normalize(t, ctx));
+    const explicit = (callee.typeArguments ?? []).map(t => this.normalize(t, ctx, callee));
     const mapping = new Map(fn.generics.map((g, i) => [g.name, explicit[i] ?? null]));
     const types = node.args.map((arg, i) => {
       const formal = fn.params[i] && this.index.type(T.substitute(fn.params[i].type, mapping), fn.module, fn.owner, new Set(mapping.keys()), node);
@@ -497,7 +521,7 @@ export class SemanticAnalyzer {
     let type = '()';
     switch (node.kind) {
       case 'let': {
-        const annotation = node.annotation ? this.normalize(node.annotation, ctx) : null;
+        const annotation = node.annotation ? this.normalize(node.annotation, ctx, node) : null;
         const actual = this.infer(node.value, ctx, annotation);
         if (annotation) T.unify(annotation, actual, new Map(), node);
         if (node.otherwise && this.block(node.otherwise, ctx) !== '!') throw new Diagnostic('E0308', 'The else branch of let-else must diverge', node.otherwise.span);
@@ -507,8 +531,11 @@ export class SemanticAnalyzer {
       }
       case 'assign': {
         const target = this.infer(node.target, ctx); this.place(node.target, ctx, true);
-        T.unify(target, this.infer(node.value, ctx, target), new Map(), node);
-        if (node.op !== '=' && !T.numeric(target)) throw new Diagnostic('E0368', 'Compound assignment requires a number', node.span);
+        const shift = ['<<=', '>>='].includes(node.op), bitwise = ['&=', '|=', '^='].includes(node.op);
+        const actual = this.infer(node.value, ctx, shift ? null : target);
+        if (!shift) T.unify(target, actual, new Map(), node);
+        if (shift && (!T.integer(target) || !T.integer(actual)) || bitwise && !T.integer(target) && target !== 'bool' || !shift && !bitwise && node.op !== '=' && !T.numeric(target))
+          throw new Diagnostic('E0368', `Invalid operands for ${node.op}`, node.span);
         break;
       }
       case 'return': {
@@ -519,11 +546,10 @@ export class SemanticAnalyzer {
         type = '!'; break;
       }
       case 'break': case 'continue': {
-        const loop = ctx.loops.at(-1);
-        if (!loop) throw new Diagnostic('E0268', `${node.kind} outside a loop`, node.span);
+        const loop = ctx.control(node);
         if (node.kind === 'break') {
-          const value = this.infer(node.value, ctx);
-          if (loop.kind !== 'loop' && value !== '()') throw new Diagnostic('E0571', 'Only loop expressions support break values', node.span);
+          const value = this.infer(node.value, ctx, loop.expected ?? (loop.type === '!' ? null : loop.type));
+          if (!['loop', 'block'].includes(loop.kind) && node.value) throw new Diagnostic('E0571', 'Only loop expressions and labeled blocks support break values', node.span);
           loop.type = T.join(loop.type, value, node);
         }
         type = '!'; break;
@@ -532,13 +558,13 @@ export class SemanticAnalyzer {
       case 'whileLet': {
         const scrutinee = this.infer(node.value, ctx);
         ctx.push(); this.pattern(node.pattern, scrutinee, ctx);
-        ctx.loops.push({kind: 'while', type: '!', breaks: []});
+        ctx.loops.push({kind: 'while', id: node.id, label: node.label, type: '!'});
         T.unify('()', this.block(node.then, ctx, '()'), new Map(), node.then);
         ctx.loops.pop(); ctx.pop(); break;
       }
       case 'while': {
         T.unify('bool', this.infer(node.condition, ctx, 'bool'), new Map(), node);
-        ctx.loops.push({kind: 'while', type: '!', breaks: []});
+        ctx.loops.push({kind: 'while', id: node.id, label: node.label, type: '!'});
         T.unify('()', this.block(node.then, ctx, '()'), new Map(), node.then);
         ctx.loops.pop(); break;
       }
@@ -553,7 +579,7 @@ export class SemanticAnalyzer {
           if (!element) throw new Diagnostic('E0277', `Cannot iterate ${from}`, node.span);
         }
         ctx.push(); this.pattern(node.pattern, element, ctx, false); this.checkCoverage([node.pattern], element, node, true); node.binding = node.pattern.binding;
-        ctx.loops.push({kind: 'for', type: '!', breaks: []});
+        ctx.loops.push({kind: 'for', id: node.id, label: node.label, type: '!'});
         T.unify('()', this.block(node.then, ctx, '()'), new Map(), node.then);
         ctx.loops.pop(); ctx.pop(); break;
       }

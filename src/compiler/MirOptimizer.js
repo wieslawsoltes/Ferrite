@@ -1,3 +1,4 @@
+import {LiteralValue} from './LiteralValue.js';
 import {Runtime} from '../runtime/Runtime.js';
 import {MirVerifier} from './MirVerifier.js';
 
@@ -21,7 +22,7 @@ export class MirOptimizer {
             } catch { /* Preserve runtime overflow/panic behavior rather than silently removing it. */ }
             if (folded) {
               block.instructions[n] = {id: i.id, op: 'const', dest: i.dest, type: i.type,
-                value: typeof value === 'bigint' ? value.toString() : value, span: i.span, sourceId: i.sourceId};
+                value: LiteralValue.encode(value), span: i.span, sourceId: i.sourceId};
               constants.set(i.dest, value);
               changes.push({kind: 'constant fold', function: fn.instance, block: block.id, span: i.span, detail: `${i.op} → ${String(value)}`});
             } else if (i.op === 'copy') { if (constants.has(i.value)) constants.set(i.target, constants.get(i.value)); else constants.delete(i.target); }

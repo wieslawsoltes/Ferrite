@@ -46,6 +46,19 @@ export class Runtime {
       case '||': return a || b;
     }
     if (this.integer(type) && ['/', '%'].includes(op) && b === 0n) this.fail('Division by zero', 'R_DIV_ZERO');
+    if (this.integer(type) && ['/', '%'].includes(op) && b === -1n && a === this.bounds(type).min && this.bounds(type).signed)
+      this.fail(`Integer overflow for ${type}`, 'R_OVERFLOW');
+    if (['<<', '>>'].includes(op)) {
+      const bits = BigInt(this.bounds(type).bits);
+      if (b < 0n || b >= bits) {
+        if (this.overflow !== 'wrapping') this.fail('Shift count exceeds the integer width', 'R_OVERFLOW');
+        b = BigInt.asUintN(this.bounds(type).bits, b) % bits;
+      }
+      // Shift truncation is defined even in checked mode; only the count overflows.
+      return this.normalize(op === '<<' ? a << b : a >> b, type, true);
+    }
+    if (type === 'bool' && ['&', '|', '^'].includes(op))
+      return op === '&' ? a && b : op === '|' ? a || b : a !== b;
     let result;
     switch (op) {
       case '+': result = a + b; break;
@@ -66,6 +79,9 @@ export class Runtime {
     return this.fail(`Invalid unary operator ${op}`);
   }
   cast(value, target) {
+    if (target === 'char') return String.fromCodePoint(Number(value));
+    if (typeof value === 'string') value = BigInt(value.codePointAt(0));
+    if (typeof value === 'boolean') value = value ? 1n : 0n;
     if (!this.integer(target)) return target === 'f32' ? Math.fround(Number(value)) : Number(value);
     if (typeof value === 'bigint') return this.normalize(value, target, true);
     const range = this.bounds(target);
@@ -81,6 +97,18 @@ export class Runtime {
     const result = Object.create(null);
     for (const key of Object.keys(value)) result[key] = this.clone(value[key], depth + 1);
     return result;
+  }
+  equal(a, b, depth = 0) {
+    if (depth > 128) this.fail('Equality nesting limit exceeded', 'R_COMPARE');
+    if (a?.__ref) return this.equal(this.read(a), b?.__ref ? this.read(b) : b, depth + 1);
+    if (b?.__ref) return this.equal(a, this.read(b), depth + 1);
+    // Do not shortcut aggregate identity: even an array compared with itself
+    // must compare NaN elements as unequal. +0 and -0 compare equal in Rust.
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return a === b;
+    if (Array.isArray(a) !== Array.isArray(b)) return false;
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length && keys.every(key =>
+      Object.hasOwn(b, key) && this.equal(a[key], b[key], depth + 1));
   }
   cells(count) { return Array.from({length: count}, () => ({value: undefined})); }
   reference(cells, slot, path = []) { return {__ref: true, cell: cells[slot], path}; }
@@ -152,7 +180,7 @@ export class Runtime {
       case 'format': return this.format(args, format);
       case 'panic': return this.fail(format ? this.format(args, format) : 'explicit panic', 'R_PANIC');
       case 'assert': if (!args[0]) this.fail('assertion failed', 'R_ASSERT'); return null;
-      case 'assert_eq': if (this.debug(args[0]) !== this.debug(args[1])) this.fail(`assertion failed: ${this.debug(args[0])} != ${this.debug(args[1])}`, 'R_ASSERT'); return null;
+      case 'assert_eq': if (!this.equal(args[0], args[1])) this.fail(`assertion failed: ${this.debug(args[0])} != ${this.debug(args[1])}`, 'R_ASSERT'); return null;
       case 'dbg': this.append(this.debug(args[0]) + '\n'); return args[0];
       case 'vec': return args;
       case 'Vec::new': return [];

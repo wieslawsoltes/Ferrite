@@ -19,7 +19,7 @@ export class TypeResolver {
     if (type.startsWith('impl ')) result = 'impl ' + next(type.slice(5));
     else if (T.reference(type)) result = (type.startsWith('&mut ') ? '&mut ' : '&') + next(T.target(type));
     else if (T.tuple(type)) result = T.tupleName(T.tuple(type).map(next));
-    else if (T.array(type)) { const {element, length} = T.array(type); result = `[${next(element)};${length}]`; }
+    else if (T.array(type)) { const {element, length} = T.array(type); const size = this.index.constantEvaluator?.length(length, module, node, parameters) ?? length; result = `[${next(element)};${size}]`; }
     else {
       const callable = /^(Fn|FnMut|FnOnce)\((.*)\)->(.+)$/.exec(type);
       if (callable) result = `${callable[1]}(${T.split(callable[2]).map(next).join(',')})->${next(callable[3])}`;
@@ -52,12 +52,9 @@ export class TypeResolver {
     return result;
   }
   substitute(type, arguments_, node) {
-    const parts = []; let offset = 0, size = 0;
-    const append = text => { size += text.length; if (size > 1000000) throw new Diagnostic('F_TYPE_SIZE', 'Expanded alias exceeds the size budget', node.span); parts.push(text); };
-    for (const match of type.matchAll(/(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*/g)) {
-      append(type.slice(offset, match.index)); append(arguments_.get(match[0]) ?? match[0]); offset = match.index + match[0].length;
-    }
-    append(type.slice(offset)); return parts.join('');
+    const result = T.substitute(type, arguments_);
+    if (result.length > 1000000) throw new Diagnostic('F_TYPE_SIZE', 'Expanded alias exceeds the size budget', node.span);
+    return result;
   }
   find(map, name, module, node) {
     for (const candidate of this.index.candidates(name, module)) if (map.has(candidate))

@@ -1,9 +1,6 @@
 import {Diagnostic} from './Diagnostic.js';
 import {TypeSystem as T} from './TypeSystem.js';
 
-const builtin = new Set(['Copy','Clone','Debug','Display','PartialEq','Eq','PartialOrd','Ord','Sized','Send','Sync','Unpin','Default']);
-const supers = {Copy:['Clone'],Eq:['PartialEq'],PartialOrd:['PartialEq'],Ord:['Eq','PartialOrd','PartialEq']};
-
 /** Declaration-time well-formedness under explicitly stated impl/method bounds.
  * This bounded entailment check is separate from expression coercion and does
  * not infer trait bounds merely from the occurrence of a constrained nominal.
@@ -25,12 +22,7 @@ export class ImplObligations {
     return this.index.type(type,this.declaration.module,this.entry.target,this.parameters,node);
   }
   trait(raw,module=this.declaration.module,node=this.declaration) {
-    const found=this.index.resolve(this.index.traits,raw,module,node,false);
-    if(found){this.index.visible(found,module,node);return found.name;}
-    const name=raw.split('::').at(-1);
-    if(builtin.has(name) && (raw===name || /^(std|core)::/.test(raw)))return name==='Sized'?'core::marker::Sized':name;
-    if(/^(Fn|FnMut|FnOnce)\(/.test(raw))return this.normalize(raw,node);
-    throw new Diagnostic('E0405',`Unknown trait '${raw}' in implementation bound`,node.span??this.declaration.span);
+    return this.a.implementations.traits.hierarchy.canonical(raw,module,node);
   }
   symbolic(type) {
     if(this.parameters.has(type))return true;
@@ -42,14 +34,17 @@ export class ImplObligations {
   }
   assume(rawType,rawBound,node) {
     const type=this.normalize(rawType,node),bound=this.trait(rawBound,this.declaration.module,node);
-    if((!this.index.traits.has(bound) && type.startsWith('&mut ') && ['Copy','Clone'].includes(bound)) || !this.symbolic(type) && !this.prove(type,bound))
+    if((!this.index.traits.has(bound) && type.startsWith('&mut ') && ['Copy','Clone'].includes(this.a.implementations.traits.hierarchy.builtinName(bound))) || !this.symbolic(type) && !this.prove(type,bound))
       throw new Diagnostic('E0277',`Implementation has an unsatisfied bound: ${type}: ${bound}`,node.span??this.declaration.span);
     if(!this.assumptions.has(type))this.assumptions.set(type,new Set());
-    const set=this.assumptions.get(type),pending=[bound];
-    while(pending.length){const next=pending.pop();if(set.has(next))continue;set.add(next);if(!this.index.traits.has(next))pending.push(...(supers[next]??[]));}
+    const set=this.assumptions.get(type);
+    for(const implied of this.a.implementations.traits.hierarchy.closure(bound))set.add(implied);
   }
   prove(type,bound,depth=0) {
     if(++this.visits>65536 || depth>64)throw new Diagnostic('F_IMPL_BOUND_LIMIT','Implementation obligation budget exceeded',this.declaration.span);
+    const graph=this.a.implementations.traits.hierarchy;
+    // Recursive builtin proofs use canonical identities, never a same-named user trait.
+    const short=graph.builtinName(bound);
     if(this.assumptions.get(type)?.has(bound))return true;
     // Ordinary parameters are implicitly Sized, unlike Self in a trait.
     if(this.index.traits.has(bound))return this.symbolic(type)?this.a.implementations.traits.prove(type,bound,this,depth):this.a.hasBound(type,bound);
@@ -64,22 +59,23 @@ export class ImplObligations {
       return this.a.hasTrait(type,'core::marker::Sized');
     }
     if(!this.symbolic(type))return this.a.hasTrait(type,bound);
+    const identity=bound;bound=short??bound;
     if(this.parameters.has(type))return false;
     if(T.function(type))return ['Copy','Clone','Send','Sync','Unpin','PartialEq','Eq'].includes(bound);
     if(T.reference(type)) {
       if(['Copy','Clone'].includes(bound))return !type.startsWith('&mut ');
-      return ['Debug','Display','PartialEq','Eq','PartialOrd','Ord'].includes(bound) && this.prove(T.target(type),bound,depth+1);
+      return ['Debug','Display','PartialEq','Eq','PartialOrd','Ord'].includes(bound) && this.prove(T.target(type),identity,depth+1);
     }
     const tuple=T.tuple(type),array=T.array(type);
     if(tuple||array)return ['Copy','Clone','Debug','PartialEq','Eq','PartialOrd','Ord'].includes(bound) &&
-      (tuple??[array.element]).every(t=>this.prove(t,bound,depth+1));
+      (tuple??[array.element]).every(t=>this.prove(t,identity,depth+1));
     const {name,args}=T.application(type),shape=this.index.structs.get(name)??this.index.enums.get(name);
-    if(['Option','Result','Vec'].includes(name))return ['Clone','Debug','PartialEq','Eq','PartialOrd','Ord',...(name==='Vec'?[]:['Copy'])].includes(bound) && args.every(t=>this.prove(t,bound,depth+1));
+    if(['Option','Result','Vec'].includes(name))return ['Clone','Debug','PartialEq','Eq','PartialOrd','Ord',...(name==='Vec'?[]:['Copy'])].includes(bound) && args.every(t=>this.prove(t,identity,depth+1));
     if(shape?.attributes?.some(attribute=>attribute.name==='derive'&&attribute.args.includes(bound))) {
-      if(!args.every(t=>this.prove(t,bound,depth+1)))return false;
+      if(!args.every(t=>this.prove(t,identity,depth+1)))return false;
       const map=new Map(shape.generics.map((g,i)=>[g.name,args[i]]));
       const fields=shape.fields?.map(field=>field.type)??shape.variants.flatMap(v=>v.fields);
-      return fields.every(field=>this.prove(this.index.type(T.substitute(field,map),shape.module,type,this.parameters,shape),bound,depth+1));
+      return fields.every(field=>this.prove(this.index.type(T.substitute(field,map),shape.module,type,this.parameters,shape),identity,depth+1));
     }
     return false;
   }

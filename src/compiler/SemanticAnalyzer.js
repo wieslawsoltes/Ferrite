@@ -1,3 +1,4 @@
+import {TraitMethodScope} from './TraitMethodScope.js';
 import {ImplementationResolver} from './ImplementationResolver.js';
 import {FunctionValueAnalyzer} from './FunctionValueAnalyzer.js';
 import {EnumDiscriminants} from './EnumDiscriminants.js';
@@ -63,6 +64,7 @@ export class SemanticAnalyzer {
   }
   hasTrait(type, bound, depth = 0) {
     if (depth > 32) return false;
+    bound=this.implementations?.traits.hierarchy.builtinName(bound)??bound;
     const closure=this.closures.get(type);
     if(['Sized','core::marker::Sized','std::marker::Sized'].includes(bound)) {
       if(T.reference(type)||T.function(type)||this.functionValues.get(type)||closure)return true;
@@ -170,8 +172,9 @@ export class SemanticAnalyzer {
       returnType: this.formal(fn, fn.returnType, substitution, fn), calls: [], locals: []};
     this.instances.set(key, instance);
     const ctx = new FunctionContext(instance);
+    ctx.methodScope = new TraitMethodScope(this, fn);
     copy.owner = fn.owner ? this.index.type(T.substitute(fn.owner, substitution), fn.module, null, new Set(), fn) : null;
-    copy.params.forEach((p, i) => { p.type = argumentTypes[i]; p.binding = ctx.declare(p.name, p.type, p.mutable, p, true); });
+    copy.params.forEach((p, i) => { p.type = argumentTypes[i]; p.binding = ctx.declare(p.name, p.type, p.mutable, p, true); ctx.methodScope.bind(p.binding, ctx.methodScope.normalize(fn.params[i].type)); });
     ctx.inferredReturns=[];
     const abstractReturn=instance.returnType.startsWith('impl ')?instance.returnType.slice(5):null;
     const actual = this.block(copy.body, ctx, instance.returnType==='_'||abstractReturn?null:instance.returnType);
@@ -363,7 +366,7 @@ export class SemanticAnalyzer {
       case 'block': return this.block(node, ctx, expected);
       case 'ifLet': {
         const scrutinee = this.infer(node.value, ctx);
-        ctx.push(); this.pattern(node.pattern, scrutinee, ctx);
+        ctx.push(); this.pattern(node.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value));
         const yes = this.block(node.then, ctx, expected); ctx.pop();
         const no = node.otherwise ? this.infer(node.otherwise, ctx, expected) : '()';
         type=node.otherwise?this.functionValues.join([node.then,node.otherwise],ctx,node):T.join(yes,no,node);break;
@@ -388,7 +391,7 @@ export class SemanticAnalyzer {
         const patterns = []; let wildcard = false;
         for (const arm of node.arms) {
           ctx.push();
-          this.pattern(arm.pattern, scrutinee, ctx, false);
+          this.pattern(arm.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value));
           if (wildcard) this.warnings.push({severity: 'warning', code: 'W_UNREACHABLE', message: 'Unreachable match arm', span: arm.span});
           if (arm.guard) T.unify('bool', this.infer(arm.guard, ctx, 'bool'), new Map(), arm.guard);
           else { patterns.push(arm.pattern); wildcard = this.coverage.analyze(patterns, scrutinee, node).exhaustive; }
@@ -442,8 +445,9 @@ export class SemanticAnalyzer {
     node.variant = tag; node.args = args;
     return type;
   }
-  pattern(pattern, type, ctx, mutable = false) {
+  pattern(pattern, type, ctx, mutable = false, origin = type) {
     this.patterns.analyze(pattern, type, ctx, mutable);
+    ctx.methodScope.bindPattern(pattern, origin);
   }
   checkCoverage(patterns, type, node, required = false) {
     const report = {...this.coverage.analyze(patterns, type, node), type, span: node.span};
@@ -540,7 +544,10 @@ export class SemanticAnalyzer {
     if(fn.implIndex!==undefined&&!associated)throw new Diagnostic('E0599',`No applicable in-scope method '${name}'`,node.span);
     const explicit = associated ? this.implementations.explicit(associated, callee, ctx) :
       (callee.typeArguments ?? []).map(t => this.normalize(t, ctx, callee));
-    return this.invoke(node, ctx, fn, explicit, expected);
+    const result = this.invoke(node, ctx, fn, explicit, expected);
+    const owner = callee.name.includes('::') ? callee.name.slice(0, callee.name.lastIndexOf('::')) : null;
+    ctx.methodScope.callResult(node, fn, owner && ctx.methodScope.traits(owner) ? owner : null);
+    return result;
   }
   invoke(node, ctx, fn, explicit = [], expected = null, typedArguments = new Map()) {
     if (fn.params.length !== node.args.length) throw new Diagnostic('E0061', `${fn.localName ?? fn.name} expects ${fn.params.length} argument(s)`, node.span);
@@ -563,7 +570,7 @@ export class SemanticAnalyzer {
     const receiver = node.callee.object, method = node.callee.field;
     const original = this.infer(receiver, ctx), base = T.reference(original) && original !== '&str' ? T.target(original) : original;
     const app = T.application(base), array = /^\[(.+);\d+\]$/.exec(base);
-    const resolved = this.implementations.lookup(base, method, ctx.instance.fn.module, node,ctx.instance.fn);
+    const resolved = this.implementations.lookup(base, method, ctx.instance.fn.module, node,ctx.instance.fn,ctx.methodScope.traits(ctx.methodScope.of(receiver)));
     const builtins = ['len', 'clone', 'push', 'pop', 'push_str', 'to_string', 'unwrap', 'is_some', 'is_none', 'is_ok', 'is_err'];
     if (!resolved && builtins.includes(method)) {
       node.receiver = receiver; node.receiverDeref = base !== original; node.builtin = `method::${method}`;
@@ -602,6 +609,7 @@ export class SemanticAnalyzer {
         while (ctx.lookup(name, node, false)) name += '_';
         const binding = ctx.declare(name, original, true, receiver);
         node.temporaryCallee = {value: receiver, binding};
+        ctx.methodScope.bind(binding, ctx.methodScope.of(receiver));
         first = {kind:'variable', name, binding, type:original, copy:this.hasTrait(original,'Copy'), span:receiver.span, loc:receiver.loc};
       }
       this.place(first, ctx, formal.startsWith('&mut '));
@@ -612,6 +620,7 @@ export class SemanticAnalyzer {
     node.args = [first, ...node.args];
     delete node.builtin; delete node.receiver;
     const result = this.invoke(node, ctx, fn, explicit, expected, new Map([[0, firstType]]));
+    ctx.methodScope.callResult(node, fn, T.reference(original) ? T.target(ctx.methodScope.of(receiver)) : ctx.methodScope.of(receiver));
     if ((fn.implGenericCount || node.temporaryCallee) && new AssigneeAnalyzer(this, ctx).carriesReference(result))
       throw new Diagnostic('F_IMPL_REFERENCE', 'Reference-carrying generic method results require interprocedural loan tracking', node.span);
     return result;
@@ -635,7 +644,7 @@ export class SemanticAnalyzer {
         const actual = this.infer(node.value, ctx, annotation);
         if (annotation) T.unify(annotation, actual, new Map(), node);
         if (node.otherwise && this.block(node.otherwise, ctx) !== '!') throw new Diagnostic('E0308', 'The else branch of let-else must diverge', node.otherwise.span);
-        this.pattern(node.pattern, annotation ?? actual, ctx, node.mutable);
+        this.pattern(node.pattern, annotation ?? actual, ctx, node.mutable, node.annotation ? ctx.methodScope.normalize(node.annotation) : ctx.methodScope.of(node.value));
         this.checkCoverage([node.pattern], annotation ?? actual, node, !node.otherwise);
         node.binding = node.pattern.binding; break;
       }
@@ -668,7 +677,7 @@ export class SemanticAnalyzer {
       case 'expression': this.infer(node.value, ctx); type = node.value.type === '!' ? '!' : '()'; break;
       case 'whileLet': {
         const scrutinee = this.infer(node.value, ctx);
-        ctx.push(); this.pattern(node.pattern, scrutinee, ctx);
+        ctx.push(); this.pattern(node.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value));
         ctx.loops.push({kind: 'while', id: node.id, label: node.label, type: '!'});
         T.unify('()', this.block(node.then, ctx, '()'), new Map(), node.then);
         ctx.loops.pop(); ctx.pop(); break;
@@ -689,7 +698,7 @@ export class SemanticAnalyzer {
           element = /^\[(.+);\d+\]$/.exec(from)?.[1] ?? (T.application(from).name === 'Vec' ? T.application(from).args[0] : null);
           if (!element) throw new Diagnostic('E0277', `Cannot iterate ${from}`, node.span);
         }
-        ctx.push(); this.pattern(node.pattern, element, ctx, false); this.checkCoverage([node.pattern], element, node, true); node.binding = node.pattern.binding;
+        ctx.push(); this.pattern(node.pattern, element, ctx, false, node.to ? element : ctx.methodScope.element(ctx.methodScope.of(node.from)) ?? element); this.checkCoverage([node.pattern], element, node, true); node.binding = node.pattern.binding;
         ctx.loops.push({kind: 'for', id: node.id, label: node.label, type: '!'});
         T.unify('()', this.block(node.then, ctx, '()'), new Map(), node.then);
         ctx.loops.pop(); ctx.pop(); break;

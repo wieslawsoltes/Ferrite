@@ -55,6 +55,7 @@ export class Parser {
       const params=this.list(')',()=>this.type());
       const result=this.c.match('->')?this.type():'()';return `${name}(${params.join(',')})->${result}`;
     }
+    if(this.c.match('<'))return `${name}<${this.list('>',()=>this.type()).join(',')}>`;
     return name;
   }
   path() {
@@ -179,9 +180,12 @@ export class Parser {
       return [this.c.node('impl', start, {target, generics, predicates, trait: forTrait, methods, attributes})];
     }
     if (this.c.match('trait')) {
-      const name = this.c.identifier(); this.c.eat('{'); const methods = [];
+      const name = this.c.identifier(), bounds = [];
+      if (this.c.match(':')) { do { bounds.push(this.bound()); } while (this.c.match('+') && !this.c.is('{') && !this.c.is('where')); }
+      const predicates = this.whereClause();
+      this.c.eat('{'); const methods = [];
       while (!this.c.is('}')) methods.push(...this.item('Self', name));
-      this.c.eat('}'); return [this.c.node('trait', start, {name, methods, visibility, attributes})];
+      this.c.eat('}'); return [this.c.node('trait', start, {name, bounds, predicates, methods, visibility, attributes})];
     }
     if (this.c.match('const')) {
       const name = this.c.identifier(); this.c.eat(':'); const type = this.type(); this.c.eat('=');

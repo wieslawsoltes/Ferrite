@@ -115,7 +115,7 @@ export class ImplementationResolver {
       if (!prove(normalize(predicate.type), normalize(bound))) return false;
     return true;
   }
-  lookup(type, method, module, node, context=null) {
+  lookup(type, method, module, node, context=null, boundTraits=null) {
     this.lookups++;
     const candidates = [...(this.byOwner.get(this.head(type))?.get(method) ?? []),...(this.byOwner.get('*')?.get(method) ?? [])], matches = [];
     let boundFailure = false;
@@ -124,11 +124,11 @@ export class ImplementationResolver {
       this.candidatesExamined++;
       const mapping = this.match(entry, type, query);
       if (!mapping) continue;
-      if(entry.trait && entry.trait.name!==context?.implementedTrait && !this.inScope(entry.trait,module))continue;
+      if(entry.trait && entry.trait.name!==context?.implementedTrait && !boundTraits?.has(entry.trait.name) && !this.inScope(entry.trait,module))continue;
       if (!this.applicable(entry, mapping)) { boundFailure = true; continue; }
       matches.push({fn: entry.methods.get(method), mapping});
     }
-    const defaults=context?.defaultTrait?matches.filter(candidate=>candidate.fn.implementedTrait===context.defaultTrait):[];
+    const defaults=boundTraits?matches.filter(candidate=>boundTraits.has(candidate.fn.implementedTrait)):context?.defaultTrait?matches.filter(candidate=>candidate.fn.implementedTrait===context.defaultTrait):[];
     const inherent = matches.filter(candidate => !candidate.fn.implementedTrait), selected = defaults.length?defaults:inherent.length ? inherent : matches;
     if (selected.length > 1) throw new Diagnostic('E0034', `Multiple applicable methods named ${method} for ${type}`, node.span);
     if (!selected.length) {
@@ -147,6 +147,7 @@ export class ImplementationResolver {
   associated(node, context) {
     const separator = node.name.lastIndexOf('::'); if (separator < 0) return null;
     let owner = node.name.slice(0, separator);
+    const boundTraits = context.methodScope?.traits(owner);
     const method = node.name.slice(separator + 2), module = context.instance.fn.module;
     if (owner === 'Self') owner = context.instance.fn.owner;
     else owner = T.substitute(owner, context.instance.substitution ?? new Map(Object.entries(context.instance.typeArguments)));
@@ -160,13 +161,13 @@ export class ImplementationResolver {
       if(!T.numeric(owner)&&!['bool','char','str','String'].includes(owner)&&
         !T.reference(owner)&&!T.tuple(owner)&&!T.array(owner)&&!T.function(owner))return null;
       if(node.ownerTypeArguments?.length)throw new Diagnostic('E0107','This implementing type has no type arguments',node.span);
-      return this.lookup(owner,method,module,node,context.instance.fn);
+      return this.lookup(owner,method,module,node,context.instance.fn,boundTraits);
     }
     const explicit = node.ownerTypeArguments?.map(type => this.a.normalize(type, context, node));
     const args = explicit ?? (app.args.length ? app.args : declaration.generics.map(() => '_'));
     if (args.length !== declaration.generics.length) throw new Diagnostic('E0107', `Wrong number of type arguments for ${app.name}`, node.span);
     const type = this.index.type(app.name + (args.length ? `<${args.join(',')}>` : ''), module, context.instance.fn.owner, new Set(), node);
-    const result = this.lookup(type, method, module, node,context.instance.fn);
+    const result = this.lookup(type, method, module, node,context.instance.fn,boundTraits);
     if (!result) throw new Diagnostic('E0599', `No associated function ${method} for ${type}`, node.span);
     return result;
   }

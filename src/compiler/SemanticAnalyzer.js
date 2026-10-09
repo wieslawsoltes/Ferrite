@@ -193,7 +193,13 @@ export class SemanticAnalyzer {
         const hint = T.array(expected ?? '')?.element;
         let itemType = node.items.length ? '!' : hint;
         if (!node.items.length && !hint) throw new Diagnostic('E0282', 'Empty array needs a type annotation', node.span);
-        for (const item of node.items) this.infer(item,ctx,hint);
+        for (const item of node.items) {
+          // Preserve contextual inference for e.g. [Some(4), None]. Distinct
+          // item/closure types are instead joined at the array coercion site.
+          const contextual = hint ?? (itemType !== '!' && !this.functionValues.get(itemType) && !this.closures.get(itemType) ? itemType : null);
+          const actual = this.infer(item, ctx, contextual);
+          if (itemType === '!') itemType = actual;
+        }
         if(node.items.length)itemType=this.functionValues.join(node.items,ctx,node);
         type = `[${itemType};${node.items.length}]`; break;
       }

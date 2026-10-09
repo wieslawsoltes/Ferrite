@@ -3,6 +3,12 @@ import {Diagnostic} from './Diagnostic.js';
 
 /** Verifies edges, registers and definite initialization before either backend runs. */
 export class MirVerifier {
+  static argumentType(expected, actual) {
+    // A call may reborrow &mut T as &T, but cannot change the function
+    // pointer's stored signature or recursively weaken pointee types.
+    return expected === actual || actual === '!' ||
+      expected.startsWith('&') && !expected.startsWith('&mut ') && actual === '&mut ' + expected.slice(1);
+  }
   static successors(block) {
     const term = block.terminator;
     if (!term) return [];
@@ -71,7 +77,7 @@ export class MirVerifier {
           }else{
             if(register(instruction.value,instruction.span).type!==instruction.signature||!Array.isArray(instruction.args)||
                 instruction.args.length!==signature.params.length||instruction.type!==signature.result||
-                instruction.args.some((slot,i)=>register(slot,instruction.span).type!==signature.params[i]))
+                instruction.args.some((slot,i)=>!this.argumentType(signature.params[i],register(slot,instruction.span).type)))
               fail('Indirect call signature mismatch',instruction.span);
           }
         }
@@ -79,6 +85,8 @@ export class MirVerifier {
           const target = names.get(instruction.callee);
           if (!target) fail(`Unresolved call ${instruction.callee}`, instruction.span);
           if (instruction.args.length !== target.params.length) fail(`Argument count mismatch for ${instruction.callee}`, instruction.span);
+          if (instruction.args.some((slot, i) => !this.argumentType(target.registers[target.params[i]].type, register(slot, instruction.span).type)))
+            fail(`Argument type mismatch for ${instruction.callee}`, instruction.span);
           if (instruction.type !== target.returnType) fail(`Call result type mismatch for ${instruction.callee}`, instruction.span);
         }
       }

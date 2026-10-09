@@ -1,5 +1,8 @@
 // Differential programs are complete Rust 2024 translation units.
 export const callableCases = [
+['shared reborrow in direct and indirect calls','fn read(x:&i32)->i32{*x}fn main(){let f:fn(&i32)->i32=read;let mut x=7;println!("{} {}",f(&mut x),read(&mut x));}','7 7\n'],
+['array context retains empty enum payload typing','fn main(){let entries=[Some(4),None,Some(8)];for e in entries{let Some(n)=e else {continue;};println!("{}",n);}}','4\n8\n'],
+
 ['function item inferred call','fn add(x:i32,y:i32)->i32{x+y}fn main(){let f=add;println!("{}",f(2,3));}','5\n'],
 ['function items preserve specialization identity','fn id<T>(x:T)->T{x}fn main(){let f=id;let g=id;println!("{} {}",f(4),g(true));}','4 true\n'],
 ['same generic specialization has one item type','fn id<T>(x:T)->T{x}fn same<F:Fn(i32)->i32>(a:F,b:F)->i32{a(1)+b(2)}fn main(){let f=id;let g=id;f(4);g(5);println!("{}",same(f,g));}','3\n'],

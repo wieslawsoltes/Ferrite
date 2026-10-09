@@ -40,6 +40,7 @@ export class WebAssemblyRuntime {
       case 'write':return (frame,value,...indices)=>r.write(this.reference(spec.place,frame,indices),value);
       case 'binary':return (left,right)=>r.binary(spec.operator,left,right,spec.type);
       case 'unary':return value=>r.unary(spec.operator,value,spec.type);
+      case 'discriminant':return value=>r.discriminant(value,spec.table);
       case 'cast':return value=>r.cast(value,spec.type);
       case 'aggregate':return (...values)=>r.aggregate(spec.form,values,spec.names,spec.tag);
       case 'aggregate_frame': {

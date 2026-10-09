@@ -2,7 +2,8 @@ import {Runtime} from './Runtime.js';
 
 /** Instruction-level execution, with explicit call frames and a bounded trace. */
 export class MirVirtualMachine {
-  constructor(functions, {entry = 'main<>', args = [], ...options} = {}) {
+  constructor(functions, {entry = 'main<>', args = [], resolveDiscriminant = null, ...options} = {}) {
+    this.resolveDiscriminant = resolveDiscriminant;
     this.functions = new Map(functions.map(fn => [fn.instance, fn]));
     this.blockMaps = new Map(functions.map(fn => [fn.instance, new Map(fn.blocks.map(block => [block.id, block]))]));
     this.runtime = new Runtime(options); this.frames = []; this.done = false; this.result = null;
@@ -31,6 +32,9 @@ export class MirVirtualMachine {
       case 'copy': cells[instruction.target].value = instruction.copy ? r.clone(value(instruction.value)) : value(instruction.value); return null;
       case 'binary': return r.binary(instruction.operator, value(instruction.left), value(instruction.right), instruction.operandType);
       case 'unary': return r.unary(instruction.operator, value(instruction.value), instruction.type);
+      case 'discriminant': return instruction.table === null && this.resolveDiscriminant
+        ? this.resolveDiscriminant(instruction.enumName, value(instruction.value).tag)
+        : r.discriminant(value(instruction.value), instruction.table);
       case 'cast': return r.cast(value(instruction.value), instruction.targetType);
       case 'aggregate': return r.aggregate(instruction.form, instruction.values.map(value), instruction.names, instruction.tag);
       case 'repeat': return Array.from({length: instruction.count}, () => r.clone(value(instruction.value)));

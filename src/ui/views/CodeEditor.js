@@ -14,7 +14,12 @@ export class CodeEditor {
     for (const name of ['click','keyup','select']) this.textarea.addEventListener(name,()=>this.queueSelection());
     this.textarea.addEventListener('keydown',event=>this.keydown(event));
     this.unsubscribe=selection.subscribe(event=>{if(event.span && !['editor','reset'].includes(event.origin))this.reveal(event.span);});
-    this.model.subscribe(event=>{if(event.kind==='breakpoint')this.renderGutter();});
+    this.model.subscribe(event=>{
+      if(event.kind==='breakpoint')this.renderGutter();
+      // External source projections must not leave this editor showing stale text.
+      // Self-edits already have the new value and retain their local undo history.
+      if(event.kind==='edit'&&event.path===this.path&&this.textarea.value!==this.model.files[this.path])this.open(this.path);
+    });
   }
   capture() { if(this.path)this.model.positions.set(this.path,{start:this.textarea.selectionStart,end:this.textarea.selectionEnd,top:this.textarea.scrollTop,left:this.textarea.scrollLeft}); }
   open(path) {

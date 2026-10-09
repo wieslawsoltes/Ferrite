@@ -44,6 +44,7 @@ export class WebAssemblyEmitter {
       case 'write': return [{op:'write',place:this.place(i.place)},2+i.place.path.filter(p=>p.kind==='index').length,null];
       case 'binary': return [{op:'binary',operator:i.operator,type:i.operandType},2];
       case 'unary': return [{op:'unary',operator:i.operator,type:i.type},1];
+      case 'discriminant': return [{op:'discriminant',table:i.table},1];
       case 'cast': return [{op:'cast',type:i.targetType},1];
       case 'aggregate': {
         const spec={op:'aggregate',form:i.form,names:i.names??[],tag:i.tag??null};

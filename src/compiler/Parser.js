@@ -164,7 +164,8 @@ export class Parser {
           return this.c.node('variantField', at, {name, type: this.type(), attributes});
         });
         if (form === 'tuple') members.forEach((field, i) => { field.name = String(i); });
-        return this.c.node('enumVariant', at, {name, fields: members.map(field => field.type), members, form, attributes});
+        const discriminant = this.c.match('=') ? this.expr() : null;
+        return this.c.node('enumVariant', at, {name, fields: members.map(field => field.type), members, form, attributes, discriminant});
       });
       return [this.c.node('enum', start, {name, generics, predicates, variants, attributes, visibility})];
     }
@@ -448,7 +449,7 @@ export class Parser {
     }
     if (['-', '!', '&', '*'].includes(start.value)) {
       const op = this.c.take().value, mutable = op === '&' && !!this.c.match('mut');
-      return this.c.node('unary', start, {op, mutable, value: this.expr(10, allowRecord)});
+      return this.c.node('unary', start, {op, mutable, value: this.expr(11, allowRecord)});
     }
     if (this.c.match('(')) {
       if (this.c.match(')')) return this.c.node('literal', start, {value: null, type: '()'});

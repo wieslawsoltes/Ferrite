@@ -4,6 +4,7 @@ export class Runtime {
     this.maxSteps = maxSteps; this.maxOutput = maxOutput; this.maxDepth = maxDepth; this.overflow = overflow;
     this.steps = 0; this.depth = 0; this.output = ''; this.span = null;
     this.integerBounds = new Map();
+    this.discriminantValues = new WeakMap();
   }
   fail(message, code = 'RUNTIME') {
     const error = new Error(message); error.code = code; error.span = this.span; throw error;
@@ -93,6 +94,21 @@ export class Runtime {
     if (op === '!') return typeof value === 'boolean' ? !value : this.normalize(~value, type, true);
     if (op === '-') return this.normalize(-value, type);
     return this.fail(`Invalid unary operator ${op}`);
+  }
+  discriminant(value, table) {
+    if (!value || typeof value.tag !== 'string' || !table || typeof table !== 'object' || !Object.hasOwn(table, value.tag))
+      this.fail('Invalid enum discriminant', 'R_ENUM');
+    const encoded = table[value.tag];
+    let values = this.discriminantValues.get(table);
+    const prior = values?.get(value.tag);
+    // MIR metadata can be deserialized or supplied by a host. Always recheck the
+    // encoded value so mutating/deleting a table entry cannot reuse stale data.
+    if (prior && prior.encoded === encoded) return prior.value;
+    if (typeof encoded !== 'string' || encoded.length > 40 || !/^-?\d+$/.test(encoded)) this.fail('Invalid enum discriminant value', 'R_ENUM');
+    const result = BigInt(encoded);
+    if (!values) this.discriminantValues.set(table, values = new Map());
+    values.set(value.tag, {encoded, value: result});
+    return result;
   }
   cast(value, target) {
     if (target === 'char') return String.fromCodePoint(Number(value));

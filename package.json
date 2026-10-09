@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "check": "node tools/check-syntax.mjs && node tools/bundle-workers.mjs --check && node tools/vendor-terminal.mjs --check",
+    "check": "node tools/check-syntax.mjs && node tools/bundle-workers.mjs --check && node tools/vendor-terminal.mjs --check && node tools/bundle-sdk.mjs --check",
     "build:workers": "node tools/bundle-workers.mjs",
     "test:browser": "python tools/browser-acceptance.py",
     "test:native": "node tools/native-smoke.mjs && node tools/agent-native-smoke.mjs",
@@ -21,9 +21,43 @@
     "test:language": "node tools/language-conformance.mjs",
     "benchmark:verifier": "node tools/benchmark-verifier.mjs",
     "test:terminal": "node --test tests/terminal-*.test.js",
-    "vendor:terminal": "node tools/vendor-terminal.mjs --fetch"
+    "vendor:terminal": "node tools/vendor-terminal.mjs --fetch",
+    "build:sdk": "node tools/bundle-sdk.mjs",
+    "test:ui": "node --test tests/ui-framework-*.test.js",
+    "test:ui:browser": "python tools/ui-browser-acceptance.py",
+    "test:ui:types": "tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --lib ES2022,DOM --jsx react-jsx --jsxImportSource ferrite-compiler tests/types/ui-sdk.tsx"
   },
   "engines": {
     "node": ">=22"
-  }
+  },
+  "exports": {
+    ".": {
+      "types": "./src/sdk/Ferrite.d.ts",
+      "import": "./src/sdk/Ferrite.js"
+    },
+    "./react": {
+      "types": "./src/ui-framework/React.d.ts",
+      "import": "./src/ui-framework/React.js"
+    },
+    "./react-dom": {
+      "types": "./src/ui-framework/ReactDOM.d.ts",
+      "import": "./src/ui-framework/ReactDOM.js"
+    },
+    "./react-dom/client": {
+      "types": "./src/ui-framework/ReactDOM.d.ts",
+      "import": "./src/ui-framework/ReactDOM.js"
+    },
+    "./jsx-runtime": {
+      "types": "./src/ui-framework/jsx-runtime.d.ts",
+      "import": "./src/ui-framework/jsx-runtime.js"
+    },
+    "./jsx-dev-runtime": {
+      "types": "./src/ui-framework/jsx-runtime.d.ts",
+      "import": "./src/ui-framework/jsx-runtime.js"
+    },
+    "./standalone": "./src/sdk/ferrite.bundle.js",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "types": "./src/sdk/Ferrite.d.ts"
 }

@@ -1,12 +1,15 @@
+import {OwnedValues} from './OwnedValues.js';
 import {UI} from './Runtime.js';
 import {MirVirtualMachine} from '../runtime/MirVirtualMachine.js';
 import {WebAssemblyRuntime} from '../runtime/WebAssemblyRuntime.js';
 
 /** One application's backend, scoped host handles, callback lifetime and UI debugger. */
 export class UISession {
-  constructor(artifact, {backend = 'javascript', runtime = UI, maxHandles = 50000, maxTrace = 2000, onError = null} = {}) {
+  constructor(artifact, {backend = 'javascript', runtime = UI, maxHandles = 50000, maxTrace = 2000, onError = null, props, onEvent = null, components = {}} = {}) {
     if (artifact?.format !== 'ferrite-ui-v1' || artifact.abi !== 1 || !Array.isArray(artifact.optimizedMir)) throw Error('Unsupported UI artifact');
     if (!['javascript', 'wasm', 'mir'].includes(backend)) throw Error('Unknown UI backend');
+    this.bindings = this.validateBindings({props, onEvent, components}); this.currentBindings = null; this.labels = [];
+    this.values = new OwnedValues(artifact.ownedSchemas);
     this.artifact = artifact; this.backend = backend; this.ui = runtime; this.maxHandles = maxHandles; this.maxTrace = maxTrace;
     this.onError = onError; this.handles = new Map(); this.nextHandle = 1; this.scopes = []; this.components = new Map();
     this.root = null; this.disposed = false; this.trace = []; this.currentEvent = null; this.depth = 0; this.callBudget = 0; this.calls = 0;
@@ -32,26 +35,46 @@ export class UISession {
   }
   allocate(kind, value, persistent = false) {
     if (this.disposed) throw Error('UI session is disposed');
+    if (this.ui.weakHookHandles && (this.handles.size >= this.maxHandles || this.nextHandle % 1024 === 0)) this.pruneHandles();
     if (this.handles.size >= this.maxHandles || this.nextHandle > 0xffffffff) throw Error('UI handle budget exceeded');
-    const id = this.nextHandle++; this.handles.set(id, {kind, value});
+    const id = this.nextHandle++; this.handles.set(id, persistent && this.ui.weakHookHandles ? {kind, weak: new WeakRef(value)} : {kind, value});
     if (!persistent) { const scope = this.scopes.at(-1); if (!scope) throw Error('UI node allocation outside a Rust invocation'); scope.push(id); }
     return {handle: BigInt(id)};
   }
   resolve(handle, kind) {
     if (!handle || typeof handle.handle !== 'bigint' || handle.handle < 1n || handle.handle > 0xffffffffn) throw Error('Invalid UI handle');
     const record = this.handles.get(Number(handle.handle));
-    if (!record || kind && record.kind !== kind) throw Error(`Stale or mismatched UI ${kind ?? 'value'} handle`);
-    return record.value;
+    const value = record?.weak ? record.weak.deref() : record?.value;
+    if (!record || value === undefined || kind && record.kind !== kind) throw Error(`Stale or mismatched UI ${kind ?? 'value'} handle`);
+    return value;
+  }
+  pruneHandles() { for (const [id, record] of this.handles) if (record.weak && !record.weak.deref()) this.handles.delete(id); }
+  validateBindings({props, onEvent = null, components = {}} = {}) {
+    if (onEvent !== null && typeof onEvent !== 'function') throw Error('UI onEvent must be a function');
+    if (!components || typeof components !== 'object' || Object.keys(components).length > 1000) throw Error('Invalid external component registry');
+    return Object.freeze({props, onEvent, components: Object.freeze({...components})});
+  }
+  render(bindings = this.bindings) {
+    const args = this.artifact.entryPropsType ? [this.values.decode(this.artifact.entryPropsType, bindings.props)] : [];
+    return this.invoke(this.artifact.entry, args, {node: true, label: 'render', bindings});
+  }
+  updateProps(props, {onEvent = this.bindings.onEvent, components = this.bindings.components} = {}) {
+    if (!this.root || this.disposed) throw Error('Mount a UI session before updating props');
+    if (this.debugger.vm) throw Error('Finish or stop the paused event before updating props');
+    if (this.artifact.entryPropsType) this.values.decode(this.artifact.entryPropsType, props);
+    this.bindings = this.validateBindings({props, onEvent, components});
+    this.root.render(this.ui.h(this.App)); return this;
   }
   release(scope) { for (const id of scope) this.handles.delete(id); }
   prepareVm(instance, args) {
     const vm = new MirVirtualMachine(this.artifact.optimizedMir, {entry: instance, args, maxSteps: this.artifact.maxSteps, maxTrace: this.maxTrace});
     this.attach(vm.runtime); return vm;
   }
-  invoke(instance, args = [], {node = false, label = 'call'} = {}) {
+  invoke(instance, args = [], {node = false, label = 'call', bindings = this.currentBindings ?? this.bindings} = {}) {
     if (this.disposed) throw Error('UI session is disposed');
     if (this.depth >= 64) throw Error('UI callback nesting budget exceeded');
     if (this.depth++ === 0) this.callBudget = 0;
+    const previousBindings = this.currentBindings; this.currentBindings = bindings; this.labels.push(label);
     const scope = []; this.scopes.push(scope); const started = performance.now(); let value, vm;
     try {
       if (this.backend === 'mir') { vm = this.prepareVm(instance, args); vm.run(); value = vm.result; this.trace = vm.trace.slice(); }
@@ -63,7 +86,7 @@ export class UISession {
       }
       return node ? this.resolve(value, 'node') : value;
     } finally {
-      this.scopes.pop(); this.release(scope); this.depth--; this.calls++;
+      this.scopes.pop(); this.release(scope); this.depth--; this.calls++; this.labels.pop(); this.currentBindings = previousBindings;
       this.emit('callback', {instance, label, milliseconds: performance.now() - started, steps: vm?.runtime.steps ?? this.callBudget});
     }
   }
@@ -73,29 +96,57 @@ export class UISession {
     const reference = {__ref: true, cell: {value: environment}, path: []};
     return this.invoke(descriptor.instance, [reference, ...args], options);
   }
-  event(descriptor, environment, args, event) {
+  event(descriptor, environment, args, event, bindings = this.currentBindings ?? this.bindings) {
     if (this.disposed) return;
     if (this.debugger.armed) {
       if (this.debugger.queue.length >= 100) throw Error('UI debugger event queue is full');
-      this.debugger.queue.push({descriptor, environment, args}); this.emit('debug-queued', {count: this.debugger.queue.length});
+      this.debugger.queue.push({descriptor, environment, args, bindings}); this.emit('debug-queued', {count: this.debugger.queue.length});
       if (!this.debugger.vm) this.startDebugEvent(); return;
     }
     const previous = this.currentEvent; this.currentEvent = event;
-    try { this.closure(descriptor, environment, args, {label: 'event'}); }
+    try { this.closure(descriptor, environment, args, {label: 'event', bindings}); }
     finally { this.currentEvent = previous; }
   }
   host(spec, args, runtime) {
     if (spec?.version !== 1 || !Array.isArray(spec.types) || typeof spec.name !== 'string') throw Error('Invalid UI ABI descriptor');
+    const bindings = this.currentBindings ?? this.bindings;
+    if (this.labels.includes('render') && ['set', 'set_string', 'set_bool', 'update', 'write', 'modify', 'emit', 'focus'].includes(spec.name)) throw Error('UI mutation during render is not supported');
     const u = this.ui, node = handle => this.resolve(handle, 'node'), create = vnode => this.allocate('node', vnode);
     const callback = (index, values = [], options) => this.closure(spec.callbacks?.[index], args[index], values, options);
     const text = value => String(value?.__ref ? runtime.read(value) : value ?? '');
-    const state = (handle, kind) => { const result = this.resolve(handle, 'state'); if (result.kind !== kind) throw Error(`State requires ${kind}`); return result.cell; };
+    const state = (handle, kind) => {
+      const result = this.resolve(handle, 'state'); if (result.kind !== kind) throw Error(`State requires ${kind}`);
+      if (this.debugRunning && this.debugger.overlay) {
+        const staged = this.debugger.overlay.get(Number(handle.handle));
+        if (!staged || staged.cell !== result.cell) throw Error('State ownership changed during paused event');
+        return {get value() { return staged.value; }, set(value) { staged.value = value; }};
+      }
+      return result.cell;
+    };
+    if (this.debugRunning && !['get', 'get_string', 'get_bool', 'read', 'set', 'set_string', 'set_bool', 'write', 'modify', 'update'].includes(spec.name)) {
+      this.commitDebugState();
+      this.debugger.vm.historyBarrier(`Host operation ui::${spec.name}`);
+    }
     const newState = (kind, initial) => {
       const cell = u._useCell(initial, {kind: `rust-state:${kind}`});
-      if (!cell.handle) { cell.handle = this.allocate('state', {kind, cell}, true); cell.dispose = () => this.handles.delete(Number(cell.handle.handle)); }
+      if (!cell.handle) { cell.handle = this.allocate('state', cell.retained = {kind, cell}, true); cell.dispose = () => this.handles.delete(Number(cell.handle.handle)); }
       return cell.handle;
     };
     switch (spec.name) {
+      case 'emit': {
+        const name = String(args[0]); if (!/^[a-zA-Z][\w:.-]{0,99}$/.test(name)) throw Error('Invalid emitted event name');
+        if (!bindings.onEvent) throw Error('No UI onEvent receiver is connected');
+        bindings.onEvent(name, this.values.encode(spec.valueType, args[1])); return null;
+      }
+      case 'external': {
+        const name = String(args[0]), json = String(args[1]);
+        if (!Object.hasOwn(bindings.components, name)) throw Error(`External UI component ${name} is not registered`);
+        if (json.length > 1000000) throw Error('External UI props budget exceeded');
+        const props = JSON.parse(json);
+        if (!props || Array.isArray(props) || typeof props !== 'object') throw Error('External UI props must be an object');
+        for (const key of Object.keys(props)) if (/^on/i.test(key) || ['__proto__', 'constructor', 'prototype', 'key', 'ref', 'children', '__source', 'dangerouslySetInnerHTML', 'innerHTML', 'outerHTML', 'srcdoc'].includes(key)) throw Error(`Unsafe external UI prop ${key}`);
+        return create(u.h(bindings.components[name], props, ...args[2].map(node)));
+      }
       case 'element': return create(u.h(String(args[0]), null, ...args[1].map(node)));
       case 'fragment': return create(u.h(u.Fragment, null, ...args[0].map(node)));
       case 'text': case 'value': return create(text(args[0]));
@@ -117,22 +168,40 @@ export class UISession {
         const descriptor = spec.callbacks[0]; let component = this.components.get(descriptor.instance);
         if (!component) {
           const session = this;
-          component = function RustComponent(props) { return session.closure(descriptor, props.environment, [], {node: true, label: 'render'}); };
+          component = function RustComponent(props) { return session.closure(descriptor, props.environment, [], {node: true, label: 'render', bindings: props.bindings}); };
           component.displayName = descriptor.type; this.components.set(descriptor.instance, component);
         }
-        return create(u.h(component, {environment: args[0]}));
+        return create(u.h(component, {environment: args[0], bindings}));
       }
       case 'on_click': {
         const descriptor = spec.callbacks[1], environment = args[1];
-        return create(u.cloneElement(node(args[0]), {onClick: event => this.event(descriptor, environment, [], event)}));
+        return create(u.cloneElement(node(args[0]), {onClick: event => this.event(descriptor, environment, [], event, bindings)}));
       }
-      case 'on': {
+      case 'on': case 'on_event': {
         const name = String(args[1]);
         if (!/^[a-z][a-z0-9]*(?::capture)?$/.test(name) || name.length > 80) throw Error('Invalid UI event name');
-        const [nativeName, capture] = name.split(':'), eventName = `on${nativeName[0].toUpperCase()}${nativeName.slice(1)}${capture ? 'Capture' : ''}`;
+        const eventName = this.eventProp(name);
         const descriptor = spec.callbacks[2], environment = args[2];
-        return create(u.cloneElement(node(args[0]), {[eventName]: event => this.event(descriptor, environment, [String(event.target?.value ?? event.key ?? '')], event)}));
+        return create(u.cloneElement(node(args[0]), {[eventName]: event => this.event(descriptor, environment, [spec.name === 'on_event' ? this.snapshotEvent(event) : String(event.target?.value ?? event.key ?? '')], event, bindings)}));
       }
+      case 'state': return {...newState(spec.stateType, this.values.clone(spec.stateType, args[0])), marker: {}};
+      case 'read': return this.values.clone(spec.stateType, state(args[0], spec.stateType).value);
+      case 'write': state(args[0], spec.stateType).set(this.values.clone(spec.stateType, args[1])); return null;
+      case 'modify': {
+        const cell = state(args[0], spec.stateType), value = this.values.clone(spec.stateType, cell.value);
+        cell.set(this.values.clone(spec.stateType, callback(1, [value]))); return null;
+      }
+      case 'memo_value': case 'memo_with': {
+        const deps = spec.dependencyType ? this.values.key(spec.dependencyType, args[1]) : String(args[1]);
+        return this.values.clone(spec.valueType, u.useMemo(() => this.values.clone(spec.valueType, callback(0)), [deps]));
+      }
+      case 'effect_with': {
+        const deps = this.values.key(spec.dependencyType, args[2]), setup = spec.callbacks[0], cleanup = spec.callbacks[1];
+        u.useEffect(() => { this.closure(setup, args[0], [], {label: 'effect', bindings}); return () => this.closure(cleanup, args[1], [], {label: 'cleanup', bindings}); }, [deps]); return null;
+      }
+      case 'stop_propagation':
+        if (!this.currentEvent) throw Error('Cannot stop propagation outside a synchronous event');
+        this.currentEvent.stopPropagation(); return null;
       case 'use_state': return newState('i64', args[0]);
       case 'use_string': return newState('String', String(args[0]));
       case 'use_bool': return newState('bool', args[0]);
@@ -153,7 +222,7 @@ export class UISession {
       case 'ref_value': return String(this.resolve(args[0], 'ref').current?.value ?? '');
       case 'effect': {
         const setup = spec.callbacks[0], cleanup = spec.callbacks[1], setupEnv = args[0], cleanupEnv = args[1];
-        u.useEffect(() => { this.closure(setup, setupEnv, [], {label: 'effect'}); return () => this.closure(cleanup, cleanupEnv, [], {label: 'cleanup'}); }, [String(args[2])]); return null;
+        u.useEffect(() => { this.closure(setup, setupEnv, [], {label: 'effect', bindings}); return () => this.closure(cleanup, cleanupEnv, [], {label: 'cleanup', bindings}); }, [String(args[2])]); return null;
       }
       case 'memo': return u.useMemo(() => callback(0, [], {label: 'memo'}), [String(args[1])]);
       case 'prevent_default':
@@ -162,12 +231,30 @@ export class UISession {
       default: throw Error(`Unknown UI ABI operation ${spec.name}`);
     }
   }
-  mount(container) {
+  eventProp(name) {
+    const [event, capture] = name.split(':');
+    const words = 'Click DoubleClick ContextMenu MouseDown MouseUp MouseMove MouseEnter MouseLeave MouseOver MouseOut KeyDown KeyUp KeyPress PointerDown PointerUp PointerMove PointerEnter PointerLeave PointerOver PointerOut PointerCancel GotPointerCapture LostPointerCapture TouchStart TouchEnd TouchMove TouchCancel Drag DragStart DragEnd DragEnter DragLeave DragOver Drop Input BeforeInput Change Submit Reset Focus Blur FocusIn FocusOut Wheel Scroll Copy Cut Paste CompositionStart CompositionUpdate CompositionEnd AnimationStart AnimationEnd AnimationIteration TransitionEnd Load Error';
+    const aliases = Object.fromEntries(words.split(' ').map(word => [word.toLowerCase(), word])); aliases.dblclick = 'DoubleClick';
+    return 'on' + (aliases[event] ?? event[0].toUpperCase() + event.slice(1)) + (capture ? 'Capture' : '');
+  }
+  snapshotEvent(event) {
+    const text = value => { const result = String(value ?? ''); if (result.length > 1000000) throw Error('DOM event value budget exceeded'); return result; };
+    const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
+    const integer = (value, unsigned = false) => BigInt(unsigned ? number(value) >>> 0 : number(value) | 0);
+    return {event_type: text(event.type), value: text(event.target?.value), key: text(event.key), code: text(event.code),
+      checked: !!event.target?.checked, repeat: !!event.repeat, alt_key: !!event.altKey, ctrl_key: !!event.ctrlKey,
+      meta_key: !!event.metaKey, shift_key: !!event.shiftKey, button: integer(event.button), buttons: integer(event.buttons, true),
+      client_x: number(event.clientX), client_y: number(event.clientY), pointer_id: integer(event.pointerId), pressure: number(event.pressure),
+      delta_x: number(event.deltaX), delta_y: number(event.deltaY), delta_z: number(event.deltaZ),
+      input_type: text(event.inputType), data: text(event.data), time_stamp: number(event.timeStamp)};
+  }
+  mount(container, options = {}) {
     if (this.root || this.disposed) throw Error('A UI session mounts exactly once');
     const session = this;
-    function RustApp() { return session.invoke(session.artifact.entry, [], {node: true, label: 'render'}); }
+    function RustApp() { return session.render(); }
+    this.App = RustApp;
     RustApp.displayName = this.artifact.entry;
-    this.root = this.ui.createRoot(container, {throwErrors: true, onError: error => { this.emit('error', {message: error.message, code: error.code, span: error.span}); this.onError?.(error); }});
+    this.root = this.ui.createRoot(container, {...options, throwErrors: true, onError: error => { this.emit('error', {message: error.message, code: error.code, span: error.span}); this.onError?.(error); }});
     this.root.subscribe(event => this.emit(event.type, event));
     try { this.root.render(this.ui.h(RustApp)); return this; }
     catch (error) { this.dispose(); throw error; }
@@ -178,42 +265,84 @@ export class UISession {
   }
   startDebugEvent() {
     const debug = this.debugger, next = debug.queue.shift(); if (!next) return;
+    debug.bindings = next.bindings;
+    debug.overlay = new Map();
+    this.pruneHandles();
+    for (const [handle, record] of this.handles) {
+      const state = record.weak ? record.weak.deref() : record.value;
+      if (record.kind === 'state' && state) debug.overlay.set(handle, {cell: state.cell, baseline: state.cell.value, value: state.cell.value, kind: state.kind});
+    }
     this.callBudget = 0; debug.descriptor = next.descriptor; debug.scope = [];
     const ref = {__ref: true, cell: {value: next.environment}, path: []};
-    debug.vm = this.prepareVm(next.descriptor.instance, [ref, ...next.args]); this.emit('debug-paused', this.inspectDebugger());
+    debug.vm = this.prepareVm(next.descriptor.instance, [ref, ...next.args]);
+    debug.vm.enableHistory({captureExternal: () => [...debug.overlay].map(([id, record]) => [id, record.value]),
+      restoreExternal: values => { for (const [id, value] of values) debug.overlay.get(id).value = value; }});
+    this.emit('debug-paused', this.inspectDebugger());
+  }
+  assertDebugState() {
+    for (const [handle, staged] of this.debugger.overlay ?? []) {
+      const record = this.resolve({handle: BigInt(handle)}, 'state');
+      if (record.cell !== staged.cell || !Object.is(record.cell.value, staged.baseline)) throw Error('UI state changed outside the paused event; stop and retry');
+    }
+  }
+  commitDebugState() {
+    this.assertDebugState();
+    for (const staged of this.debugger.overlay?.values() ?? []) {
+      if (!Object.is(staged.value, staged.baseline)) staged.cell.set(staged.value);
+      staged.baseline = staged.cell.value;
+    }
   }
   debug(command = 'continue') {
     const debug = this.debugger;
-    if (command === 'stop') { if (debug.scope) this.release(debug.scope); debug.vm = null; debug.scope = null; debug.queue = []; debug.armed = false; return this.inspectDebugger(); }
-    if (!['step', 'step-line', 'continue'].includes(command)) throw Error('Unknown UI debugger command');
+    if (command === 'stop') {
+      if (debug.scope) this.release(debug.scope);
+      debug.vm = null; debug.scope = null; debug.overlay = null; debug.queue = []; debug.armed = false; return this.inspectDebugger();
+    }
+    if (!['step', 'step-line', 'back', 'back-line', 'restart', 'continue'].includes(command)) throw Error('Unknown UI debugger command');
     if (!debug.vm) this.startDebugEvent();
     const vm = debug.vm; if (!vm) return this.inspectDebugger();
-    this.scopes.push(debug.scope); this.depth++;
+    this.assertDebugState();
+    const previousBindings = this.currentBindings; this.currentBindings = debug.bindings;
+    this.scopes.push(debug.scope); this.depth++; this.debugRunning = true;
+    let committed = false;
     try {
-      if (command === 'step') vm.step(); else if (command === 'step-line') vm.stepLine(); else vm.run({breakpoints: debug.breakpoints, skipFirst: true});
+      if (command === 'back') vm.stepBack();
+      else if (command === 'back-line') vm.stepBackLine();
+      else if (command === 'restart') { while (vm.historyInfo().available) vm.stepBack(); }
+      else if (command === 'step') vm.step();
+      else if (command === 'step-line') vm.stepLine();
+      else vm.run({breakpoints: debug.breakpoints, skipFirst: true});
       this.trace = vm.trace.slice();
-      if (vm.done) { this.release(debug.scope); debug.scope = null; }
-    } catch (error) {
-      this.release(debug.scope ?? []); debug.scope = null; debug.vm = null; throw error;
-    } finally { this.depth--; this.scopes.pop(); this.ui.flushSync(); }
-    const result = this.inspectDebugger(); this.emit(vm.done ? 'debug-complete' : 'debug-paused', result);
-    if (vm.done) debug.vm = null;
+      // Instruction stepping can finish provisionally; Continue is the explicit DOM/effect commit.
+      if (vm.done && command === 'continue') {
+        this.commitDebugState(); committed = true; vm.historyBarrier('Committed DOM render and effects');
+        this.release(debug.scope); debug.scope = null;
+      }
+    } finally { this.debugRunning = false; this.depth--; this.scopes.pop(); this.currentBindings = previousBindings; this.ui.flushSync(); }
+    const result = this.inspectDebugger(); this.emit(committed ? 'debug-complete' : 'debug-paused', result);
+    if (committed) { debug.vm = null; debug.overlay = null; }
     return result;
   }
   inspectDebugger() {
     return {armed: this.debugger.armed, queued: this.debugger.queue.length, callback: this.debugger.descriptor,
       state: this.debugger.vm?.snapshot() ?? null, trace: this.trace.slice(-this.maxTrace), breakpoints: this.debugger.breakpoints.slice(),
-      boundary: 'Instruction stepping pauses event callbacks only. Component rendering and effect callbacks remain synchronous.'};
+      stagedStates: [...(this.debugger.overlay ?? [])].map(([handle, record]) => ({handle, type: record.kind, value: this.values.schemas[record.kind] ? this.values.encode(record.kind, record.value) : this.ui._safeValue(record.value)})),
+      boundary: 'Back restores bounded Rust instructions and staged state. Continue commits the DOM. Host effects establish irreversible boundaries; rendering/effects are synchronous.'};
   }
   inspect() {
     const states = [];
-    for (const [handle, entry] of this.handles) if (entry.kind === 'state') states.push({handle, type: entry.value.kind, value: this.ui._safeValue(entry.value.cell.value)});
+    this.pruneHandles();
+    for (const [handle, entry] of this.handles) { const value = entry.weak ? entry.weak.deref() : entry.value;
+      if (entry.kind === 'state' && value) states.push({handle, type: value.kind, value: this.values.schemas[value.kind] ? this.values.encode(value.kind, value.cell.value) : this.ui._safeValue(value.cell.value)});
+    }
     return {format: 'ferrite-ui-inspection-v1', backend: this.backend, calls: this.calls, handles: this.handles.size, states,
       root: this.root?.inspect() ?? null, debugger: this.inspectDebugger()};
   }
   setState(handle, value) {
+    if (this.debugger.vm) throw Error('Finish or stop the paused event before editing state');
     const record = this.resolve({handle: BigInt(handle)}, 'state');
-    if (record.kind === 'i64') { value = BigInt(String(value).replace(/n$/, '')); if (value < -(1n << 63n) || value >= 1n << 63n) throw Error('State is outside i64 bounds'); }
+    if (this.values.schemas[record.kind]) value = this.values.decode(record.kind, value);
+    else if (record.kind === 'i64') { value = BigInt(String(value).replace(/n$/, '')); if (value < -(1n << 63n) || value >= 1n << 63n) throw Error('State is outside i64 bounds'); }
     else if (record.kind === 'bool' && typeof value !== 'boolean' || record.kind === 'String' && typeof value !== 'string') throw Error('State type mismatch');
     this.ui.flushSync(() => record.cell.set(value)); return this.inspect();
   }

@@ -3,3 +3,4 @@ import {UI} from './Runtime.js';
 export const createRoot = UI.createRoot;
 export const createPortal = UI.createPortal;
 export const flushSync = UI.flushSync;
+export const hydrateRoot = UI.hydrateRoot;

@@ -1,3 +1,8 @@
+import {createNativeWasmHost, mountNativeUI, exportNativeHTML, decodeNativeBase64} from '../ui-framework/NativeWasm.js';
+import {createReactAdapter} from '../ui-framework/ReactAdapter.js';
+import {renderToString, renderToStaticMarkup, renderUIToString, exportHydratedHTML} from '../ui-framework/ServerRenderer.js';
+import {UIProject} from '../ui-framework/UIProject.js';
+import {CanvasLayout} from '../ui-framework/CanvasLayout.js';
 import {SourceDesigner} from '../ui-framework/SourceDesigner.js';
 import {compile} from '../engine.js';
 import {JavaScriptEmitter} from '../compiler/JavaScriptEmitter.js';
@@ -12,9 +17,9 @@ import {UI, createUIRuntime} from '../ui-framework/Runtime.js';
 export function compileRust(source, options = {}) { return compile(source, options); }
 export function compileUI(source, options = {}) { return UICompiler.compile(source, options); }
 export function mountUI(sourceOrArtifact, container, options = {}) {
-  const {runtime, backend, maxHandles, maxTrace, onError, ...compileOptions} = options;
+  const {runtime, backend, maxHandles, maxTrace, onError, hydrate, identifierPrefix, onRecoverableError, props, onEvent, components, ...compileOptions} = options;
   const artifact = typeof sourceOrArtifact === 'string' ? compileUI(sourceOrArtifact, compileOptions) : sourceOrArtifact;
-  return new UISession(artifact, {runtime, backend, maxHandles, maxTrace, onError}).mount(container);
+  return new UISession(artifact, {runtime, backend, maxHandles, maxTrace, onError, props, onEvent, components}).mount(container, {hydrate, identifierPrefix, onRecoverableError});
 }
 export function runRust(sourceOrArtifact, {backend = 'mir', entry, args = [], ...options} = {}) {
   const artifact = typeof sourceOrArtifact === 'string' ? compileRust(sourceOrArtifact, {...options, ...(entry ? {entry} : {})}) : sourceOrArtifact;
@@ -49,5 +54,5 @@ export function runScripts({document: doc = globalThis.document, root = doc, onE
   }
   return results;
 }
-export const Ferrite = Object.freeze({version: '0.1.0', compileRust, compileUI, mountUI, runRust, runScripts, exportHTML, UI, createUIRuntime, SourceDesigner});
-export {exportHTML, UI, createUIRuntime, SourceDesigner, UICompiler, UISession};
+export const Ferrite = Object.freeze({version: '0.3.0', createNativeWasmHost, mountNativeUI, exportNativeHTML, decodeNativeBase64, createReactAdapter, compileRust, compileUI, mountUI, runRust, runScripts, exportHTML, UI, createUIRuntime, SourceDesigner, UIProject, CanvasLayout, renderToString, renderToStaticMarkup, renderUIToString, exportHydratedHTML});
+export {createNativeWasmHost, mountNativeUI, exportNativeHTML, decodeNativeBase64, createReactAdapter, exportHTML, UI, createUIRuntime, SourceDesigner, UICompiler, UISession, UIProject, CanvasLayout, renderToString, renderToStaticMarkup, renderUIToString, exportHydratedHTML};

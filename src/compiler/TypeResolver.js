@@ -127,7 +127,7 @@ export class TypeResolver {
         this.validateKnown(type, parameters, {...shape,span:field.node.span ?? shape.span});
         used(type, parameters, found);
       }
-      for (const name of parameters) if (!found.has(name))
+      for (const name of parameters) if (!found.has(name) && shape.builtin !== 'phantom')
         throw new Diagnostic('E0392', `Type parameter ${name} is never used in ${shape.name}`, shape.span);
     }
   }

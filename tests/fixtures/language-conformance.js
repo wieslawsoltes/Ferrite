@@ -1,4 +1,5 @@
 import {genericTraitCases,genericTraitCompileFailCases} from './generic-traits.js';
+import {uiGenericCases, uiGenericCompileFailCases} from './ui-generic-integration.js';
 import {genericImplCases, genericImplCompileFailCases} from './generic-impls.js';
 import {callableCases,callableCompileFailCases,callablePanicCases} from './callable-items.js';
 import {discriminantCases, discriminantCompileFailCases} from './enum-discriminants.js';
@@ -125,9 +126,9 @@ export const runtimePanicCases = [
   ['explicit panic', 'fn main(){panic!("expected");}', 'R_PANIC'],
 ];
 export const languageCases = [
-  ...genericImplCases, ...primitiveCases, ...sequenceCases, ...constantCases, ...controlCases, ...floatCases, ...destructuringCases, ...nominalCases, ...enumRecordCases, ...callableCases, ...discriminantCases,
+  ...uiGenericCases, ...genericImplCases, ...primitiveCases, ...sequenceCases, ...constantCases, ...controlCases, ...floatCases, ...destructuringCases, ...nominalCases, ...enumRecordCases, ...callableCases, ...discriminantCases,
 ].map(([name,source,output])=>({name,source,output,kind:'run'})).concat(
-  [...genericImplCompileFailCases, ...compileFailCases, ...floatCompileFailCases, ...destructuringCompileFailCases, ...nominalCompileFailCases, ...enumRecordCompileFailCases, ...callableCompileFailCases, ...discriminantCompileFailCases].map(([name,source])=>({name,source,kind:'compile-fail'})),
+  [...uiGenericCompileFailCases, ...genericImplCompileFailCases, ...compileFailCases, ...floatCompileFailCases, ...destructuringCompileFailCases, ...nominalCompileFailCases, ...enumRecordCompileFailCases, ...callableCompileFailCases, ...discriminantCompileFailCases].map(([name,source])=>({name,source,kind:'compile-fail'})),
   [...runtimePanicCases, ...floatPanicCases, ...destructuringPanicCases, ...nominalPanicCases, ...enumRecordPanicCases, ...callablePanicCases].map(([name,source,code,output])=>({name,source,code,output,kind:'panic'})),
 );
 

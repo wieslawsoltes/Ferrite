@@ -1,0 +1,9 @@
+[package]
+name = "ferrite-ui"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+[dependencies]
+ferrite-ui-macro = { path = "../ferrite-ui-macro" }

@@ -82,32 +82,57 @@ export class MirVerifier {
     }
     const predecessors = new Map([...reachable].map(id => [id, []]));
     for (const id of reachable) for (const next of this.successors(map.get(id))) predecessors.get(next).push(id);
-    const all = new Set(fn.registers.map((_, i) => i)), inputs = new Map(), outputs = new Map();
-    for (const id of reachable) { inputs.set(id, id === fn.entry ? new Set(fn.params) : new Set(all)); outputs.set(id, new Set(all)); }
-    let changed = true, count = 0;
-    while (changed) {
-      if (++count > fn.blocks.length * 4 + 20) fail('Initialization analysis did not converge');
-      changed = false;
-      for (const id of reachable) {
-        const incoming = id === fn.entry ? new Set(fn.params) : new Set(all);
-        if (id !== fn.entry) for (const pred of predecessors.get(id)) for (const slot of incoming) if (!outputs.get(pred).has(slot)) incoming.delete(slot);
-        const outgoing = new Set(incoming);
-        for (const instruction of map.get(id).instructions) this.definitions(instruction).forEach(slot => outgoing.add(slot));
-        if ([...outgoing].some(x => !outputs.get(id).has(x)) || outgoing.size !== outputs.get(id).size) changed = true;
-        inputs.set(id, incoming); outputs.set(id, outgoing);
+    // Definite initialization is a descending must-analysis. Start non-entry
+    // outputs at TOP, meet predecessor outputs, then add the block's definitions.
+    // A word-packed mask replaces one boxed Set entry per register per block.
+    // Only a changed output schedules successors; cycles need no arbitrary cap.
+    const words = Math.ceil(fn.registers.length / 32);
+    const top = new Uint32Array(words).fill(0xffffffff);
+    if (fn.registers.length % 32) top[words - 1] = 2 ** (fn.registers.length % 32) - 1;
+    const params = new Uint32Array(words);
+    for (const slot of fn.params) params[slot >>> 5] |= 1 << (slot & 31);
+    const outputs = new Map(), definitions = new Map();
+    for (const id of reachable) {
+      outputs.set(id, top.slice());
+      const generated = new Uint32Array(words);
+      for (const instruction of map.get(id).instructions)
+        for (const slot of this.definitions(instruction)) generated[slot >>> 5] |= 1 << (slot & 31);
+      definitions.set(id, generated);
+    }
+    const incoming = new Uint32Array(words);
+    const meet = id => {
+      incoming.set(id === fn.entry ? params : top);
+      if (id !== fn.entry) for (const pred of predecessors.get(id)) {
+        const output = outputs.get(pred);
+        for (let word = 0; word < words; word++) incoming[word] &= output[word];
+      }
+    };
+    // Reverse the DFS insertion order so the entry is processed first on pop.
+    const work = [...reachable].reverse(), queued = new Set(work);
+    while (work.length) {
+      const id = work.pop(); queued.delete(id); meet(id);
+      const output = outputs.get(id), generated = definitions.get(id);
+      let changed = false;
+      for (let word = 0; word < words; word++) {
+        const value = (incoming[word] | generated[word]) >>> 0;
+        if (output[word] !== value) { output[word] = value; changed = true; }
+      }
+      if (changed) for (const next of this.successors(map.get(id))) {
+        if (!queued.has(next)) { queued.add(next); work.push(next); }
       }
     }
     for (const id of reachable) {
-      const available = new Set(inputs.get(id)), block = map.get(id);
+      meet(id);
+      const available = incoming, block = map.get(id);
       const validate = (slot, span) => {
         if (!Number.isInteger(slot) || slot < 0 || slot >= fn.registers.length) fail(`Invalid register ${slot}`, span);
-        if (!available.has(slot)) fail(`Register %${slot} may be uninitialized`, span);
+        if (!(available[slot >>> 5] & (1 << (slot & 31)))) fail(`Register %${slot} may be uninitialized`, span);
       };
       for (const instruction of block.instructions) {
         this.uses(instruction).forEach(slot => validate(slot, instruction.span));
         for (const slot of this.definitions(instruction)) {
           if (slot < 0 || slot >= fn.registers.length) fail(`Invalid destination %${slot}`, instruction.span);
-          available.add(slot);
+          available[slot >>> 5] |= 1 << (slot & 31);
         }
         if (instruction.op === 'call' && !names.has(instruction.callee)) fail(`Unresolved call ${instruction.callee}`, instruction.span);
       }

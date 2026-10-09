@@ -1,3 +1,4 @@
+import {primitiveCases} from './fixtures/language-conformance.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -18,18 +19,7 @@ export function runAll(source, expected) {
   }
 }
 
-for (const [name, source, expected] of [
-  ['different shift operand types and precedence', 'fn main(){let x=3u64 << 2u8 + 1u8;println!("{} {}",x,128u8 >> 6i16);}', '24 2\n'],
-  ['checked shifts truncate bits without arithmetic overflow', 'fn main(){println!("{} {} {}",128u8 << 1,64i8 << 1,-64i8 >> 3);}', '0 -128 -8\n'],
-  ['all integer bitwise assignments', 'fn main(){let mut x=12u32;x^=10;x&=7;x|=16;x<<=2u8;x>>=1i16;println!("{}",x);}', '44\n'],
-  ['eager boolean operations', 'fn yes()->bool{print!("y");true}fn main(){let mut x=false & yes();x|=true;x^=false;println!("{} {}",x,true ^ true);}', 'ytrue false\n'],
-  ['primitive bool char and numeric casts', "fn main(){println!(\"{} {} {} {}\",true as u128,'🦀' as u32,65u8 as char,b'\\xff');}", '1 129408 A 255\n'],
-  ['negative base literals at signed minimum', 'fn main(){println!("{} {}",-0x80i8,-0b1000_0000i8);}', '-128 -128\n'],
-  ['raw names and nested generic closing punctuation', 'fn main(){let r#type:Option<Option<i32>>=Some(Some(9));println!("{}",r#type.unwrap().unwrap());}', '9\n'],
-  ['Unicode identifier normalization', 'fn main(){let café=7;println!("{}",cafe\u0301);}', '7\n'],
-  ['raw strings including zero hashes', 'fn main(){println!(r"{}",r#"a\"b"#);}', 'a"b\n'],
-  ['decimal floating suffix and exponent', 'fn main(){println!("{} {} {}",1f64,1.,12.5e1f32);}', '1 1 125\n'],
-]) test(name, () => runAll(source, expected));
+for (const [name, source, expected] of primitiveCases) test(name, () => runAll(source, expected));
 
 for (const source of [
   'fn main(){let a=1f32 << 2;}', 'fn main(){let a=1u8 << 1f32;}',

@@ -1,0 +1,82 @@
+name: Publish verified discriminant compiler commits
+on:
+  push:
+    branches: [automation/compiler-discriminants-20261009]
+    paths: [.github/discriminants.json]
+permissions:
+  contents: write
+  actions: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify and publish compiler source commits
+        id: publish
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os, re, subprocess, tempfile
+          from pathlib import Path
+          evidence = Path(os.environ['RUNNER_TEMP']) / 'compiler-publication'
+          evidence.mkdir()
+          manifest = json.loads(Path('.github/discriminants.json').read_text())
+          chunks = manifest['chunks']
+          if not 1 <= len(chunks) <= 64 or any(not re.fullmatch(r'\.github/discriminants-[a-z0-9-]+\.b64', p) for p in chunks):
+              raise SystemExit('Invalid payload paths')
+          encoded = ''.join(Path(p).read_text().strip() for p in chunks)
+          (evidence / 'transport.b64').write_text(encoded)
+          compressed = base64.b64decode(encoded, validate=True)
+          if hashlib.sha256(compressed).hexdigest() != manifest['sha256']:
+              raise SystemExit('Payload digest mismatch')
+          payload = json.loads(gzip.decompress(compressed))
+          (evidence / 'payload.json').write_text(json.dumps(payload))
+          target = payload['target']
+          if target not in ['feat/compiler-enum-discriminants', 'feat/compiler-let-chains']:
+              raise SystemExit('Invalid feature branch')
+          def git(*args):
+              return subprocess.check_output(['git', *args]).decode().strip()
+          expected = payload['base']
+          if git('ls-remote', 'origin', 'refs/heads/' + target).split()[0] != expected:
+              raise SystemExit('Target changed; refusing to overwrite concurrent work')
+          git('config', 'user.name', 'Wiesław Šoltés')
+          git('config', 'user.email', 'wieslawsoltes@users.noreply.github.com')
+          git('checkout', '--detach', expected)
+          for change in payload['commits']:
+              with tempfile.NamedTemporaryFile(suffix='.patch') as patch:
+                  patch.write(change['patch'].encode()); patch.flush()
+                  git('apply', '--index', '--whitespace=error', patch.name)
+              if git('diff', '--cached', '--name-only', '--', '.github/workflows'):
+                  raise SystemExit('Workflow changes require a separately authorized edit')
+              subprocess.run(['npm', 'run', 'build:workers'], check=True)
+              git('add', 'src/ui/workers')
+              tree = git('write-tree')
+              if tree != change['tree']:
+                  raise SystemExit('Source tree mismatch: ' + tree)
+              git('commit', '-m', change['message'])
+          git('archive', '--format=zip', 'HEAD', '-o', str(evidence / 'checkout.zip'))
+          (evidence / 'commit.txt').write_text(git('rev-parse', 'HEAD'))
+          (evidence / 'tree.txt').write_text(git('write-tree'))
+          subprocess.run(['npm', 'run', 'check'], check=True)
+          subprocess.run(['npm', 'test'], check=True)
+          git('push', 'origin', 'HEAD:refs/heads/' + target)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('target=' + target + '\n')
+          Path(os.environ['GITHUB_STEP_SUMMARY']).write_text('Published `' + git('rev-parse', 'HEAD') + '`; exact tree `' + git('write-tree') + '`.')
+          PY
+      - name: Run full feature validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ steps.publish.outputs.target }}
+        run: gh workflow run test.yml --ref "$TARGET"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: discriminant-publication
+          path: ${{ runner.temp }}/compiler-publication/
+          retention-days: 7

@@ -34,7 +34,7 @@ index f3bdbc4..21759bd 100644
 +          const signature = ClosureAnalyzer.bound(this.formal(fn, rawBound, substitution, node));
 +          if (!signature) continue;
 +          const hints = signature.params.map(type => T.substitute(type, substitution));
-+          const unresolved = hints.some(type => [...substitution].some(([name, value]) => !value && new RegExp(`\b${name}\b`).test(type)));
++          const unresolved = hints.some(type => [...substitution].some(([name, value]) => !value && new RegExp(`\\b${name}\\b`).test(type)));
 +          if (!closure.instance && !unresolved) this.closures.prepare(closure, hints);
 +          if (!closure.instance || signature.params.length !== closure.signature.length) continue;
 +          signature.params.forEach((type, i) => T.unify(type, closure.signature[i], substitution, node));

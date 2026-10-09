@@ -1,0 +1,34 @@
+name: Compiler reference toolchain
+on:
+  push:
+    branches: [automation/ferrite-language-publish]
+    paths: [.github/workflows/compiler-reference.yml]
+permissions:
+  contents: read
+jobs:
+  reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install the official stable reference compiler
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Package compiler and target libraries only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reference
+          rustc --version --verbose > reference/version.txt
+          root="$(rustc --print sysroot)"
+          test -x "$root/bin/rustc"
+          # Only compiler distribution files; never Cargo homes, user settings,
+          # credentials, caches, repository source, or runner environment data.
+          tar -C "$root" -czf reference/rustc-reference.tar.gz bin/rustc lib
+          sha256sum reference/rustc-reference.tar.gz > reference/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustc-reference-linux-x64
+          path: reference/
+          retention-days: 1
+          compression-level: 0

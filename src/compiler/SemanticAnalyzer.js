@@ -50,13 +50,17 @@ export class SemanticAnalyzer {
     for (const instance of this.instances.values()) if (instance.fn.isConst) this.constants.validate(instance);
     this.closures.finish();this.functionValues.finish();
     this.discriminants.annotate(this.instances.values());
-    return {implementations: this.implementations.snapshot(), discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
+    return {traitResolution:this.implementations.traits.snapshot(),implementations: this.implementations.snapshot(), discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
       symbols: this.index.symbols, structures: [...this.index.structs.values()],
       enums: [...this.index.enums.values()], warnings: this.warnings, entry: this.entryKey,
-      capabilities: {ownership: 'conservative whole-local analysis', traits: 'concrete impls and built-in bounds'}};
+      capabilities: {ownership: 'conservative whole-local analysis', traits: 'generic declared-trait impls and built-in bounds'}};
   }
   annotate(node, type) { node.type = type; return type; }
   normalize(type, ctx, node = null) { return this.index.type(T.substitute(type, ctx.instance.substitution ?? new Map(Object.entries(ctx.instance.typeArguments))), ctx.instance.fn.module, ctx.instance.fn.owner, new Set(), node); }
+  hasBound(type,bound) {
+    const declared=this.implementations?.traits.has(type,bound);
+    return declared??this.hasTrait(type,bound);
+  }
   hasTrait(type, bound, depth = 0) {
     if (depth > 32) return false;
     const closure=this.closures.get(type);
@@ -80,7 +84,7 @@ export class SemanticAnalyzer {
       const fields = shape.fields?.map(f => f.type) ?? shape.variants.flatMap(v => v.fields);
       return fields.every(t => this.hasTrait(T.substitute(t, substitution), bound, depth + 1));
     }
-    return this.index.impls.some(impl => this.index.type(impl.target, impl.module) === type && impl.trait?.split('::').at(-1) === bound);
+    return false;
   }
   formal(fn, type, substitution = new Map(), node = fn) {
     const parameters = new Set(substitution.keys());
@@ -98,7 +102,7 @@ export class SemanticAnalyzer {
       if (!type || /\b_\b/.test(type)) throw new Diagnostic('E0282', `Cannot infer ${parameter.name} in ${fn.name}`, node.span);
       for (const rawBound of parameter.bounds) {
         const bound=this.formal(fn, rawBound, substitution, node);
-        if (!this.hasTrait(type, bound)) throw new Diagnostic('E0277', `Trait obligation failed: ${type}: ${bound}`, node.span);
+        if (!this.hasBound(type, bound)) throw new Diagnostic('E0277', `Trait obligation failed: ${type}: ${bound}`, node.span);
         this.obligations.push({type, trait: bound, status: 'satisfied', span: node.span});
       }
     }
@@ -106,7 +110,7 @@ export class SemanticAnalyzer {
       const type = this.formal(fn, predicate.type, substitution, node);
       for (const rawBound of predicate.bounds) {
         const bound = this.formal(fn, rawBound, substitution, node);
-        if (!this.hasTrait(type, bound)) throw new Diagnostic('E0277', `Where-clause obligation failed: ${type}: ${bound}`, node.span, [{message: 'Required by this bound', span: predicate.span}]);
+        if (!this.hasBound(type, bound)) throw new Diagnostic('E0277', `Where-clause obligation failed: ${type}: ${bound}`, node.span, [{message: 'Required by this bound', span: predicate.span}]);
         this.obligations.push({type, trait: bound, status: 'satisfied', span: node.span, declaration: predicate.span});
       }
     }
@@ -139,7 +143,7 @@ export class SemanticAnalyzer {
     const actual = this.block(copy.body, ctx, instance.returnType==='_'||abstractReturn?null:instance.returnType);
     if(instance.returnType==='_'||abstractReturn){
       const inferred=ctx.inferredReturns.reduce((type,next)=>T.join(type,next,copy.body),actual);
-      if(abstractReturn&&!this.hasTrait(inferred,abstractReturn))throw new Diagnostic('E0277',`Returned type does not implement ${abstractReturn}`,copy.body.span);
+      if(abstractReturn&&!this.hasBound(inferred,abstractReturn))throw new Diagnostic('E0277',`Returned type does not implement ${abstractReturn}`,copy.body.span);
       instance.returnType=inferred;
     }else T.unify(instance.returnType, actual, new Map(), copy.body);
     if (fn.implGenericCount && new AssigneeAnalyzer(this, ctx).carriesReference(instance.returnType))
@@ -199,6 +203,7 @@ export class SemanticAnalyzer {
         if (constructor && !constructor.variant.fields.length) { type = this.construct(node, constructor, [], ctx, expected); break; }
         const associated = this.implementations.associated(node, ctx);
         const fn = associated?.fn ?? this.index.resolve(this.index.functions,node.name,ctx.instance.fn.module,node,false);
+        if(fn?.implIndex!==undefined&&!associated)throw new Diagnostic('E0599',`No applicable in-scope method '${node.name}'`,node.span);
         if(fn){type=this.functionValues.create(node,fn,ctx,expected,associated ? this.implementations.explicit(associated, node, ctx) : null);break;}
         throw new Diagnostic('E0425', `Unresolved identifier '${node.name}'`, node.span);
       }
@@ -498,6 +503,7 @@ export class SemanticAnalyzer {
     if (constructor) return this.construct(node, constructor, node.args, ctx, expected);
     const associated = this.implementations.associated(callee, ctx);
     const fn = associated?.fn ?? this.index.resolve(this.index.functions, name, ctx.instance.fn.module, node);
+    if(fn.implIndex!==undefined&&!associated)throw new Diagnostic('E0599',`No applicable in-scope method '${name}'`,node.span);
     const explicit = associated ? this.implementations.explicit(associated, callee, ctx) :
       (callee.typeArguments ?? []).map(t => this.normalize(t, ctx, callee));
     return this.invoke(node, ctx, fn, explicit, expected);
@@ -523,7 +529,7 @@ export class SemanticAnalyzer {
     const receiver = node.callee.object, method = node.callee.field;
     const original = this.infer(receiver, ctx), base = T.reference(original) && original !== '&str' ? T.target(original) : original;
     const app = T.application(base), array = /^\[(.+);\d+\]$/.exec(base);
-    const resolved = this.implementations.lookup(base, method, ctx.instance.fn.module, node);
+    const resolved = this.implementations.lookup(base, method, ctx.instance.fn.module, node,ctx.instance.fn);
     const builtins = ['len', 'clone', 'push', 'pop', 'push_str', 'to_string', 'unwrap', 'is_some', 'is_none', 'is_ok', 'is_err'];
     if (!resolved && builtins.includes(method)) {
       node.receiver = receiver; node.receiverDeref = base !== original; node.builtin = `method::${method}`;
@@ -548,7 +554,7 @@ export class SemanticAnalyzer {
         if ((app.name === 'Option' && ['is_some', 'is_none'].includes(method)) || (app.name === 'Result' && ['is_ok', 'is_err'].includes(method))) return 'bool';
       }
     }
-    const fn = resolved?.fn ?? this.index.resolve(this.index.functions, `${base}::${method}`, ctx.instance.fn.module, node, false);
+    const fn = resolved?.fn;
     if (!fn || fn.params[0]?.name !== 'self') throw new Diagnostic('E0599', `No method '${method}' for ${base}`, node.span);
     const explicit = resolved ? this.implementations.explicit(resolved, node.callee, ctx) : [];
     const mapping = new Map(fn.generics.map((g,i) => [g.name, explicit[i] ?? null]));

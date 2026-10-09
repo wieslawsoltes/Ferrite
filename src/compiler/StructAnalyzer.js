@@ -66,7 +66,7 @@ export class StructAnalyzer {
 
   bound(type, raw, shape, substitution, node) {
     const bound = this.index.type(T.substitute(raw, substitution), shape.module, shape.name);
-    if (!this.a.hasTrait(type, bound)) throw new Diagnostic('E0277', `Trait obligation failed: ${type}: ${bound}`, node.span);
+    if (!this.a.hasBound(type, bound)) throw new Diagnostic('E0277', `Trait obligation failed: ${type}: ${bound}`, node.span);
     this.a.obligations.push({type, trait: bound, status: 'satisfied', span: node.span});
   }
 }

@@ -42,7 +42,7 @@ export class ImplObligations {
   }
   assume(rawType,rawBound,node) {
     const type=this.normalize(rawType,node),bound=this.trait(rawBound,this.declaration.module,node);
-    if((type.startsWith('&mut ') && ['Copy','Clone'].includes(bound)) || !this.symbolic(type) && !this.prove(type,bound))
+    if((!this.index.traits.has(bound) && type.startsWith('&mut ') && ['Copy','Clone'].includes(bound)) || !this.symbolic(type) && !this.prove(type,bound))
       throw new Diagnostic('E0277',`Implementation has an unsatisfied bound: ${type}: ${bound}`,node.span??this.declaration.span);
     if(!this.assumptions.has(type))this.assumptions.set(type,new Set());
     const set=this.assumptions.get(type),pending=[bound];
@@ -52,6 +52,7 @@ export class ImplObligations {
     if(++this.visits>65536 || depth>64)throw new Diagnostic('F_IMPL_BOUND_LIMIT','Implementation obligation budget exceeded',this.declaration.span);
     if(this.assumptions.get(type)?.has(bound))return true;
     // All parsed type parameters are implicitly Sized; ?Sized is not parsed.
+    if(this.index.traits.has(bound))return this.symbolic(type)?this.a.implementations.traits.prove(type,bound,this,depth):this.a.hasBound(type,bound);
     if(bound==='Sized')return type!=='str';
     if(!this.symbolic(type))return this.a.hasTrait(type,bound);
     if(this.parameters.has(type))return false;

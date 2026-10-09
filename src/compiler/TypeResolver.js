@@ -37,7 +37,7 @@ export class TypeResolver {
           if (this.expansions.size < 512 && result.length < 8192) this.expansions.set(JSON.stringify([alias.name, arguments_]), usage);
         } else {
           const canonical = parameters.has(name) ? name : name === 'Self' && self ? self :
-            this.find(this.index.structs, name, module, node)?.name ?? this.find(this.index.enums, name, module, node)?.name ?? name;
+            this.find(this.index.structs, name, module, node)?.name ?? this.find(this.index.enums, name, module, node)?.name ?? this.find(this.index.traits,name,module,node)?.name ?? name;
           result = canonical + (args.length ? `<${arguments_.join(',')}>` : '');
         }
       }

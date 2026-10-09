@@ -1,59 +1,10 @@
+import {ImplTypePattern} from './ImplTypePattern.js';
+import {TraitImplementationResolver} from './TraitImplementationResolver.js';
 import {ImplObligations} from './ImplObligations.js';
 import {Diagnostic} from './Diagnostic.js';
 import {TypeSystem as T} from './TypeSystem.js';
 
-/** Structural, invariant matching for impl heads. This is deliberately NOT
- * expression coercion: Wrapper<&mut T> is not Wrapper<&T>. Variables belonging
- * to different declarations are alpha-renamed and unification has an occurs
- * check, so repeated parameters and recursive head equations remain sound. */
-export class ImplTypePattern {
-  static parse(type, parameters = new Set(), prefix = '', holes = {next: 0}, depth = 0) {
-    if (depth > 128) throw new Diagnostic('F_IMPL_DEPTH', 'Implementation type nesting limit exceeded');
-    if (parameters.has(type)) return {variable: prefix + type};
-    if (type === '_') return {variable: prefix + '?' + holes.next++};
-    const next = value => this.parse(value, parameters, prefix, holes, depth + 1);
-    if (T.reference(type)) return {kind: 'reference', name: type.startsWith('&mut ') ? '&mut' : '&', args: [next(T.target(type))]};
-    const fn = T.function(type);
-    if (fn) return {kind: 'function', name: 'fn', args: [...fn.params, fn.result].map(next)};
-    const tuple = T.tuple(type);
-    if (tuple) return {kind: 'tuple', name: 'tuple', args: tuple.map(next)};
-    const array = T.array(type);
-    if (array) return {kind: 'array', name: '[' + array.length + ']', args: [next(array.element)]};
-    const {name, args} = T.application(type);
-    return {kind: 'nominal', name, args: args.map(next)};
-  }
-  static unify(left, right, bindings = new Map()) {
-    const pending = [[left, right]];
-    const resolve = term => { while (term.variable && bindings.has(term.variable)) term = bindings.get(term.variable); return term; };
-    const occurs = (variable, root) => {
-      const queue = [root];
-      while (queue.length) { const term = resolve(queue.pop()); if (term.variable === variable) return true; if (!term.variable) queue.push(...term.args); }
-      return false;
-    };
-    while (pending.length) {
-      const pair = pending.pop(), a = resolve(pair[0]), b = resolve(pair[1]);
-      if (a === b || a.variable && a.variable === b.variable) continue;
-      if (a.variable) { if (occurs(a.variable, b)) return null; bindings.set(a.variable, b); }
-      else if (b.variable) { if (occurs(b.variable, a)) return null; bindings.set(b.variable, a); }
-      else {
-        if (a.kind !== b.kind || a.name !== b.name || a.args.length !== b.args.length) return null;
-        for (let i = 0; i < a.args.length; i++) pending.push([a.args[i], b.args[i]]);
-      }
-    }
-    return bindings;
-  }
-  static render(term, bindings, depth = 0) {
-    if (depth > 128) throw new Diagnostic('F_IMPL_DEPTH', 'Implementation substitution limit exceeded');
-    if (term.variable) return bindings.has(term.variable) ? this.render(bindings.get(term.variable), bindings, depth + 1) : null;
-    const args = term.args.map(value => this.render(value, bindings, depth + 1));
-    if (args.some(value => value === null)) return null;
-    if (term.kind === 'reference') return term.name + (term.name === '&mut' ? ' ' : '') + args[0];
-    if (term.kind === 'function') return T.functionName(args.slice(0, -1), args.at(-1));
-    if (term.kind === 'tuple') return T.tupleName(args);
-    if (term.kind === 'array') return `[${args[0]};${term.name.slice(1, -1)}]`;
-    return term.name + (args.length ? `<${args.join(',')}>` : '');
-  }
-}
+export {ImplTypePattern};
 
 /** Per-analysis impl-head/member index. Lookup never mutates an AST, HIR or
  * cached declaration; monomorphizations still use the production call pipeline. */
@@ -75,10 +26,12 @@ export class ImplementationResolver {
       if (!bucket.has(fn.localName)) bucket.set(fn.localName, []);
       bucket.get(fn.localName).push(entry);
     }
+    this.traits=new TraitImplementationResolver(this);this.traits.prepare();
   }
   root(type, module, parameters, seen = new Set()) {
     const app = T.application(type);
-    if (parameters.has(app.name)) return app.name;
+    if (parameters.has(app.name)) return '*';
+    if(T.reference(type)||T.tuple(type)||T.array(type)||T.function(type))return this.head(type);
     const shape = this.index.typeResolver.find(this.index.structs, app.name, module, null) ??
       this.index.typeResolver.find(this.index.enums, app.name, module, null);
     if (shape) return shape.name;
@@ -87,6 +40,10 @@ export class ImplementationResolver {
     if (seen.has(alias.name) || seen.size > 64) throw new Diagnostic('E0391', 'Cycle in implementation target aliases', alias.span);
     seen.add(alias.name);
     return this.root(T.substitute(alias.target, new Map(alias.generics.map((g,i) => [g.name, app.args[i]]))), alias.module, parameters, seen);
+  }
+  head(type) {
+    const pattern=ImplTypePattern.parse(type);
+    return pattern.kind==='nominal'?pattern.name:`${pattern.kind}:${pattern.name}:${pattern.args.length}`;
   }
   prepare(entry) {
     if (entry.pattern) return;
@@ -98,21 +55,22 @@ export class ImplementationResolver {
     } finally { entry.resolving = false; }
   }
   validate() {
+    this.traits.validateDeclarations();
     for (const entry of this.entries) {
       this.prepare(entry);
       const {impl, parameters, target} = entry;
       if (parameters.size !== (impl.generics ?? []).length) throw new Diagnostic('E0403', 'Duplicate implementation type parameter', impl.span);
-      if (impl.trait && parameters.size) throw new Diagnostic('F_GENERIC_TRAIT_IMPL', 'Generic trait implementations require the trait-solving continuation', impl.span);
-      if (impl.trait) continue;
+
       if (/\b_\b/.test(target)) throw new Diagnostic('E0121', 'Implementation targets cannot contain inferred placeholders', impl.span);
       this.index.typeResolver.validateKnown(target, parameters, {...impl, name: target});
       const root = T.application(target).name, shape = this.index.structs.get(root) ?? this.index.enums.get(root);
-      if (!shape || ['Option', 'Result'].includes(root) || (shape.crateRoot ?? '') !== (impl.crateRoot ?? ''))
+      if (!impl.trait && (!shape || ['Option', 'Result'].includes(root) || (shape.crateRoot ?? '') !== (impl.crateRoot ?? '')))
         throw new Diagnostic('E0116', 'Inherent implementations require a nominal type defined in this crate', impl.span);
       const used = new Set(), queue = [entry.pattern];
       while (queue.length) { const term = queue.pop(); if (term.variable) used.add(term.variable); else queue.push(...term.args); }
       for (const name of parameters) if (!used.has(`impl${entry.id}:` + name))
         throw new Diagnostic('E0207', `Implementation parameter ${name} is not constrained by its self type`, impl.span);
+      if(impl.trait)this.traits.validate(entry);
       new ImplObligations(this.a,entry).validate(target,impl);
       for (const fn of entry.methods.values()) {
         const obligations = new ImplObligations(this.a,entry,fn);
@@ -131,6 +89,7 @@ export class ImplementationResolver {
         }
       }
     }
+    this.traits.coherence();
     // Only compare declarations sharing both nominal owner and member name.
     for (const methods of this.byOwner.values()) for (const [name, entries] of methods) {
       for (let i = 0; i < entries.length; i++) for (let j = i + 1; j < entries.length; j++) {
@@ -147,28 +106,30 @@ export class ImplementationResolver {
     if (!bindings) return null;
     return new Map([...entry.parameters].map(name => [name, ImplTypePattern.render({variable: `impl${entry.id}:` + name}, bindings)]));
   }
-  applicable(entry, mapping) {
+  applicable(entry, mapping, prove=(type,bound)=>this.a.hasBound(type,bound)) {
     if ([...mapping.values()].some(type => type === null)) return true;
     const normalize = type => this.index.type(T.substitute(type, mapping), entry.impl.module, T.substitute(entry.target, mapping));
     for (const parameter of entry.impl.generics ?? []) for (const bound of parameter.bounds)
-      if (!this.a.hasTrait(mapping.get(parameter.name), normalize(bound))) return false;
+      if (!prove(mapping.get(parameter.name), normalize(bound))) return false;
     for (const predicate of entry.impl.predicates ?? []) for (const bound of predicate.bounds)
-      if (!this.a.hasTrait(normalize(predicate.type), normalize(bound))) return false;
+      if (!prove(normalize(predicate.type), normalize(bound))) return false;
     return true;
   }
-  lookup(type, method, module, node) {
+  lookup(type, method, module, node, context=null) {
     this.lookups++;
-    const candidates = this.byOwner.get(T.application(type).name)?.get(method) ?? [], matches = [];
+    const candidates = [...(this.byOwner.get(this.head(type))?.get(method) ?? []),...(this.byOwner.get('*')?.get(method) ?? [])], matches = [];
     let boundFailure = false;
     const query = ImplTypePattern.parse(type, new Set(), 'query:');
     for (const entry of candidates) {
       this.candidatesExamined++;
       const mapping = this.match(entry, type, query);
       if (!mapping) continue;
+      if(entry.trait && entry.trait.name!==context?.implementedTrait && !this.inScope(entry.trait,module))continue;
       if (!this.applicable(entry, mapping)) { boundFailure = true; continue; }
       matches.push({fn: entry.methods.get(method), mapping});
     }
-    const inherent = matches.filter(candidate => !candidate.fn.implementedTrait), selected = inherent.length ? inherent : matches;
+    const defaults=context?.defaultTrait?matches.filter(candidate=>candidate.fn.implementedTrait===context.defaultTrait):[];
+    const inherent = matches.filter(candidate => !candidate.fn.implementedTrait), selected = defaults.length?defaults:inherent.length ? inherent : matches;
     if (selected.length > 1) throw new Diagnostic('E0034', `Multiple applicable methods named ${method} for ${type}`, node.span);
     if (!selected.length) {
       if (boundFailure) throw new Diagnostic('E0277', `Implementation bounds are not satisfied for ${type}::${method}`, node.span);
@@ -176,6 +137,12 @@ export class ImplementationResolver {
     }
     const result = selected[0]; this.index.visible(result.fn, module, node);
     return result;
+  }
+  inScope(trait,module) {
+    if(trait.module===module)return true;
+    for(const imported of this.index.imports.get(module)?.values()??[])
+      if(this.index.resolve(this.index.traits,imported,module,null,false)?.name===trait.name)return true;
+    return false;
   }
   associated(node, context) {
     const separator = node.name.lastIndexOf('::'); if (separator < 0) return null;
@@ -192,7 +159,7 @@ export class ImplementationResolver {
     const args = explicit ?? (app.args.length ? app.args : declaration.generics.map(() => '_'));
     if (args.length !== declaration.generics.length) throw new Diagnostic('E0107', `Wrong number of type arguments for ${app.name}`, node.span);
     const type = this.index.type(app.name + (args.length ? `<${args.join(',')}>` : ''), module, context.instance.fn.owner, new Set(), node);
-    const result = this.lookup(type, method, module, node);
+    const result = this.lookup(type, method, module, node,context.instance.fn);
     if (!result) throw new Diagnostic('E0599', `No associated function ${method} for ${type}`, node.span);
     return result;
   }

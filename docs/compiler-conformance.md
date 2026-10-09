@@ -53,3 +53,9 @@ timings with byte-identical generated artifacts. Lookup stress speedups are not
 end-to-end compiler speedups.
 
 [Named enum variants](enum-records.md) add declaration-ordered payloads with source-ordered initialization, named coverage witnesses, and irrefutable record-variant assignment. Declaration-keyed field indices and the fixed-arity wide-aggregate Wasm path have cache, source-map, ownership-isolation and cross-backend regressions.
+
+[Generic inherent implementations](generic-impls.md) support independent impl and
+method substitutions, structural head matching and declaration well-formedness.
+[Generic user-trait implementations](generic-traits.md) add blanket/structural
+impl targets, checked method contracts, inherited defaults and bounded inductive
+obligations. These do not claim full parametric body or trait/lifetime solving.

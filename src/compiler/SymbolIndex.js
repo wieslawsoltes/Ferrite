@@ -9,7 +9,7 @@ export class SymbolIndex {
     this.aliases = new Map(); this.constants = new Map(); this.traits = new Map(); this.imports = new Map(); this.impls = [];
     this.symbols = []; this.moduleRoots = new Map(); this.moduleVisibility = new Map();
     // Side tables are declaration-index-local, never attached to reusable AST/HIR.
-    this.fieldIndexes = new WeakMap(); this.variantIndexes = new WeakMap(); this.structConstructors = new WeakMap();
+    this.fieldIndexes = new WeakMap(); this.variantIndexes = new WeakMap(); this.structConstructors = new WeakMap(); this.variantPositions = new WeakMap();
     this.enums.set('Option', {kind: 'enum', name: 'Option', generics: [{name: 'T', bounds: []}],
       variants: [{name: 'Some', fields: ['T']}, {name: 'None', fields: []}], attributes: []});
     this.enums.set('Result', {kind: 'enum', name: 'Result', generics: [{name: 'T', bounds: []}, {name: 'E', bounds: []}],
@@ -131,6 +131,21 @@ export class SymbolIndex {
   }
   field(shape, name) { return this.member(this.fieldIndexes, shape, shape?.fields, name); }
   variant(shape, name) { return this.member(this.variantIndexes, shape, shape?.variants, name); }
+
+  /** Enum payload ordinals are indexed by the declaration, independently of
+   * initializer order. A new SymbolIndex always owns new tables after edits. */
+  variantPosition(variant, name) {
+    let positions = this.variantPositions.get(variant);
+    if (!positions) {
+      positions = new Map();
+      variant.fields.forEach((_, i) => {
+        const name = variant.members?.[i]?.name ?? String(i);
+        if (!positions.has(name)) positions.set(name, i);
+      });
+      this.variantPositions.set(variant, positions);
+    }
+    return positions.get(name);
+  }
 
   visible(item, module = '', node = null) {
     if (item.visibility === 'private' && item.module && module !== item.module && !module.startsWith(item.module + '::'))

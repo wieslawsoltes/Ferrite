@@ -1,3 +1,4 @@
+import {EnumRecordAnalyzer} from './EnumRecordAnalyzer.js';
 import {Diagnostic} from './Diagnostic.js';
 import {TypeSystem as T} from './TypeSystem.js';
 
@@ -26,6 +27,8 @@ export class StructAnalyzer {
     if (node.rest) throw new Diagnostic('E0070', 'Bare struct rest is only valid in a destructuring assignee', node.span);
     const module = context.instance.fn.module;
     const spelling = node.name === 'Self' ? context.instance.fn.owner : node.name;
+    const constructor = this.index.constructorFor(spelling, module, node);
+    if (constructor?.kind === 'enum') return EnumRecordAnalyzer.literal(this.a, node, constructor, context, expected);
     const alias = this.index.resolve(this.index.aliases, spelling, module, node, false);
     const explicit = (node.typeArguments ?? []).map(type => this.a.normalize(type, context, node));
     const app = alias ? T.application(this.index.type(spelling + (explicit.length ? `<${explicit.join(',')}>` : ''), module, null, new Set(), node)) : null;

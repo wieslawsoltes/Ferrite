@@ -142,15 +142,22 @@ export class Parser {
       return [this.c.node('struct', start, {name, generics, fields, form, predicates, attributes, visibility})];
     }
     if (this.c.match('enum')) {
-      const name = this.c.identifier(), generics = this.generics();
+      const name = this.c.identifier(), generics = this.generics(), predicates = this.whereClause();
       this.c.eat('{');
       const variants = this.list('}', () => {
-        const attributes=this.attributes(), name = this.c.identifier();
-        const form = this.c.match('(') ? 'tuple' : 'unit';
-        const fields = form === 'tuple' ? this.list(')', () => this.type()) : [];
-        return {name, fields, form, attributes};
+        const at = this.c.peek(), attributes = this.attributes(), name = this.c.identifier();
+        const form = this.c.match('(') ? 'tuple' : this.c.match('{') ? 'record' : 'unit';
+        const members = form === 'unit' ? [] : this.list(form === 'tuple' ? ')' : '}', () => {
+          const at = this.c.peek(), attributes = this.attributes();
+          if (this.c.is('pub')) throw new Diagnostic('E0449', 'Enum variant fields inherit enum visibility', this.c.peek().span);
+          const name = form === 'record' ? this.c.identifier() : null;
+          if (form === 'record') this.c.eat(':');
+          return this.c.node('variantField', at, {name, type: this.type(), attributes});
+        });
+        if (form === 'tuple') members.forEach((field, i) => { field.name = String(i); });
+        return this.c.node('enumVariant', at, {name, fields: members.map(field => field.type), members, form, attributes});
       });
-      return [this.c.node('enum', start, {name, generics, variants, attributes, visibility})];
+      return [this.c.node('enum', start, {name, generics, predicates, variants, attributes, visibility})];
     }
     if (this.c.match('impl')) {
       const first = this.type();

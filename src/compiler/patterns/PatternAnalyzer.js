@@ -1,3 +1,4 @@
+import {EnumRecordAnalyzer} from '../EnumRecordAnalyzer.js';
 import {Diagnostic} from '../Diagnostic.js';
 import {TypeSystem as T} from '../TypeSystem.js';
 
@@ -118,6 +119,8 @@ export class PatternAnalyzer {
         return;
       }
       case 'structPattern': {
+        const constructor = this.analyzer.index.constructorFor(pattern.name, context.instance.fn.module, pattern);
+        if (constructor?.kind === 'enum') return EnumRecordAnalyzer.pattern(this.analyzer, pattern, constructor, type, context, mutable, bindings, names, reuse);
         const shape = this.analyzer.index.resolve(this.analyzer.index.structs, T.application(this.analyzer.index.type(pattern.name, context.instance.fn.module)).name, context.instance.fn.module, pattern);
         const app = T.application(type);
         if (app.name !== shape.name) throw new Diagnostic('E0308', `Pattern ${shape.name} does not match ${type}`, pattern.span);
@@ -150,10 +153,12 @@ export class PatternAnalyzer {
           pattern.rest = true; delete pattern.items;
           return this.analyze(pattern, type, context, mutable, bindings, names, reuse);
         }
+        if (!pattern.recordSyntax && Boolean(pattern.tupleSyntax) !== (constructor.form === 'tuple') || constructor.form === 'record' && !pattern.recordSyntax)
+          throw new Diagnostic('E0532', `Expected ${constructor.form} pattern for ${constructor.tag}`, pattern.span);
         this.expandRest(pattern, constructor.variant.fields.length, 'E0023');
         const substitution = new Map(constructor.owner.generics.map((g, i) => [g.name, app.args[i]]));
         pattern.variant = constructor.tag;
-        pattern.items.forEach((p, i) => this.analyze(p, T.substitute(constructor.variant.fields[i], substitution), context, mutable, bindings, names, reuse));
+        pattern.items.forEach((p, i) => this.analyze(p, this.analyzer.index.type(T.substitute(constructor.variant.fields[i], substitution), constructor.owner.module, constructor.owner.name), context, mutable, bindings, names, reuse));
         return;
       }
       default: throw new Diagnostic('F_PATTERN', `Pattern '${pattern.kind}' has no type rule`, pattern.span);

@@ -8,6 +8,9 @@ import {MirVerifier} from '../MirVerifier.js';
  */
 export class WebAssemblyEmitter {
   static types = {i32: 0x7f, externref: 0x6f};
+  // JS WebAssembly engines cap function parameters; large aggregates use a
+  // fixed-arity frame import instead of encoding their width in a signature.
+  static directAggregateLimit = 256;
   constructor(functions, {entry = 'main<>'} = {}) {
     this.functions = functions; this.entry = entry; this.imports = []; this.importKeys = new Map();
     this.signatures = []; this.signatureKeys = new Map(); this.spans = []; this.mappings = [];
@@ -40,7 +43,11 @@ export class WebAssemblyEmitter {
       case 'binary': return [{op:'binary',operator:i.operator,type:i.operandType},2];
       case 'unary': return [{op:'unary',operator:i.operator,type:i.type},1];
       case 'cast': return [{op:'cast',type:i.targetType},1];
-      case 'aggregate': return [{op:'aggregate',form:i.form,names:i.names??[],tag:i.tag??null},i.values.length];
+      case 'aggregate': {
+        const spec={op:'aggregate',form:i.form,names:i.names??[],tag:i.tag??null};
+        return i.values.length > WebAssemblyEmitter.directAggregateLimit
+          ? [{...spec,op:'aggregate_frame',slots:i.values},1] : [spec,i.values.length];
+      }
       case 'repeat': return [{op:'repeat',count:i.count},1];
       case 'get': return [{op:'get',field:i.field??null,index:i.index!=null,deref:!!i.deref,copy:!!i.copy},i.index!=null?2:1];
       case 'tag': return [{op:'tag'},1];
@@ -88,7 +95,11 @@ export class WebAssemblyEmitter {
   body(fn) {
     const w=new Writer(),maps=[],argc=fn.params.length,frame=argc+fn.registers.length,pc=frame+1;
     const addressable=new Set(fn.params);
-    for(const block of fn.blocks)for(const i of block.instructions)for(const place of [i.place,i.receiverPlace])if(place)addressable.add(place.slot);
+    for(const block of fn.blocks)for(const i of block.instructions){
+      for(const place of [i.place,i.receiverPlace])if(place)addressable.add(place.slot);
+      if(i.op==='aggregate'&&i.values.length>WebAssemblyEmitter.directAggregateLimit)
+        for(const slot of i.values)addressable.add(slot);
+    }
     const get=slot=>w.byte(0x20).u32(argc+slot),put=slot=>w.byte(0x21).u32(argc+slot),call=id=>w.byte(0x10).u32(id);
     const frameGet=()=>w.byte(0x20).u32(frame),constant=n=>w.byte(0x41).i32(n);
     const indices=place=>place.path.filter(p=>p.kind==='index').forEach(p=>get(p.register));
@@ -117,7 +128,9 @@ export class WebAssemblyEmitter {
             case 'read':case 'borrow':frameGet();indices(i.place);break;
             case 'write':frameGet();get(i.value);indices(i.place);break;
             case 'binary':get(i.left);get(i.right);break;
-            case 'aggregate':i.values.forEach(get);break;
+            case 'aggregate':
+              if(i.values.length>WebAssemblyEmitter.directAggregateLimit)frameGet();else i.values.forEach(get);
+              break;
             case 'get':get(i.value);if(i.index!=null)get(i.index);break;
             case 'builtin':
               if(i.receiverPlace){frameGet();indices(i.receiverPlace);call(this.host({op:'borrow',place:this.place(i.receiverPlace),copy:false},1+i.receiverPlace.path.filter(p=>p.kind==='index').length));}

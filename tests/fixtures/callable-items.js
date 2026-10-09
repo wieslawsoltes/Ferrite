@@ -1,5 +1,12 @@
 // Differential programs are complete Rust 2024 translation units.
 export const callableCases = [
+['address-only enum producer does not create a const layout cycle','enum E{A={let f:fn()->E=value;7},B}fn value()->E{E::B}fn main(){println!("{}",E::A as i32);}','7\n'],
+['address-only enum reader is verified without executing its body','enum E{A={let f:fn(E)->i32=read;7},B}fn read(e:E)->i32{e as i32}fn main(){println!("{}",E::A as i32);}','7\n'],
+['constant function pointer retains enum discriminant metadata','#[derive(Copy,Clone)]enum E{A=4,B}const F:fn(E)->i32=read;fn read(e:E)->i32{e as i32}fn main(){println!("{}",F(E::B));}','5\n'],
+['indirect enum casts retain signed and explicit discriminants','#[repr(i16)]enum E{A=-9,B=40}fn read(e:E)->i32{e as i32}fn main(){let f:fn(E)->i32=read;println!("{} {}",f(E::A),f(E::B));}','-9 40\n'],
+['constructor pointer preserves payload of an explicitly tagged enum','#[repr(u8)]enum E{A(i32)=7,B=9}fn read(e:E)->i32{match e{E::A(n)=>n,E::B=>0}}fn main(){let f:fn(i32)->E=E::A;println!("{}",read(f(42)));}','42\n'],
+['function-pointer factory does not execute the selected function during CTFE','fn a(x:i32)->i32{println!("called");x+3}const fn make()->fn(i32)->i32{a}const F:fn(i32)->i32=make();fn main(){println!("{}",F(4));}','called\n7\n'],
+
 ['shared reborrow in direct and indirect calls','fn read(x:&i32)->i32{*x}fn main(){let f:fn(&i32)->i32=read;let mut x=7;println!("{} {}",f(&mut x),read(&mut x));}','7 7\n'],
 ['array context retains empty enum payload typing','fn main(){let entries=[Some(4),None,Some(8)];for e in entries{let Some(n)=e else {continue;};println!("{}",n);}}','4\n8\n'],
 

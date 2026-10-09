@@ -55,3 +55,13 @@ npm test
 Shared fixtures execute on optimized/unoptimized MIR, JavaScript and WebAssembly and compare with Rust edition 2024 at native optimization levels 0 and 3. Compiler-specific unsupported-feature and resource-budget tests are separate from Rust compile-fail tests, so a deliberately unsupported valid Rust program is not misrepresented as a Rust rejection.
 
 References: [Rust assignment expressions](https://doc.rust-lang.org/reference/expressions/operator-expr.html#assignment-expressions), [underscore expressions](https://doc.rust-lang.org/reference/expressions/underscore-expr.html).
+
+General range **values** such as `(..)` and `..=1` are valid Rust but remain
+outside this browser subset (`F_RANGE_VALUE`); they are not treated as invalid
+Rust in the native compile-fail fixtures. Bare `.. = value` is instead an
+invalid standalone assignment target. Sequence rests inside an assignee remain
+supported.
+
+A bare never-typed index (`array[return value]`) is rejected rather than
+assuming that `!` implements indexing. A conditional index with a typed
+nondiverging branch can still return early, and that control flow is preserved.

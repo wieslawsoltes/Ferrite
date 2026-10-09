@@ -195,7 +195,7 @@ export class SemanticAnalyzer {
         if (count > 1 && !this.hasTrait(element, 'Copy')) throw new Diagnostic('E0277', 'Repeated array element must implement Copy', node.span);
         node.length = count; type = `[${element};${count}]`; break;
       }
-      case 'assigneeRest': throw new Diagnostic('E0070', 'Rest is only valid inside a destructuring assignee', node.span);
+      case 'assigneeRest': throw new Diagnostic('F_RANGE_VALUE', 'Full range values are not yet implemented; rest is supported inside destructuring assignees', node.span);
       case 'structLiteral': {
         if (node.rest) throw new Diagnostic('E0070', 'Bare struct rest is only valid in a destructuring assignee', node.span);
         const alias = this.index.resolve(this.index.aliases, node.name, ctx.instance.fn.module, node, false);
@@ -239,7 +239,7 @@ export class SemanticAnalyzer {
         const object = this.infer(node.object, ctx), base = T.reference(object) ? T.target(object) : object;
         node.autoDeref = base !== object;
         const index = this.infer(node.index, ctx, 'usize');
-        if (index !== '!' && !T.integer(index)) throw new Diagnostic('E0277', 'Array index must be integer', node.index.span);
+        if (!T.integer(index)) throw new Diagnostic('E0277', 'Array index must be integer', node.index.span);
         const array = /^\[(.+);\d+\]$/.exec(base);
         const vector = T.application(base);
         type = array?.[1] ?? (vector.name === 'Vec' ? vector.args[0] : null);

@@ -5,7 +5,7 @@ import {compile, tokenize} from '../src/engine.js';
 import {CompilerSession} from '../src/project/CompilerSession.js';
 import {MirVirtualMachine} from '../src/runtime/MirVirtualMachine.js';
 import {WebAssemblyRuntime} from '../src/runtime/WebAssemblyRuntime.js';
-import {destructuringCases, destructuringCompileFailCases, destructuringPanicCases} from './fixtures/destructuring-conformance.js';
+import {destructuringCases, destructuringCompileFailCases, destructuringPanicCases, destructuringUnsupportedCases} from './fixtures/destructuring-conformance.js';
 
 for (const [name, source, expected] of destructuringCases) test(name, () => {
   for (const optimize of [false, true]) {
@@ -20,6 +20,9 @@ for (const [name, source, expected] of destructuringCases) test(name, () => {
 });
 for (const [name, source, code] of destructuringCompileFailCases) test(name, () => {
   for (const optimize of [false, true]) assert.throws(() => compile(source, {optimize}), error => error.code === code);
+});
+for (const [name, source, code] of destructuringUnsupportedCases) test('explicit unsupported Rust: '+name, () => {
+  assert.throws(() => compile(source), error => error.code === code);
 });
 for (const source of [
   'fn main(){let a=1;let mut r=&a;let b=2;(r,)=(&b,);println!("{}",r);}',

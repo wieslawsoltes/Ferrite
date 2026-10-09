@@ -37,7 +37,7 @@ export const destructuringCases = [
   ['contextual tuple elements of array assignees', 'fn main(){let mut a=0u8;let mut b=false;let mut c=0u8;let mut d=false;[(a,b),(c,d)]=[(1,true),(2,false)];println!("{} {} {} {}",a,b,c,d);}', '1 true 2 false\n'],
   ['single tuple and trailing separators', 'fn main(){let mut a=0;(a,)=(7,);[a,]=[9,];println!("{}",a);}', '9\n'],
   ['divergent tuple RHS is bottom without a fabricated tail', 'fn f()->i32{let mut a=0;(a,)=(return 9,);}fn main(){println!("{}",f());}', '9\n'],
-  ['divergent index escapes before writing the destination', 'fn f()->i32{let mut a=[0];(a[return 7],)=(1,);}fn main(){println!("{}",f());}', '7\n'],
+  ['divergent index escapes before writing the destination', 'fn f()->i32{let mut a=[0];(a[if true{return 7}else{0usize}],)=(1,);9}fn main(){println!("{}",f());}', '7\n'],
   ['ignored owned tuple field is not moved by Copy-only projections', 'fn main(){let p=(String::from("keep"),7);let mut a=0;(_,a)=p;println!("{} {}",p.0,a);}', 'keep 7\n'],
   ['grouped typed rest in block RHS', 'fn main(){let mut a=0u8;let mut b=0u64;(a,..,b)={ (1,true,2) };println!("{} {}",a,b);}', '1 2\n'],
 
@@ -47,6 +47,7 @@ export const destructuringPanicCases = [
   ['later destination panic observes earlier stores', 'fn rhs()->(i32,i32){print!("r");(7,8)}fn index(n:i32)->usize{print!("{}",n);2}fn main(){let mut a=0;let mut arr=[0];(a,arr[index(a)])=rhs();}', 'R_BOUNDS', 'r7'],
 ];
 export const destructuringCompileFailCases = [
+  ['bare never-typed expressions do not implement array indexing', 'fn f()->i32{let mut a=[0];(a[return 7],)=(1,);}fn main(){}', 'E0277'],
   ['immutable tuple destination', 'fn main(){let a=0;(a,)=(1,);}', 'E0596'],
   ['tuple assignee arity mismatch', 'fn main(){let mut a=0;(a,)=(1,2);}', 'E0527'],
   ['array assignee arity mismatch', 'fn main(){let mut a=0;[a]=[1,2];}', 'E0527'],
@@ -55,8 +56,7 @@ export const destructuringCompileFailCases = [
   ['two array rest positions', 'fn main(){[..,..]=[1,2];}', 'E0527'],
   ['literal is not a destructuring place', 'fn main(){(1,)=(2,);}', 'E0070'],
   ['call is not a destructuring place', 'fn f()->i32{0}fn main(){(f(),)=(2,);}', 'E0070'],
-  ['standalone rest is not an assignee', 'fn main(){..=1;}', 'E0004'],
-  ['rest is not a value expression', 'fn main(){let a=(..); }', 'E0070'],
+  ['standalone rest is not an assignee', 'fn main(){.. = 1;}', 'E0070'],
   ['record rest is not a value expression', 'struct S{x:i32}fn main(){let s=S{..};}', 'E0070'],
   ['placeholder is not a value expression', 'fn main(){let a=_;}', 'E0425'],
   ['unknown record assignee field', 'struct P{x:i32}fn main(){let mut a=0;P{y:a}=P{x:1};}', 'E0062'],
@@ -73,4 +73,11 @@ export const destructuringCompileFailCases = [
   ['moved value in an index is checked after previous writes', 'fn ix(s:String)->usize{0}fn main(){let s=String::from("x");let t=s;let mut a=[0];(a[ix(s)],)=(1,);}', 'E0382'],
   ['incompatible numeric destination types', 'fn main(){let mut a=0u8;let mut b=0u16;[a,b]=[1,2];}', 'E0308'],
   ['immutable binding cannot call a mutation closure', 'fn main(){let mut a=0;let f=||{(a,)=(2,);};f();}', 'E0596'],
+];
+
+// These are valid Rust range values, not invalid destructuring syntax. Keep
+// browser subset diagnostics separate from the native compile-fail corpus.
+export const destructuringUnsupportedCases = [
+  ['full range value', 'fn main(){let a=(..);}', 'F_RANGE_VALUE'],
+  ['inclusive range-to value', 'fn main(){..=1;}', 'F_RANGE_VALUE'],
 ];

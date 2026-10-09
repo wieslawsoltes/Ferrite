@@ -372,6 +372,7 @@ export class Parser {
   }
   prefix(allowRecord) {
     const start = this.c.peek();
+    if (this.c.is('..=')) throw new Diagnostic('F_RANGE_VALUE', 'Range-to values are not yet implemented by the browser compiler', start.span);
     if (this.c.match('..')) return this.c.node('assigneeRest', start);
     if (['return', 'break', 'continue'].includes(start.value)) return this.controlExpression(allowRecord);
     if (start.kind === 'lifetime') { const label = this.label(); this.c.eat(':'); return this.loopLike(start, label); }

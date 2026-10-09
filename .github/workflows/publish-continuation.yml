@@ -50,12 +50,27 @@ jobs:
           git('config', 'user.email', 'wieslawsoltes@users.noreply.github.com')
           git('checkout', '--detach', expected)
           for change in payload['commits']:
+              if change.get('merge'):
+                  if not re.fullmatch('[0-9a-f]{40}', change['merge']):
+                      raise SystemExit('Invalid main integration commit')
+                  git('merge-base', '--is-ancestor', change['merge'], 'origin/main')
+                  merged = subprocess.run(['git', 'merge', '--no-commit', '--no-ff', change['merge']])
+                  if merged.returncode:
+                      conflicts = git('diff', '--name-only', '--diff-filter=U').splitlines()
+                      generated = [p for p in conflicts if re.fullmatch(r'(?:src/ui/workers/[a-z-]+|src/sdk/ferrite)\.bundle\.js', p)]
+                      sources = sorted(set(conflicts) - set(generated))
+                      if not conflicts or sources != sorted(change.get('resolveFromOurs', [])) or any(not p.startswith(('src/compiler/', 'tests/')) for p in sources):
+                          raise SystemExit('Unexpected merge conflict; explicit reviewed resolution required')
+                      git('checkout', '--ours', '--', *conflicts)
+                      git('add', '--', *conflicts)
               with tempfile.NamedTemporaryFile(mode='w', suffix='.patch') as patch:
                   patch.write(change['patch']); patch.flush()
+                  paths = [line.split('\t', 2)[-1] for line in git('apply', '--numstat', patch.name).splitlines()]
+                  if not paths or any(not p.startswith(('src/compiler/', 'tests/', 'docs/', 'tools/')) for p in paths):
+                      raise SystemExit('Only compiler, test, documentation and tool sources may be patched')
                   git('apply', '--index', '--whitespace=error', patch.name)
-              paths = git('diff', '--cached', '--name-only').splitlines()
-              if not paths or any(not p.startswith(('src/compiler/', 'tests/', 'docs/', 'tools/')) for p in paths):
-                  raise SystemExit('Only compiler, test, documentation and tool sources may be published')
+              if git('diff', '--cached', '--name-only', '--', '.github'):
+                  raise SystemExit('Workflow updates require the authorized contents API before integration')
               subprocess.run(['npm', 'run', 'build:workers'], check=True)
               subprocess.run(['npm', 'run', 'build:sdk'], check=True)
               git('add', 'src/ui/workers', 'src/sdk/ferrite.bundle.js')

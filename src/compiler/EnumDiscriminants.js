@@ -2,9 +2,9 @@ import {Diagnostic} from './Diagnostic.js';
 import {TypeSystem as T} from './TypeSystem.js';
 
 /** Logical discriminants, independent of runtime tags and native memory layout.
- * Each declaration owns a lazy dependency graph. Only the variant requested by
- * an executing constant cast is evaluated; valid forward references do not
- * acquire dependencies on unrelated variants. Final emitted MIR has no resolver.
+ * Direct unit-variant casts are type-system constants; materialized enum values
+ * additionally depend on all discriminants required for their layout. These are
+ * separate dependency edges. Final emitted MIR has no external resolver.
  */
 export class EnumDiscriminants {
   constructor(analyzer) {
@@ -81,6 +81,28 @@ export class EnumDiscriminants {
       if (value < state.min || value > state.max) throw new Diagnostic('E0080', `Enum discriminant is outside ${state.type}`, variant.span);
       state.values.set(name, value); return value;
     } finally { this.active.delete(key); }
+  }
+
+  requireLayouts(functions) {
+    const seen = new Set();
+    const visit = (type, span, depth = 0) => {
+      if (seen.has(type) || T.reference(type)) return;
+      if (depth > 128) throw new Diagnostic('F_CONST_BUDGET', 'Constant layout dependency depth exceeded', span);
+      seen.add(type);
+      const array = T.array(type), tuple = T.tuple(type);
+      if (array) { visit(array.element, span, depth + 1); return; }
+      if (tuple) { tuple.forEach(t => visit(t, span, depth + 1)); return; }
+      const {name, args} = T.application(type), owner = this.index.enums.get(name) ?? this.index.structs.get(name);
+      if (!owner) return;
+      // A by-value enum local, argument or temporary requires its layout even
+      // if a particular variant's number is never read during CTFE. This is
+      // why indirect self-enum casts are cyclic while direct forward casts work.
+      if (owner.variants) for (const variant of owner.variants) this.value(owner, variant.name);
+      const substitution = new Map(owner.generics.map((g, i) => [g.name, args[i]]));
+      const fields = owner.variants ? owner.variants.flatMap(v => v.fields) : owner.fields.map(f => f.type);
+      for (const field of fields) visit(this.index.type(T.substitute(field, substitution), owner.module, owner.name), span, depth + 1);
+    };
+    for (const fn of functions) for (const register of fn.registers) visit(register.type, register.span ?? fn.span);
   }
 
   checkCast(owner, node) {

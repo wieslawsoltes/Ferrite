@@ -1,4 +1,6 @@
 export const discriminantCases = [
+  ['materialized foreign enum has no cyclic layout', 'enum Base{A=3}const fn read(e:Base)->isize{e as isize}enum E{A={let b=Base::A;read(b)+2},B}fn main(){println!("{}",E::B as i32);}', '6\n'],
+  ['direct prior cast in a block needs no enum layout', 'enum E{A=2,B={E::A as isize+3}}fn main(){println!("{}",E::B as i32);}', '5\n'],
   ['implicit enum discriminants', 'enum E{A,B,C}fn main(){println!("{} {} {}",E::A as i32,E::B as i64,E::C as u8);}', '0 1 2\n'],
   ['explicit values restart implicit numbering', 'enum E{A=5,B,C=-2,D,E=8,F}fn main(){println!("{} {} {} {}",E::B as i32,E::D as i32,E::E as i32,E::F as i32);}', '6 -1 8 9\n'],
   ['enum casts wrap at target width', '#[repr(i16)]enum E{A=-129,B=256}fn main(){println!("{} {} {}",E::A as u8,E::A as i8,E::B as u8);}', '127 127 0\n'],
@@ -7,8 +9,6 @@ export const discriminantCases = [
   ['explicit reset after maximum', '#[repr(u8)]enum E{A=255,B=0,C}fn main(){println!("{} {}",E::A as i32,E::C as u8);}', '255 1\n'],
   ['discriminant constant path and const function', 'const BASE:isize=4;const fn offset(n:isize)->isize{n*3}enum E{A=offset(BASE),B}fn main(){println!("{}",E::B as i32);}', '13\n'],
   ['forward discriminant reference', 'enum E{A=E::B as isize-1,B=9}fn main(){println!("{} {}",E::A as i32,E::B as i32);}', '8 9\n'],
-  ['forward discriminant through a constant local', 'enum E{A={let b=E::B;b as isize-2},B=9}fn main(){println!("{}",E::A as isize);}', '7\n'],
-  ['forward discriminant through a const callee', 'const fn number(e:E)->isize{e as isize}enum E{A=number(E::B)-2,B=9}fn main(){println!("{}",E::A as isize);}', '7\n'],
   ['Self variant in enum discriminant', 'enum E{A=4,B=Self::A as isize+2}fn main(){println!("{}",E::B as isize);}', '6\n'],
   ['mutually dependent enums with acyclic variants', 'enum E{A=F::B as isize+1,B=4}enum F{A=E::B as isize+1,B=2}fn main(){println!("{} {}",E::A as i32,F::A as i32);}', '3 5\n'],
   ['enum cast from const match result', '#[derive(Clone,Copy)]enum E{A=3,B=8}const fn choose(b:bool)->E{if b{E::B}else{E::A}}const N:usize=choose(true) as usize;fn main(){let a=[0;N];println!("{}",a.len());}', '8\n'],
@@ -27,11 +27,13 @@ export const discriminantCases = [
   ['type alias enum variants cast', 'enum E{A=3}type K=E;fn main(){println!("{}",K::A as i32);}', '3\n'],
   ['inactive variants do not advance numbering', 'enum E{A=7,#[cfg(any())]Skip=999,B}fn main(){println!("{}",E::B as i32);}', '8\n'],
   ['conditional integer representation', '#[cfg_attr(all(),repr(u8))]enum E{A=255,B=0}fn main(){println!("{}",E::A as u8);}', '255\n'],
-  ['unexecuted cast has no recursive discriminant dependency', 'enum E{A=if false{E::A as isize}else{4},B}fn main(){println!("{}",E::B as i32);}', '5\n'],
-  ['constructing a variant does not read its discriminant', 'enum E{A={let _unused=E::A;4},B}fn main(){println!("{}",E::B as i32);}', '5\n'],
-  ['const discriminant identity on a copied value', '#[derive(Copy,Clone)]enum E{A=2,B={let a=E::A;let b=a;(b as isize)+(a as isize)+1}}fn main(){println!("{}",E::B as i32);}', '5\n'],
 ];
 export const discriminantCompileFailCases = [
+  ['forward discriminant through a constant local', 'enum E{A={let b=E::B;b as isize-2},B=9}fn main(){println!("{}",E::A as isize);}', 'E0391'],
+  ['forward discriminant through a const callee', 'const fn number(e:E)->isize{e as isize}enum E{A=number(E::B)-2,B=9}fn main(){println!("{}",E::A as isize);}', 'E0391'],
+  ['unexecuted direct cast still creates a type-system dependency', 'enum E{A=if false{E::A as isize}else{4},B}fn main(){println!("{}",E::B as i32);}', 'E0391'],
+  ['constructing an enum value requires its discriminant layout', 'enum E{A={let _unused=E::A;4},B}fn main(){println!("{}",E::B as i32);}', 'E0391'],
+  ['const discriminant identity on a copied value', '#[derive(Copy,Clone)]enum E{A=2,B={let a=E::A;let b=a;(b as isize)+(a as isize)+1}}fn main(){println!("{}",E::B as i32);}', 'E0391'],
   ['duplicate explicit discriminants', 'enum E{A=1,B=1}fn main(){}', 'E0081'],
   ['implicit and explicit duplicate', 'enum E{A,B=0}fn main(){}', 'E0081'],
   ['duplicate unused discriminant through constant', 'const N:isize=2;enum E{A=N,B=1+1}fn main(){}', 'E0081'],

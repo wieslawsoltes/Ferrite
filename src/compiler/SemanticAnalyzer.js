@@ -282,6 +282,10 @@ export class SemanticAnalyzer {
           this.discriminants.checkCast(enumeration, node);
           node.discriminantEnum = enumeration.name;
           node.discriminantType = this.discriminants.representation(enumeration);
+          // rustc simplifies direct unit-variant casts as type-system constants,
+          // including casts in unexecuted branches. They need no enum layout.
+          if (ctx.instance.fn.isConst && node.value.kind === 'variable' && node.value.variant)
+            node.discriminantConstant = String(this.discriminants.resolveTag(enumeration.name, node.value.variant));
           type = node.target; break;
         }
         const allowed = T.numeric(source) && T.numeric(node.target) || ['bool', 'char'].includes(source) && T.integer(node.target) || source === 'u8' && node.target === 'char';

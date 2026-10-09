@@ -76,6 +76,7 @@ export class ConstantEvaluator {
       for (const current of reachable) this.validate(current);
       OwnershipAnalyzer.analyze({instances: reachable});
       const functions = MirLowerer.lower({instances: reachable});
+      this.analyzer.discriminants.requireLayouts(functions);
       MirVerifier.verify(functions, {allowDeferredDiscriminants: true});
       const remaining = Math.min(this.maxExpressionSteps, this.remainingSteps());
       if (remaining <= 0) throw new Diagnostic('F_CONST_BUDGET', 'Compilation-wide constant evaluation instruction budget exceeded', origin?.span);

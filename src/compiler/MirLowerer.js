@@ -95,8 +95,12 @@ export class MirLowerer {
         return this.emit('binary', {operator: node.op, left, right: this.expr(node.right), operandType: node.operandType}, node, node.type);
       }
       case 'cast': {
-        let value = this.expr(node.value);
-        if (node.discriminantEnum) value = this.emit('discriminant', {value, enumName: node.discriminantEnum, table: node.discriminantTable ?? null}, node, node.discriminantType);
+        let value;
+        if (node.discriminantConstant != null) value = this.literal(node.discriminantConstant, node.discriminantType, node);
+        else {
+          value = this.expr(node.value);
+          if (node.discriminantEnum) value = this.emit('discriminant', {value, enumName: node.discriminantEnum, table: node.discriminantTable ?? null}, node, node.discriminantType);
+        }
         return this.emit('cast', {value, targetType: node.target}, node, node.type);
       }
       case 'block': return this.block(node);

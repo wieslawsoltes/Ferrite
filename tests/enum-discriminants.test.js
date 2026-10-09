@@ -68,3 +68,24 @@ test('runtime rejects absent tags and inherited table entries', () => {
   const r=new Runtime();assert.throws(()=>r.discriminant({tag:'toString'},{}),e=>e.code==='R_ENUM');
   assert.throws(()=>r.discriminant({tag:'E::A'},Object.create({'E::A':'4'})),e=>e.code==='R_ENUM');
 });
+
+test('generated JavaScript hoists and deduplicates immutable discriminant tables', () => {
+  const source='#[derive(Copy,Clone)]enum E{A=7,B}fn first(e:E)->i32{e as i32}fn second(e:E)->u8{e as u8}fn main(){let mut total=0;for _ in 0..10{total+=first(E::B)+second(E::A) as i32;}println!("{}",total);}';
+  const c=compile(source,{optimize:false});
+  assert.equal((c.js.match(/const d\d+=Object\.freeze\(/g)??[]).length,1);
+  assert.ok(c.js.indexOf('const d0=') < c.js.indexOf('function f0('));
+  assert.deepEqual(outputs(c),['150\n','150\n','150\n']);
+  const castLines=c.js.split('\n').filter(line=>line.includes('r.discriminant('));
+  assert.equal(castLines.length,2);assert.ok(castLines.every(line=>!line.includes('{')&&line.includes(',d0)')));
+});
+test('runtime discriminant caching observes edits, removals and independent metadata', () => {
+  const runtime=new Runtime(), value={tag:'E::A'}, table={'E::A':'7'};
+  assert.equal(runtime.discriminant(value,table),7n);
+  assert.equal(runtime.discriminant(value,table),7n);
+  table['E::A']='9'; assert.equal(runtime.discriminant(value,table),9n);
+  table['E::A']=9; assert.throws(()=>runtime.discriminant(value,table),{code:'R_ENUM'});
+  table['E::A']='8'; assert.equal(runtime.discriminant(value,table),8n);
+  delete table['E::A']; assert.throws(()=>runtime.discriminant(value,table),{code:'R_ENUM'});
+  assert.throws(()=>runtime.discriminant(value,Object.create({'E::A':'10'})),{code:'R_ENUM'});
+  assert.equal(runtime.discriminant(value,{'E::A':'11'}),11n);
+});

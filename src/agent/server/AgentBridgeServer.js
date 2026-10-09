@@ -83,9 +83,21 @@ export class AgentBridgeServer {
     if (get && route === '/v1/terminals') return runtime.terminals.list();
     // These endpoints are explicit user interactions, not model-callable tools. The token is a host-execution capability.
     if (post && route === '/v1/terminals/open') return runtime.terminals.start({...input, owner: 'user'});
-    const terminal = /^\/v1\/terminals\/([a-zA-Z0-9-]+)(?:\/(input|resize|signal|close))?$/.exec(route);
+    const terminal = /^\/v1\/terminals\/([a-zA-Z0-9-]+)(?:\/(input|binary|resize|signal|close|state|screen|key|paste|mouse))?$/.exec(route);
     if (terminal) {
-      if (get && !terminal[2]) return runtime.terminals.read(terminal[1], Number(url.searchParams.get('cursor') ?? 0));
+      if (get && !terminal[2]) {
+        const cursor = Number(url.searchParams.get('cursor') ?? 0), waitMs = Number(url.searchParams.get('waitMs') ?? 0);
+        return waitMs ? runtime.terminals.wait(terminal[1], {cursor, timeoutMs: waitMs, signal}) : runtime.terminals.read(terminal[1], cursor);
+      }
+      if (get && terminal[2] === 'state') return runtime.terminals.state(terminal[1]);
+      if (get && terminal[2] === 'screen') return runtime.terminals.snapshot(terminal[1]);
+      if (post && terminal[2] === 'key') return runtime.terminals.key(terminal[1], input);
+      if (post && terminal[2] === 'paste') return runtime.terminals.paste(terminal[1], input.text);
+      if (post && terminal[2] === 'mouse') return runtime.terminals.mouse(terminal[1], input);
+      if (post && terminal[2] === 'binary') {
+        if (typeof input.data !== 'string' || input.data.length > 87384 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input.data)) throw new AgentError('TERMINAL_INPUT', 'Expected at most 64 KiB of base64 terminal bytes');
+        return runtime.terminals.inputBytes(terminal[1], Buffer.from(input.data, 'base64'));
+      }
       if (post && terminal[2] === 'input') return runtime.terminals.input(terminal[1], input.text);
       if (post && terminal[2] === 'resize') return runtime.terminals.resize(terminal[1], input.cols, input.rows);
       if (post && terminal[2] === 'signal') return runtime.terminals.signal(terminal[1], input.signal);

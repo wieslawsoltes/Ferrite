@@ -35,7 +35,9 @@ The Terminal supports workspace utilities and pipelines, browser Rust-subset `ca
 npm run agent:bridge -- --workspace /absolute/path/to/project --trust-workspace
 ```
 
-Native mode adds the existing **28-tool MCP registry**, full installed Cargo/process execution, POSIX PTYs, **44 rust-analyzer/LSP request methods**, and external stdio/HTTP MCP clients. Native execution has host permissions and is **not sandboxed**. For the deployed Pages IDE, explicitly add `--origin https://wieslawsoltes.github.io`. API-key sign-in is separate from installed coding-agent account login. See the [native agent guide](docs/agent-workbench.md) for its setup and security boundary.
+Native mode adds the shared **MCP tool registry**, full installed Cargo/process execution, POSIX PTYs, **44 rust-analyzer/LSP request methods**, and external stdio/HTTP MCP clients. Native execution has host permissions and is **not sandboxed**. For the deployed Pages IDE, explicitly add `--origin https://wieslawsoltes.github.io`. API-key sign-in is separate from installed coding-agent account login. See the [native agent guide](docs/agent-workbench.md) for its setup and security boundary.
+
+Native terminals use **xterm.js 6.0.0** with a matching headless screen, real POSIX PTYs and ncurses keyboard/mouse/resize support. MCP exposes `terminal_screen`, `terminal_wait`, `terminal_key`, `terminal_paste` and `terminal_mouse` alongside lifecycle tools. See [Terminal and ncurses](docs/terminal.md) for usage, recovery guarantees and tested limits.
 
 ## Compiler pipeline
 

@@ -1,3 +1,4 @@
+import {discriminantCases, discriminantCompileFailCases} from './enum-discriminants.js';
 import {enumRecordCases, enumRecordCompileFailCases, enumRecordPanicCases} from './enum-records.js';
 import {nominalCases, nominalCompileFailCases, nominalPanicCases} from './nominal-constructors.js';
 import {destructuringCases, destructuringCompileFailCases, destructuringPanicCases} from './destructuring-conformance.js';
@@ -121,8 +122,8 @@ export const runtimePanicCases = [
   ['explicit panic', 'fn main(){panic!("expected");}', 'R_PANIC'],
 ];
 export const languageCases = [
-  ...primitiveCases, ...sequenceCases, ...constantCases, ...controlCases, ...floatCases, ...destructuringCases, ...nominalCases, ...enumRecordCases,
+  ...primitiveCases, ...sequenceCases, ...constantCases, ...controlCases, ...floatCases, ...destructuringCases, ...nominalCases, ...enumRecordCases, ...discriminantCases,
 ].map(([name,source,output])=>({name,source,output,kind:'run'})).concat(
-  [...compileFailCases, ...floatCompileFailCases, ...destructuringCompileFailCases, ...nominalCompileFailCases, ...enumRecordCompileFailCases].map(([name,source])=>({name,source,kind:'compile-fail'})),
+  [...compileFailCases, ...floatCompileFailCases, ...destructuringCompileFailCases, ...nominalCompileFailCases, ...enumRecordCompileFailCases, ...discriminantCompileFailCases].map(([name,source])=>({name,source,kind:'compile-fail'})),
   [...runtimePanicCases, ...floatPanicCases, ...destructuringPanicCases, ...nominalPanicCases, ...enumRecordPanicCases].map(([name,source,code,output])=>({name,source,code,output,kind:'panic'})),
 );

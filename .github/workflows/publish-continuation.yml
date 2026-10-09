@@ -20,43 +20,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Verify and publish compiler commits
+      - name: Verify and publish plain-text compiler patches
         id: publish
         run: |
           python3 - <<'PY'
-          import base64, gzip, hashlib, json, os, re, subprocess, tempfile
+          import hashlib, json, os, re, subprocess, tempfile
           from pathlib import Path
           evidence = Path(os.environ['RUNNER_TEMP']) / 'compiler-continuation'
           evidence.mkdir()
-          manifest = json.loads(Path('.github/continuation-payload.json').read_text())
-          if 'chunks' in manifest:
-              chunks = manifest['chunks']
-              if not 1 <= len(chunks) <= 64 or any(not re.fullmatch(r'\.github/continuation-[a-z0-9-]+\.b64', p) for p in chunks):
-                  raise SystemExit('Invalid publication chunks')
-              encoded = ''.join(Path(p).read_text().strip() for p in chunks)
-          else:
-              encoded = manifest['data']
-          (evidence / 'transport.b64').write_text(encoded)
-          compressed = base64.b64decode(encoded, validate=True)
-          if hashlib.sha256(compressed).hexdigest() != manifest['sha256']:
-              raise SystemExit('Publication digest mismatch')
-          payload = json.loads(gzip.decompress(compressed))
-          for correction in manifest.get('corrections', []):
-              index = correction['commit']
-              if type(index) is not int or not 0 <= index < len(payload['commits']):
-                  raise SystemExit('Invalid correction index')
-              change = payload['commits'][index]
-              for replacement in correction['replacements']:
-                  if not replacement['old'] or change['patch'].count(replacement['old']) != 1:
-                      raise SystemExit('Patch correction must match exactly once')
-                  change['patch'] = change['patch'].replace(replacement['old'], replacement['new'], 1)
-              if hashlib.sha256(change['patch'].encode()).hexdigest() != correction['sha256']:
-                  raise SystemExit('Corrected patch digest mismatch')
-              change['tree'] = correction['tree']
-          (evidence / 'payload.json').write_text(json.dumps(payload))
+          payload = json.loads(Path('.github/continuation-payload.json').read_text())
           target, expected = payload['target'], payload['base']
-          if target not in ['feat/compiler-generic-impls', 'feat/compiler-generic-traits']:
+          if target not in ['feat/compiler-generic-impls', 'feat/compiler-generic-traits', 'feat/compiler-supertraits']:
               raise SystemExit('Unexpected feature branch')
+          if not re.fullmatch('[0-9a-f]{40}', expected) or not 1 <= len(payload['commits']) <= 16:
+              raise SystemExit('Invalid publication manifest')
+          for change in payload['commits']:
+              if not re.fullmatch(r'\.github/continuation-[a-z0-9-]+\.patch', change['path']):
+                  raise SystemExit('Invalid plain-text patch path')
+              data = Path(change['path']).read_bytes()
+              if len(data) > 2000000 or hashlib.sha256(data).hexdigest() != change['sha256']:
+                  raise SystemExit('Patch digest or size mismatch')
+              change['patch'] = data.decode('utf-8')
+          (evidence / 'payload.json').write_text(json.dumps(payload))
           def git(*args):
               return subprocess.check_output(['git', *args], text=True).strip()
           if git('ls-remote', 'origin', 'refs/heads/' + target).split()[0] != expected:
@@ -68,8 +53,9 @@ jobs:
               with tempfile.NamedTemporaryFile(mode='w', suffix='.patch') as patch:
                   patch.write(change['patch']); patch.flush()
                   git('apply', '--index', '--whitespace=error', patch.name)
-              if git('diff', '--cached', '--name-only', '--', '.github'):
-                  raise SystemExit('Compiler publication cannot modify repository workflows')
+              paths = git('diff', '--cached', '--name-only').splitlines()
+              if not paths or any(not p.startswith(('src/compiler/', 'tests/', 'docs/', 'tools/')) for p in paths):
+                  raise SystemExit('Only compiler, test, documentation and tool sources may be published')
               subprocess.run(['npm', 'run', 'build:workers'], check=True)
               subprocess.run(['npm', 'run', 'build:sdk'], check=True)
               git('add', 'src/ui/workers', 'src/sdk/ferrite.bundle.js')

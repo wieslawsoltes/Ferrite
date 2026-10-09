@@ -1,3 +1,4 @@
+import {SourceDesigner} from '../ui-framework/SourceDesigner.js';
 import {compile} from '../engine.js';
 import {JavaScriptEmitter} from '../compiler/JavaScriptEmitter.js';
 import {MirVirtualMachine} from '../runtime/MirVirtualMachine.js';
@@ -11,8 +12,9 @@ import {UI, createUIRuntime} from '../ui-framework/Runtime.js';
 export function compileRust(source, options = {}) { return compile(source, options); }
 export function compileUI(source, options = {}) { return UICompiler.compile(source, options); }
 export function mountUI(sourceOrArtifact, container, options = {}) {
-  const artifact = typeof sourceOrArtifact === 'string' ? compileUI(sourceOrArtifact, options) : sourceOrArtifact;
-  return new UISession(artifact, options).mount(container);
+  const {runtime, backend, maxHandles, maxTrace, onError, ...compileOptions} = options;
+  const artifact = typeof sourceOrArtifact === 'string' ? compileUI(sourceOrArtifact, compileOptions) : sourceOrArtifact;
+  return new UISession(artifact, {runtime, backend, maxHandles, maxTrace, onError}).mount(container);
 }
 export function runRust(sourceOrArtifact, {backend = 'mir', entry, args = [], ...options} = {}) {
   const artifact = typeof sourceOrArtifact === 'string' ? compileRust(sourceOrArtifact, {...options, ...(entry ? {entry} : {})}) : sourceOrArtifact;
@@ -47,5 +49,5 @@ export function runScripts({document: doc = globalThis.document, root = doc, onE
   }
   return results;
 }
-export const Ferrite = Object.freeze({version: '0.1.0', compileRust, compileUI, mountUI, runRust, runScripts, exportHTML, UI, createUIRuntime});
-export {exportHTML, UI, createUIRuntime};
+export const Ferrite = Object.freeze({version: '0.1.0', compileRust, compileUI, mountUI, runRust, runScripts, exportHTML, UI, createUIRuntime, SourceDesigner});
+export {exportHTML, UI, createUIRuntime, SourceDesigner, UICompiler, UISession};

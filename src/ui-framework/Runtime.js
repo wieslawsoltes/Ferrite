@@ -136,7 +136,10 @@ export function createUIRuntime() {
   function memo(type, compare = shallowEqual) { return {$$kind: 'memo', type, compare}; }
   function forwardRef(render) { return {$$kind: 'forwardRef', render}; }
   function use(value) {
-    if (value?.$$kind === 'provider') return useContext(value);
+    if (value?.$$kind === 'provider') {
+      if (!current) fail('use must be called while rendering a function component');
+      return current.context.has(value) ? current.context.get(value) : value.defaultValue;
+    }
     if (!value || typeof value.then !== 'function') fail('use expects a Promise or context');
     let record = promises.get(value);
     if (!record) { record = {status: 'pending'}; promises.set(value, record); value.then(result => Object.assign(record, {status: 'fulfilled', value: result}), error => Object.assign(record, {status: 'rejected', error})); }
@@ -441,17 +444,25 @@ export function createUIRuntime() {
     if (!isElement(element)) fail('cloneElement expects a Ferrite element');
     return createElement(element.type, {...element.props, key: element.key, ...props}, ...(children.length ? children : []));
   }
+  function publicChildren(value, result = [], depth = 0) {
+    if (depth > 128 || result.length > 20000) fail('UI child budget exceeded');
+    if (Array.isArray(value)) for (const child of value) publicChildren(child, result, depth + 1);
+    else if (value == null || typeof value === 'boolean') result.push(null);
+    else if (isElement(value) || ['string', 'number', 'bigint'].includes(typeof value)) result.push(value);
+    else fail('Unsupported children value');
+    return result;
+  }
   const Children = {
-    toArray: value => childrenOf(value).filter(v => v.type !== EMPTY),
-    count: value => childrenOf(value).length,
+    toArray: value => value == null ? [] : publicChildren(value).filter(child => child !== null),
+    count: value => value == null ? 0 : publicChildren(value).length,
     only: value => { if (!isElement(value)) fail('Children.only requires one element'); return value; },
-    map: (value, fn, self) => childrenOf(value).map((child, i) => fn.call(self, child.type === EMPTY ? null : child.type === TEXT ? child.props.value : child, i)),
-    forEach: (value, fn, self) => { Children.map(value, fn, self); }
+    map: (value, fn, self) => value == null ? value : publicChildren(value).flatMap((child, i) => publicChildren(fn.call(self, child, i))).filter(child => child !== null),
+    forEach: (value, fn, self) => { if (value != null) publicChildren(value).forEach((child, i) => fn.call(self, child, i)); }
   };
   return {version: '0.1.0', createElement, h: createElement, jsx: (type, props, key) => createElement(type, {...props, ...(key === undefined ? {} : {key})}), jsxs: (type, props, key) => createElement(type, {...props, ...(key === undefined ? {} : {key})}), Fragment, Suspense, ErrorBoundary, createRoot,
     createPortal: (children, container, key = null) => createElement(PORTAL, {container, key}, children),
     useState, useReducer, useRef, useEffect, useLayoutEffect, useMemo, useCallback, useContext, useId, useImperativeHandle, useSyncExternalStore,
-    createContext, memo, forwardRef, lazy, use, flushSync, cloneElement, isValidElement: isElement, Children,
+    createContext, createRef: () => ({current: null}), memo, forwardRef, lazy, use, flushSync, cloneElement, isValidElement: isElement, Children,
     _useCell: useCell, _safeValue: safeValue};
 }
 

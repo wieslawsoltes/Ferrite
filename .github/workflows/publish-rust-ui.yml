@@ -55,7 +55,17 @@ jobs:
           git('checkout', '--detach', payload['base'])
           for change in payload['commits']:
               if change.get('merge'):
-                  git('merge', '--no-commit', '--no-ff', change['merge'])
+                  main = git('ls-remote', 'origin', 'refs/heads/main').split()[0]
+                  if main != change['merge']:
+                      raise SystemExit('Main moved; integrate and validate the new source first')
+                  merged = subprocess.run(['git', 'merge', '--no-commit', '--no-ff', change['merge']])
+                  if merged.returncode:
+                      conflicts = git('diff', '--name-only', '--diff-filter=U').splitlines()
+                      expected = change.get('generatedConflicts', [])
+                      if not conflicts or sorted(conflicts) != sorted(expected) or any(not re.fullmatch(r'src/ui/workers/[a-z-]+\.bundle\.js', p) for p in conflicts):
+                          raise SystemExit('Unexpected merge conflict; manual source review required')
+                      git('checkout', '--ours', '--', *conflicts)
+                      git('add', '--', *conflicts)
               if change.get('patch'):
                   with tempfile.NamedTemporaryFile(suffix='.patch') as patch:
                       patch.write(change['patch'].encode()); patch.flush()

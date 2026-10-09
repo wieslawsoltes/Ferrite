@@ -15,6 +15,7 @@ const scalar = type => T.numeric(type) || ['String', '&str', 'bool', 'char', '()
 /** Typed Rust -> verified MIR -> checked UI imports, with original-source spans. */
 export class UICompiler {
   static compile(source, {file = 'src/ui.rs', entry = 'app', optimize = true, maxSteps = 250000, ...options} = {}) {
+    if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > 2_000_000) throw new Diagnostic('F_UI_BUDGET', 'UI instruction budget must be between 1 and 2,000,000');
     if (file === UI_ABI_FILE || typeof file !== 'string' || !/^[\w./ -]+\.rs$/.test(file)) throw new Diagnostic('F_UI_FILE', 'A normal .rs source filename is required');
     if (!/^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*$/.test(entry)) throw new Diagnostic('F_UI_ENTRY', 'Invalid UI entry name');
     const syntax = new ViewSyntax(source, {file}), expansion = syntax.expand();
@@ -27,7 +28,7 @@ export class UICompiler {
     const declarations = Lexer.tokenize(UI_DECLARATIONS, {file: UI_ABI_FILE});
     const build = compile(expansion.source, {...options, entry, optimize, file, tokens: [...tokens.slice(0, -1), ...declarations]});
     const entryFunction = build.optimizedMir.find(fn => fn.instance === build.entry);
-    if (entryFunction?.returnType !== 'ui::Node') throw new Diagnostic('F_UI_ENTRY', 'A UI entry must return ui::Node and take no arguments', entryFunction?.span);
+    if (entryFunction?.returnType !== 'ui::Node' || entryFunction?.params?.length) throw new Diagnostic('F_UI_ENTRY', 'A UI entry must return ui::Node and take no arguments', entryFunction?.span);
     const shapes = new Map(build.sem.structures.map(shape => [shape.name, shape]));
     const closures = new Map(build.sem.closures.map(closure => [closure.type, closure]));
     const unsafeCapture = (type, seen = new Set()) => {

@@ -3,7 +3,8 @@ import {Runtime} from './Runtime.js';
 
 /** Instruction-level execution, with explicit call frames and a bounded trace. */
 export class MirVirtualMachine {
-  constructor(functions, {entry = 'main<>', args = [], ...options} = {}) {
+  constructor(functions, {entry = 'main<>', args = [], resolveDiscriminant = null, ...options} = {}) {
+    this.resolveDiscriminant = resolveDiscriminant;
     this.functions = new Map(functions.map(fn => [fn.instance, fn]));
     this.blockMaps = new Map(functions.map(fn => [fn.instance, new Map(fn.blocks.map(block => [block.id, block]))]));
     this.runtime = new Runtime(options); this.frames = []; this.done = false; this.result = null;
@@ -26,6 +27,7 @@ export class MirVirtualMachine {
   evaluate(instruction, frame) {
     const r = this.runtime, cells = frame.cells, value = slot => cells[slot].value;
     switch (instruction.op) {
+      case 'function':return r.functionPointer(instruction.callee,instruction.signature);
       case 'const': return r.literal(instruction.value, instruction.type);
       case 'read': return r.read(this.reference(frame, instruction.place), instruction.copy);
       case 'borrow': return this.reference(frame, instruction.place);
@@ -33,6 +35,9 @@ export class MirVirtualMachine {
       case 'copy': cells[instruction.target].value = instruction.copy ? r.clone(value(instruction.value)) : value(instruction.value); return null;
       case 'binary': return r.binary(instruction.operator, value(instruction.left), value(instruction.right), instruction.operandType);
       case 'unary': return r.unary(instruction.operator, value(instruction.value), instruction.type);
+      case 'discriminant': return instruction.table === null && this.resolveDiscriminant
+        ? this.resolveDiscriminant(instruction.enumName, value(instruction.value).tag)
+        : r.discriminant(value(instruction.value), instruction.table);
       case 'cast': return r.cast(value(instruction.value), instruction.targetType);
       case 'aggregate': return r.aggregate(instruction.form, instruction.values.map(value), instruction.names, instruction.tag);
       case 'repeat': return Array.from({length: instruction.count}, () => r.clone(value(instruction.value)));
@@ -110,7 +115,8 @@ export class MirVirtualMachine {
     if (instruction) {
       this.runtime.tick(instruction.span);
       this.last = {function: frame.fn.instance, block: frame.block, instruction: instruction.id, operation: instruction.op, span: instruction.span};
-      if (instruction.op === 'call') this.push(instruction.callee, instruction.args.map(slot => frame.cells[slot].value), instruction.dest);
+      if(instruction.op==='callIndirect')this.push(this.runtime.functionTarget(frame.cells[instruction.value].value,instruction.signature),instruction.args.map(slot=>frame.cells[slot].value),instruction.dest);
+      else if (instruction.op === 'call') this.push(instruction.callee, instruction.args.map(slot => frame.cells[slot].value), instruction.dest);
       else {
         const result = this.evaluate(instruction, frame);
         if (instruction.dest != null) frame.cells[instruction.dest].value = result;

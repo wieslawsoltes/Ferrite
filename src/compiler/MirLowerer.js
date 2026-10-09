@@ -1,3 +1,4 @@
+import {TypeSystem as T} from './TypeSystem.js';
 import {AssigneeLowerer} from './assignments/AssigneeLowerer.js';
 import {LiteralValue} from './LiteralValue.js';
 import {PatternLowerer} from './patterns/PatternLowerer.js';
@@ -94,7 +95,15 @@ export class MirLowerer {
         if (node.op === '||') return this.conditional(left, () => this.literal(true, 'bool', node), () => this.expr(node.right), node);
         return this.emit('binary', {operator: node.op, left, right: this.expr(node.right), operandType: node.operandType}, node, node.type);
       }
-      case 'cast': return this.emit('cast', {value: this.expr(node.value), targetType: node.target}, node, node.type);
+      case 'cast': {
+        let value;
+        if (node.discriminantConstant != null) value = this.literal(node.discriminantConstant, node.discriminantType, node);
+        else {
+          value = this.expr(node.value);
+          if (node.discriminantEnum) value = this.emit('discriminant', {value, enumName: node.discriminantEnum, table: node.discriminantTable ?? null}, node, node.discriminantType);
+        }
+        return this.emit('cast', {value, targetType: node.target}, node, node.type);
+      }
       case 'block': return this.block(node);
       case 'ifLet': {
         const value = this.expr(node.value), condition = this.patternTest(node.pattern, value);
@@ -116,13 +125,22 @@ export class MirLowerer {
           this.terminate('return', {value}, node); return value;
         }, node);
       }
+      case 'pointerCast':return this.expr(node.value);
+      case 'functionCoercion':case 'functionPointer':{
+        if(node.value)this.expr(node.value);
+        return this.emit('function',{callee:node.pointerTarget,signature:node.pointerSignature},node,node.type);
+      }
+      case 'functionItem':return this.emit('aggregate',{form:'struct',names:[],values:[]},node,node.type);
       case 'closure': return this.emit('aggregate',{form:'struct',names:node.fields.map(f=>f.name),values:node.fields.map(f=>this.expr(f.value))},node,node.type);
       case 'intrinsic': case 'call': {
+        let callee=node.calleeValue?this.expr(node.calleeValue):null;
+        if(node.indirect){let type=node.calleeValue.type;while(T.reference(type)){type=T.target(type);callee=this.emit('read',{place:{slot:callee,path:[{kind:'deref'}]},copy:true},node.calleeValue,type);}}
         if(node.temporaryCallee){const temporary=node.temporaryCallee;this.emit('write',{place:{slot:temporary.binding.slot,path:[]},value:this.expr(temporary.value)},node);}
         const mutates = ['method::push', 'method::pop', 'method::push_str'].includes(node.builtin);
         const receiverPlace = mutates ? this.place(node.receiver) : null;
         const receiver = node.receiver && !mutates ? this.expr(node.receiver, true) : null;
         const args = node.args.map(arg => this.expr(arg, ['println', 'print', 'format', 'clone', 'assert_eq'].includes(node.builtin)));
+        if(node.indirect)return this.emit('callIndirect',{value:callee,args,signature:node.pointerSignature},node,node.type);
         if (node.resolved) return this.emit('call', {callee: node.resolved, args}, node, node.type);
         return this.emit('builtin', {name: node.builtin ?? node.name, args, receiver, receiverPlace,
           receiverDeref: !!node.receiverDeref, format: node.format}, node, node.type);

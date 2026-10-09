@@ -58,6 +58,8 @@ def run():
             studio.get_by_label('New attribute name').fill('data-design')
             # A delayed programmatic editor selection must not reconstruct focused property inputs.
             page.evaluate("""async () => { document.querySelector('#source').dispatchEvent(new Event('select')); await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))); }""")
+            # Reselecting the same source node must preserve unsaved inspector input.
+            studio.locator('.studio-outline [aria-selected="true"]').click()
             expect(studio.get_by_label('New attribute name')).to_have_value('data-design')
             studio.get_by_label('New attribute value').fill('edited')
             studio.get_by_role('button', name='Add attribute', exact=True).click()

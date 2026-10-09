@@ -55,7 +55,7 @@ export class OwnershipAnalyzer {
   evaluateValue(node, consume = true, destination = null) {
     if (!node) return [];
     this.expire(node);
-    if (node.kind === 'literal' || node.kind === 'constValue') return [];
+    if (node.kind === 'literal' || node.kind === 'constValue' || node.kind === 'functionItem') return [];
     if (node.kind === 'closure') {
       const roots=node.fields.flatMap(field=>this.value(field.value,true,destination));
       if(destination!=null&&roots.length)this.references.set(destination,roots);
@@ -124,6 +124,7 @@ export class OwnershipAnalyzer {
     }
     if (['loopExpr', 'labelBlock', 'while', 'whileLet', 'for'].includes(node.kind)) return this.controlValue(node);
     if (node.kind === 'intrinsic' || node.kind === 'call') {
+      if(node.calleeValue)this.value(node.calleeValue,false);
       if(node.temporaryCallee)this.value(node.temporaryCallee.value,true,node.temporaryCallee.binding.slot);
       const name = node.builtin ?? node.name;
       if (node.receiver) {

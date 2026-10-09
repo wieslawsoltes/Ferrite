@@ -77,6 +77,15 @@ export class Parser {
   }
   parseType() {
     if (this.c.match('!')) return '!';
+    if(this.c.match('fn')){
+      this.c.eat('(');
+      const params=this.list(')',()=>{
+        if(this.c.is('#'))throw new Diagnostic('F_FN_ATTRIBUTE','Function-pointer parameter attributes are not yet implemented',this.c.peek().span);
+        if(this.c.peek(1).value===':'){this.c.identifier();this.c.eat(':');}
+        return this.type();
+      });
+      return `fn(${params.join(',')})->${this.c.match('->')?this.type():'()'}`;
+    }
     if(this.c.match('impl'))return 'impl '+this.bound();
     if (this.c.is('&&')) this.c.split('&');
     if (this.c.match('&')) {
@@ -155,7 +164,8 @@ export class Parser {
           return this.c.node('variantField', at, {name, type: this.type(), attributes});
         });
         if (form === 'tuple') members.forEach((field, i) => { field.name = String(i); });
-        return this.c.node('enumVariant', at, {name, fields: members.map(field => field.type), members, form, attributes});
+        const discriminant = this.c.match('=') ? this.expr() : null;
+        return this.c.node('enumVariant', at, {name, fields: members.map(field => field.type), members, form, attributes, discriminant});
       });
       return [this.c.node('enum', start, {name, generics, predicates, variants, attributes, visibility})];
     }
@@ -439,12 +449,12 @@ export class Parser {
     }
     if (['-', '!', '&', '*'].includes(start.value)) {
       const op = this.c.take().value, mutable = op === '&' && !!this.c.match('mut');
-      return this.c.node('unary', start, {op, mutable, value: this.expr(10, allowRecord)});
+      return this.c.node('unary', start, {op, mutable, value: this.expr(11, allowRecord)});
     }
     if (this.c.match('(')) {
       if (this.c.match(')')) return this.c.node('literal', start, {value: null, type: '()'});
       const first = this.expr();
-      if (!this.c.match(',')) { this.c.eat(')'); return first.kind === 'assigneeRest' ? this.c.node('tuple', start, {items: [first]}) : first; }
+      if (!this.c.match(',')) { this.c.eat(')'); return first.kind === 'assigneeRest' ? this.c.node('tuple', start, {items: [first]}) : {...first,parenthesized:true}; }
       const rest = this.list(')', () => this.expr());
       return this.c.node('tuple', start, {items: [first, ...rest]});
     }

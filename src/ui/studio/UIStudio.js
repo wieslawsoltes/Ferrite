@@ -194,11 +194,16 @@ export class UIStudio {
     }
   }
   select(id, reveal = true) {
-    this.assertSourcePreview();
+    if (this.nativeAsset) throw Error('Native binaries have no browser-compiler source node identities');
     const target = this.artifact?.nodes.find(node => node.id === id);
     if (target?.span.file && target.span.file !== this.file) { this.file = target.span.file; this.refreshFiles(); this.refreshSource({invalidate: false}); }
     const node = this.designer?.index.get(id); if (!node) throw Error('Selected source node no longer exists');
-    this.selected = id; this.renderOutline(); this.renderProperties();
+    // Editor selection can echo the canvas/outline selection asynchronously.
+    // Replacing the same inspector would discard an in-progress attribute edit.
+    // Source changes rebuild properties through refreshSource instead.
+    if (this.selected !== id) {
+      this.selected = id; this.renderOutline(); this.renderProperties();
+    }
     if (reveal) { this.model.open(this.file); this.app.selection.select(node.span, 'ui-studio', this.model.revision); }
     return {id, span: node.span};
   }

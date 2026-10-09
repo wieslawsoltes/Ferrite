@@ -8,6 +8,7 @@ export class JavaScriptEmitter {
   constructor(functions, options = {}) {
     this.functions = functions; this.options = options; this.lines = []; this.map = [];
     this.names = new Map(functions.map((fn, index) => [fn.instance, `f${index}`]));
+    this.discriminants = new WeakMap();
   }
   static emit(semantic, options = {}) {
     const functions = Array.isArray(semantic) ? semantic : MirLowerer.lower(semantic);
@@ -26,11 +27,14 @@ export class JavaScriptEmitter {
   expression(i) {
     const v = slot => this.value(slot), j = value => this.json(value);
     switch (i.op) {
+      case 'function':return `r.functionPointer(${j(i.callee)},${j(i.signature)})`;
+      case 'callIndirect':return `r.invokeFunction(functions,${v(i.value)},${j(i.signature)},[${i.args.map(v)}])`;
       case 'const': return `r.literal(${j(LiteralValue.encode(i.value))},${j(i.type)})`;
       case 'read': return `r.read(${this.place(i.place)},${!!i.copy})`;
       case 'borrow': return this.place(i.place);
       case 'binary': return `r.binary(${j(i.operator)},${v(i.left)},${v(i.right)},${j(i.operandType)})`;
       case 'unary': return `r.unary(${j(i.operator)},${v(i.value)},${j(i.type)})`;
+      case 'discriminant': return `r.discriminant(${v(i.value)},${this.discriminants.get(i.table)})`;
       case 'cast': return `r.cast(${v(i.value)},${j(i.targetType)})`;
       case 'aggregate': return `r.aggregate(${j(i.form)},[${i.values.map(v)}],${j(i.names ?? [])},${j(i.tag)})`;
       case 'repeat': return `Array.from({length:${i.count}},()=>r.clone(${v(i.value)}))`;
@@ -47,6 +51,19 @@ export class JavaScriptEmitter {
     this.add('"use strict";');
     this.add(`const FerriteRuntime = ${Runtime.toString()};`);
     this.add(`const r = new FerriteRuntime(${this.json(this.options.runtime ?? {})});`);
+    // A table is immutable module data, not an allocation in a hot loop. Content
+    // deduplication also handles serialized MIR with distinct object identities.
+    const tables = new Map();
+    for (const fn of this.functions) for (const block of fn.blocks) for (const i of block.instructions) {
+      if (i.op !== 'discriminant' || this.discriminants.has(i.table)) continue;
+      const encoded = this.json(i.table);
+      let name = tables.get(encoded);
+      if (name === undefined) {
+        name = `d${tables.size}`; tables.set(encoded, name);
+        this.add(`const ${name}=Object.freeze(${encoded});`);
+      }
+      this.discriminants.set(i.table, name);
+    }
     for (const fn of this.functions) {
       const name = this.names.get(fn.instance), args = fn.params.map((_, i) => `a${i}`);
       this.add(`function ${name}(${args.join(',')}) { // ${fn.instance}`, fn.span);
@@ -71,6 +88,7 @@ export class JavaScriptEmitter {
       }
       this.add('default: r.fail("Invalid block"); } } } finally { r.leave(); } }');
     }
+    this.add(`const functions=new Map([${[...this.names].map(([key,value])=>`[${this.json(key)},${value}]`).join(',')}]);`);
     const entry = Object.hasOwn(this.options, 'entry') ? this.options.entry : 'main<>';
     if (this.options.library) {
       this.add(`return {runtime:r,functions:{${[...this.names].map(([key,name])=>`${this.json(key)}:${name}`).join(',')}}};`);

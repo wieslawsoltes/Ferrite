@@ -4,6 +4,7 @@ export class Runtime {
     this.maxSteps = maxSteps; this.maxOutput = maxOutput; this.maxDepth = maxDepth; this.overflow = overflow;
     this.steps = 0; this.depth = 0; this.output = ''; this.span = null;
     this.integerBounds = new Map();
+    this.discriminantValues = new WeakMap();
   }
   fail(message, code = 'RUNTIME') {
     const error = new Error(message); error.code = code; error.span = this.span; throw error;
@@ -34,7 +35,23 @@ export class Runtime {
     if (type === 'f32' || type === 'f64') return this.normalize(Number(value), type);
     return value;
   }
+  functionPointer(target,signature) {
+    if(typeof target!=='string'||typeof signature!=='string'||!signature.startsWith('fn('))this.fail('Invalid function pointer','R_CALL');
+    return Object.freeze({__functionPointer:true,target,signature});
+  }
+  functionTarget(value,signature) {
+    if(!value||value.__functionPointer!==true||typeof value.target!=='string'||value.signature!==signature)this.fail('Invalid function pointer signature','R_CALL');
+    return value.target;
+  }
+  invokeFunction(functions,value,signature,args) {
+    const fn=functions.get(this.functionTarget(value,signature));
+    if(typeof fn!=='function')this.fail('Unknown indirect call target','R_CALL');
+    return fn(...args);
+  }
   binary(op, a, b, type) {
+    if(type?.startsWith('fn(')&&['==','!='].includes(op)){
+      const equal=this.functionTarget(a,type)===this.functionTarget(b,type);return op==='=='?equal:!equal;
+    }
     switch (op) {
       case '==': return a === b;
       case '!=': return a !== b;
@@ -77,6 +94,21 @@ export class Runtime {
     if (op === '!') return typeof value === 'boolean' ? !value : this.normalize(~value, type, true);
     if (op === '-') return this.normalize(-value, type);
     return this.fail(`Invalid unary operator ${op}`);
+  }
+  discriminant(value, table) {
+    if (!value || typeof value.tag !== 'string' || !table || typeof table !== 'object' || !Object.hasOwn(table, value.tag))
+      this.fail('Invalid enum discriminant', 'R_ENUM');
+    const encoded = table[value.tag];
+    let values = this.discriminantValues.get(table);
+    const prior = values?.get(value.tag);
+    // MIR metadata can be deserialized or supplied by a host. Always recheck the
+    // encoded value so mutating/deleting a table entry cannot reuse stale data.
+    if (prior && prior.encoded === encoded) return prior.value;
+    if (typeof encoded !== 'string' || encoded.length > 40 || !/^-?\d+$/.test(encoded)) this.fail('Invalid enum discriminant value', 'R_ENUM');
+    const result = BigInt(encoded);
+    if (!values) this.discriminantValues.set(table, values = new Map());
+    values.set(value.tag, {encoded, value: result});
+    return result;
   }
   cast(value, target) {
     if (target === 'char') return String.fromCodePoint(Number(value));

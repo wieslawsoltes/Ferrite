@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "check": "node tools/check-syntax.mjs && node tools/bundle-workers.mjs --check",
+    "check": "node tools/check-syntax.mjs && node tools/bundle-workers.mjs --check && node tools/vendor-terminal.mjs --check",
     "build:workers": "node tools/bundle-workers.mjs",
     "test:browser": "python tools/browser-acceptance.py",
     "test:native": "node tools/native-smoke.mjs && node tools/agent-native-smoke.mjs",
@@ -17,7 +17,9 @@
     "test:agent": "node --test tests/agent-*.test.js",
     "test:agent:browser": "python tools/agent-browser-acceptance.py",
     "test:repositories": "node tools/repository-smoke.mjs",
-    "test:browser-agent": "python tools/browser-agent-acceptance.py"
+    "test:browser-agent": "python tools/browser-agent-acceptance.py",
+    "test:terminal": "node --test tests/terminal-*.test.js",
+    "vendor:terminal": "node tools/vendor-terminal.mjs --fetch"
   },
   "engines": {
     "node": ">=22"

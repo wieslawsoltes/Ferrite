@@ -1,3 +1,4 @@
+import {CanvasLayout} from './CanvasLayout.js';
 import {ViewSyntax, rustString} from './ViewSyntax.js';
 import {UICompiler} from './UICompiler.js';
 
@@ -24,11 +25,11 @@ export class SourceDesigner {
   snapshot() {
     return {file: this.file, entry: this.entry, revision: this.revision, source: this.source,
       nodes: this.nodes.map(node => ({...node, parent: this.parents.get(node.id)?.id ?? null, children: node.children?.map(child => child.id)})),
-      canUndo: !!this.history.length, canRedo: !!this.future.length};
+      entryFile: this.entryFile, dependencies: Object.keys(this.validatedFiles ?? {}), canUndo: !!this.history.length, canRedo: !!this.future.length};
   }
   validateSource(source) {
     const syntax = new ViewSyntax(source, {file: this.file}); syntax.expand();
-    if (this.validate) UICompiler.compile(this.entryFile === this.file ? source : this.files[this.entryFile], {file: this.entryFile, entry: this.entry, files: {...this.files, [this.file]: source}});
+    if (this.validate) this.validatedFiles = UICompiler.compile(this.entryFile === this.file ? source : this.files[this.entryFile], {file: this.entryFile, entry: this.entry, files: {...this.files, [this.file]: source}}).files;
   }
   commit(source, label) {
     if (source === this.source) return this.snapshot();
@@ -73,6 +74,16 @@ export class SourceDesigner {
         if (kind !== 'boolean' && (typeof operation.value !== 'string' || operation.value.length > 64000)) throw Error('Attribute value must be bounded text');
         const value = kind === 'boolean' ? name : `${name}=${kind === 'string' ? rustString(operation.value) : `{${operation.value}}`}`;
         const attribute = node.attributes.find(item => item.name === name);
+        if (attribute) replace(attribute.start, attribute.end, value); else replace(node.tagEnd, node.tagEnd, ' ' + value);
+        break;
+      }
+      case 'setLayout': {
+        requireElement();
+        if (/^[A-Z]/.test(node.tag) || node.tag.includes('::')) throw Error('Canvas layout edits require a DOM element, not component props');
+        const attribute = node.attributes.find(item => item.name === 'style');
+        if (attribute && attribute.kind !== 'string') throw Error('Dynamic Rust style expressions must be edited in source');
+        const style = CanvasLayout.style(attribute?.value ?? '', operation.rectangle, {grid: operation.grid ?? 1, snap: operation.snap ?? false});
+        const value = `style=${rustString(style)}`;
         if (attribute) replace(attribute.start, attribute.end, value); else replace(node.tagEnd, node.tagEnd, ' ' + value);
         break;
       }

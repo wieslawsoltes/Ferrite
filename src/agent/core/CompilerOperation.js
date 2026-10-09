@@ -9,11 +9,11 @@ export class CompilerOperation {
   constructor() { this.compiler = new CompilerSession(); }
   perform(files, command, options = {}) {
     if (command.startsWith('ui-')) {
-      const {file = 'src/app.ui.rs', entry = 'app', backend = 'javascript', title, css, channel, operation, revision = 0} = options;
+      const {file = 'src/app.ui.rs', entry = 'app', backend = 'javascript', title, css, channel, operation, entryFile = file, revision = 0} = options;
       if (!Object.hasOwn(files, file)) throw Error('UI source file does not exist');
       const source = files[file];
       if (command === 'ui-design') {
-        const designer = new SourceDesigner(source, {file, entry, revision, files});
+        const designer = new SourceDesigner(source, {file, entry, entryFile, revision, files});
         return operation ? designer.apply(operation, revision) : designer.snapshot();
       }
       if (!['ui-compile', 'ui-export', 'ui-analyze'].includes(command)) throw Error('Unknown UI compiler operation');

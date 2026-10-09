@@ -5,16 +5,16 @@ import {contentHash} from '../core/Platform.js';
 export const UI_IDE_COMMANDS = ['ui.preview', 'ui.inspect', 'ui.select', 'ui.debug', 'ui.state.set'];
 const entry = {...text(200), pattern: '^[A-Za-z_]\\w*(?:::[A-Za-z_]\\w*)*$'};
 const backend = {enum: ['javascript', 'wasm', 'mir']};
-export const UI_EDIT_SCHEMA = object({op: {enum: ['setAttribute', 'removeAttribute', 'setText', 'setTag', 'insert', 'remove', 'duplicate', 'move']},
-  node: text(100), parent: text(100), before: text(100), name: text(80), value: text(64000), kind: {enum: ['string', 'expression', 'boolean']}, markup: text(64000)}, ['op', 'node']);
+export const UI_EDIT_SCHEMA = object({op: {enum: ['setAttribute', 'removeAttribute', 'setText', 'setTag', 'insert', 'remove', 'duplicate', 'move', 'setLayout']},
+  node: text(2200), parent: text(2200), before: text(2200), name: text(80), value: text(64000), kind: {enum: ['string', 'expression', 'boolean']}, markup: text(64000), rectangle: object({x: {type: 'number', minimum: -1000000, maximum: 1000000}, y: {type: 'number', minimum: -1000000, maximum: 1000000}, width: {type: 'number', minimum: 1, maximum: 1000000}, height: {type: 'number', minimum: 1, maximum: 1000000}}, ['x', 'y', 'width', 'height']), grid: {type: 'number', minimum: 1, maximum: 256}, snap: {type: 'boolean'}}, ['op', 'node']);
 
 /** Same definitions/approval gate for in-page MCP, native MCP and coding agents. */
 export function registerUITools(registry, {workspace, compiler, ide}) {
   const add = (name, description, schema, risk, run, preview) => registry.register({name, description, inputSchema: schema, risk, category: 'ui', run, preview});
   const source = async file => {
-    const value = await workspace.text(file);
-    if (typeof value !== 'string') throw Error('UI source file not found');
-    return {[file]: value};
+    const snapshot = await workspace.snapshot();
+    if (typeof snapshot.files[file] !== 'string') throw Error('UI source file not found or excluded by workspace policy');
+    return snapshot.files;
   };
   add('ui_analyze', 'Compile a Rust UI file in the bounded compiler worker; return typed/source-mapped view! nodes, MIR verification, diagnostics and backend capabilities. Uses Ferrite’s documented Rust subset, not native rustc or full React compatibility.',
     object({path, entry}, ['path']), 'read', async ({path: file, entry}, context) => {
@@ -27,18 +27,21 @@ export function registerUITools(registry, {workspace, compiler, ide}) {
       return {...result, hash: await contentHash(files[file])};
     });
   add('ui_design_inspect', 'Read source-backed visual nodes and exact UTF-16 source ranges without executing the application. Node IDs are valid only for the returned source hash.',
-    object({path, entry}, ['path']), 'read', async ({path: file, entry}, context) => {
-      const files = await source(file), result = await compiler.compile(files, 'ui-design', {file, entry}, context.signal);
+    object({path, entry, entryFile: path}, ['path']), 'read', async ({path: file, entry, entryFile}, context) => {
+      const files = await source(file), result = await compiler.compile(files, 'ui-design', {file, entry, entryFile}, context.signal);
       return {...result, hash: await contentHash(files[file])};
     });
-  const prepareEdit = async ({path: file, expectedHash, entry, operation}, context = {}) => {
+  const prepareEdit = async ({path: file, expectedHash, entry, entryFile, operation}, context = {}) => {
     const files = await source(file);
     if (await contentHash(files[file]) !== expectedHash) throw new AgentError('EDIT_CONFLICT', 'UI source changed; inspect its new hash and node IDs');
-    const result = await compiler.compile(files, 'ui-design', {file, entry, operation}, context.signal);
-    return [{path: file, expectedHash, text: result.source}];
+    const result = await compiler.compile(files, 'ui-design', {file, entry, entryFile, operation}, context.signal);
+    const dependencies = (result.dependencies ?? []).filter(path => path !== file);
+    if (dependencies.length >= 100) throw Error('Designer transactions support fewer than 100 reached modules');
+    const guards = await Promise.all(dependencies.map(async path => ({path, expectedHash: await contentHash(files[path]), text: files[path]})));
+    return [...guards, {path: file, expectedHash, text: result.source}];
   };
   add('ui_design_edit', 'Apply one atomic source-based visual edit: attribute, text, tag, insert, delete, duplicate or reparent. Requires the exact source hash. The complete edited Rust UI is type-checked before a reversible workspace checkpoint is committed. No regex rewriting or silent overwrite.',
-    object({path, expectedHash: hash, entry, operation: UI_EDIT_SCHEMA}, ['path', 'expectedHash', 'operation']), 'edit',
+    object({path, expectedHash: hash, entry, entryFile: path, operation: UI_EDIT_SCHEMA}, ['path', 'expectedHash', 'operation']), 'edit',
     async (args, context) => workspace.apply(await prepareEdit(args, context), {sessionId: context.sessionId, signal: context.signal, label: 'Rust UI visual edit'}),
     async (args, context) => workspace.preview(await prepareEdit(args, context)));
   add('ui_preview', 'Compile and mount the live editor UI in an opaque-origin sandbox. This executes bounded Rust/UI callbacks, requires execution approval, and requires a connected IDE; it never fabricates a browser session.',
@@ -50,6 +53,6 @@ export function registerUITools(registry, {workspace, compiler, ide}) {
     object({action: {enum: ['arm', 'step', 'step-line', 'continue', 'stop']}, expectedRevision: integer(0, Number.MAX_SAFE_INTEGER)}, ['action']), 'execute',
     (args, context) => ide.request('ui.debug', args, context));
   add('ui_state_set', 'Set a live Rust state handle through the checked type boundary. i64 values use decimal strings to avoid JSON precision loss; booleans and strings retain their types. Requires execution approval.',
-    object({handle: integer(1, 0xffffffff), value: {type: ['string', 'boolean']}, expectedRevision: integer(0, Number.MAX_SAFE_INTEGER)}, ['handle', 'value']), 'execute',
+    object({handle: integer(1, 0xffffffff), value: {type: ['string', 'boolean', 'number', 'array', 'object', 'null']}, expectedRevision: integer(0, Number.MAX_SAFE_INTEGER)}, ['handle', 'value']), 'execute',
     (args, context) => ide.request('ui.state.set', args, context));
 }

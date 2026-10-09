@@ -133,6 +133,46 @@ def run():
                 isolated = browser.new_context(offline=True); app = isolated.new_page(); open_export(app, target)
                 expect(app.locator('button')).to_have_text('4'); app.locator('button').click(); expect(app.locator('button')).to_have_text('5'); isolated.close()
             results.append('offline Wasm and MIR single-file exports execute independently')
+            # Import a real multi-file project, pick a component's source, and drag its DOM.
+            project_files = {
+                'src/app.rs': 'mod card; fn app() -> ui::Node { view! { <div style="position:relative;width:800px;height:600px"><card::Card /></div> } }',
+                'src/card.rs': 'pub fn Card() -> ui::Node { let n = ui::state(3_i64); view! { <button style="position:absolute;left:40px;top:32px;width:100px;height:40px" on:click={move || ui::modify(n, |v| v + 1)}>{ui::read(n)}</button> } }'
+            }
+            page.locator('#import-input').set_input_files({'name': 'ui.ferrite.json', 'mimeType': 'application/json', 'buffer': json.dumps({'format': 'ferrite-project-v1', 'files': project_files}).encode()})
+            page.wait_for_function("!!window.ferrite.getSnapshot().files['src/card.rs']")
+            studio.get_by_label('UI project entry file', exact=True).select_option('src/app.rs')
+            studio.get_by_role('button', name='Preview', exact=True).click()
+            expect(studio.locator('.studio-status')).to_have_attribute('data-kind', 'ready')
+            studio.get_by_role('button', name='Pick element', exact=True).click(); frame.locator('button').click()
+            expect(studio.get_by_label('UI source file', exact=True)).to_have_value('src/card.rs')
+            assert page.evaluate('window.ferrite.getUIState().entryFile') == 'src/app.rs'
+            studio.get_by_role('button', name='Pick element', exact=True).click()
+            studio.get_by_label('Canvas editing', exact=True).select_option('move')
+            rect = frame.locator('button').bounding_box()
+            page.mouse.move(rect['x'] + 20, rect['y'] + 20); page.mouse.down()
+            page.mouse.move(rect['x'] + 44, rect['y'] + 36, steps=4); page.mouse.up()
+            expect(studio.locator('.studio-status')).to_have_attribute('data-kind', 'ready')
+            page.wait_for_function("window.ferrite.getSnapshot().files['src/card.rs'].includes('left: 64px')")
+            assert 'top: 48px' in page.evaluate("window.ferrite.getSnapshot().files['src/card.rs']")
+            frame.locator('button').click(); expect(frame.locator('button')).to_have_text('4')
+            styles = studio.get_by_label('UI application CSS').locator('..')
+            if not styles.evaluate('(node) => node.open'): styles.locator('summary').click()
+            studio.get_by_label('UI application CSS').fill('button { color: rgb(120, 20, 40); }')
+            studio.get_by_label('UI backend', exact=True).select_option('wasm')
+            studio.get_by_label('Preview width', exact=True).select_option('375px')
+            saved = page.evaluate('window.ferrite.getSnapshot()')
+            settings = json.loads(saved['files']['src/app.ui.json'])
+            assert settings['backend'] == 'wasm' and settings['viewport'] == '375px'
+            assert 'rgb(120, 20, 40)' in saved['files'][settings['stylesheet']]
+            # Reload through the same public snapshot import path in both harness modes.
+            page.locator('#import-input').set_input_files({'name': 'saved.ferrite.json', 'mimeType': 'application/json', 'buffer': json.dumps(saved).encode()})
+            studio.get_by_label('UI project entry file', exact=True).select_option('src/app.rs')
+            expect(studio.get_by_label('UI backend', exact=True)).to_have_value('wasm')
+            expect(studio.get_by_label('Preview width', exact=True)).to_have_value('375px')
+            studio.get_by_role('button', name='Preview', exact=True).click()
+            expect(studio.locator('.studio-status')).to_have_attribute('data-kind', 'ready')
+            expect(frame.locator('button')).to_have_css('color', 'rgb(120, 20, 40)')
+            results.append('multi-file component picking, real pointer canvas transaction and persisted CSS/project settings round-trip')
             page.set_viewport_size({'width': 390, 'height': 844})
             page.locator('[data-tool="ui-studio"]').click()
             expect(studio).to_be_visible(); page.screenshot(path=str(OUTPUT / 'mobile-ui-studio.png'))

@@ -1,3 +1,4 @@
+import {CanvasController} from './CanvasController.js';
 import {OwnedValues} from './OwnedValues.js';
 import {createUIRuntime} from './Runtime.js';
 import {Runtime} from '../runtime/Runtime.js';
@@ -29,6 +30,8 @@ const UISession = ${UISession.toString()};
 const artifact = ${scriptJSON(compact)};
 const style = document.createElement('style'); style.textContent = ${scriptJSON(css)}; document.head.append(style);
 const channel = ${scriptJSON(channel)};
+const CanvasController = ${CanvasController.toString()};
+const canvas = channel ? new CanvasController(document, send) : null;
 let picking = false, scheduled = false;
 function send(value) { if (channel) parent.postMessage({type:'ferrite-ui', channel, ...value}, '*'); }
 function showError(error) { let node=document.getElementById('ferrite-error'); if(!node){node=document.createElement('pre');node.id='ferrite-error';document.body.append(node);}node.textContent=error.message??String(error);send({event:'error',error:{message:node.textContent,code:error.code,span:error.span}}); }
@@ -46,6 +49,7 @@ if(channel){
     try{
       let result;
       if(message.command==='inspect')result=session.inspect();
+      else if(message.command==='layout')result=canvas.configure(message);
       else if(message.command==='pick'){picking=!!message.value;result={picking};}
       else if(message.command==='debug.arm')result=session.armDebugger({breakpoints:message.breakpoints??[]});
       else if(['debug.step','debug.step-line','debug.continue','debug.stop'].includes(message.command))result=session.debug(message.command.slice(6));
@@ -57,7 +61,7 @@ if(channel){
 }
 Object.defineProperty(window,'ferriteUI',{value:Object.freeze({version:'0.1.0',inspect:()=>session.inspect(),armDebugger:options=>session.armDebugger(options),debug:command=>session.debug(command),setState:(handle,value)=>session.setState(handle,value),dispose:()=>session.dispose()}),configurable:false});
 try{session.mount(document.getElementById('app'));send({event:'ready',snapshot:session.inspect()});}catch(error){showError(error);}
-window.addEventListener('pagehide',()=>session.dispose(),{once:true});
+window.addEventListener('pagehide',()=>{canvas?.dispose();session.dispose();},{once:true});
 `;
   // Input data is encoded with scriptJSON; implementation source contains no HTML
   // terminator. Check rather than applying replacements that could alter JS syntax.

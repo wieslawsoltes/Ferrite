@@ -1,3 +1,5 @@
+import {UIProject} from '../ui-framework/UIProject.js';
+import {CanvasLayout} from '../ui-framework/CanvasLayout.js';
 import {SourceDesigner} from '../ui-framework/SourceDesigner.js';
 import {compile} from '../engine.js';
 import {JavaScriptEmitter} from '../compiler/JavaScriptEmitter.js';
@@ -49,5 +51,5 @@ export function runScripts({document: doc = globalThis.document, root = doc, onE
   }
   return results;
 }
-export const Ferrite = Object.freeze({version: '0.1.0', compileRust, compileUI, mountUI, runRust, runScripts, exportHTML, UI, createUIRuntime, SourceDesigner});
-export {exportHTML, UI, createUIRuntime, SourceDesigner, UICompiler, UISession};
+export const Ferrite = Object.freeze({version: '0.1.0', compileRust, compileUI, mountUI, runRust, runScripts, exportHTML, UI, createUIRuntime, SourceDesigner, UIProject, CanvasLayout});
+export {exportHTML, UI, createUIRuntime, SourceDesigner, UICompiler, UISession, UIProject, CanvasLayout};

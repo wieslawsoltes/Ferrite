@@ -86,7 +86,17 @@ export function createReactAdapter<R extends {createElement: (...args: never[]) 
 };
 
 export interface NativeUIOptions { runtime?: RuntimeAPI; onError?: ((error: Error) => void) | null; maxBytes?: number; maxMemoryBytes?: number; }
-export interface NativeUISession { mount(bytes: Uint8Array, container: Element): Promise<NativeUISession>; validate(bytes: Uint8Array): Uint8Array; flush(): unknown; inspect(): unknown; dispose(): void; subscribe(listener: (event: {type: string; snapshot?: unknown}) => void): () => void; }
+export interface NativeUISnapshot {
+  format: 'ferrite-native-ui-inspection-v1'; backend: 'native-wasm'; calls: number;
+  components?: number; hooks?: number; memoryBytes: number; disposed: boolean; faulted: boolean;
+  root: unknown; states: []; debugger: {supported: false; boundary: string};
+}
+export interface NativeUISession {
+  mount(bytes: Uint8Array, container: Element): Promise<NativeUISession>;
+  validate(bytes: Uint8Array): Uint8Array; flush(): NativeUISnapshot; inspect(): NativeUISnapshot;
+  dispose(): void;
+  subscribe(listener: (event: {type: 'commit'; snapshot: NativeUISnapshot} | {type: 'error'; message: string}) => void): () => void;
+}
 export function createNativeWasmHost(runtime: RuntimeAPI, options?: NativeUIOptions): NativeUISession;
 export function mountNativeUI(bytes: Uint8Array, container: Element, options?: NativeUIOptions): Promise<NativeUISession>;
 export function exportNativeHTML(bytes: Uint8Array, options?: {title?: string; css?: string; channel?: string | null}): string;

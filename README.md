@@ -36,10 +36,24 @@ Rust script tags. Public typed JSX/component/DOM adapters support source-level m
 of React-style function components. See the [Rust UI guide](docs/rust-ui.md) and
 [embedding example](examples/ui-embed.html).
 
-**Compatibility remains explicit:** Ferrite's browser compiler is a Rust subset, and
-this independent synchronous UI runtime is not full React compatibility. Native Cargo,
-React internals, SSR/hydration and arbitrary third-party crates/components are not silently
-emulated. The guide lists the delivered API, safety boundaries and remaining work.
+The [compatibility layer](docs/ui-compatibility.md) adds generic owned Rust hooks,
+structured events, multi-file design, persisted CSS/projects, snapped canvas geometry,
+SSR/hydration, reverse MIR event stepping and an adapter to **actual React** for ecosystem
+components and concurrent rendering. The [standard-Rust UI workspace](docs/native-rust-ui.md)
+compiles with installed Cargo/rustc to Wasm. Studio can load that binary and export one
+offline HTML file; no bridge is needed to run the exported application.
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo test --manifest-path rust-ui/Cargo.toml --offline --locked
+npm run build:ui:native -- --trust-projects --offline
+# Open artifacts/native-ui/app.html, or load app.wasm in Rust UI Studio.
+```
+
+The browser compiler remains a Rust subset. Native Cargo and the real-React adapter are
+explicit compatibility paths, not silent fallbacks. Reverse debugging stops at external
+effects/committed DOM boundaries. Native binaries do not expose Ferrite MIR source editing
+or native heap inspection. See the guides for tested behavior and limitations.
 
 ## Coding agents, Rust MCP and terminals
 

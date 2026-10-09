@@ -119,9 +119,9 @@ export class PatternAnalyzer {
         return;
       }
       case 'structPattern': {
-        const constructor = this.analyzer.index.constructorFor(pattern.name, context.instance.fn.module, pattern);
+        const constructor = this.analyzer.index.constructorFor(pattern.name.startsWith('Self::') ? context.instance.fn.owner + pattern.name.slice(4) : pattern.name, context.instance.fn.module, pattern);
         if (constructor?.kind === 'enum') return EnumRecordAnalyzer.pattern(this.analyzer, pattern, constructor, type, context, mutable, bindings, names, reuse);
-        const shape = this.analyzer.index.resolve(this.analyzer.index.structs, T.application(this.analyzer.index.type(pattern.name, context.instance.fn.module)).name, context.instance.fn.module, pattern);
+        const shape = this.analyzer.index.resolve(this.analyzer.index.structs, T.application(this.analyzer.index.type(pattern.name, context.instance.fn.module, context.instance.fn.owner)).name, context.instance.fn.module, pattern);
         const app = T.application(type);
         if (app.name !== shape.name) throw new Diagnostic('E0308', `Pattern ${shape.name} does not match ${type}`, pattern.span);
         const substitution = new Map(shape.generics.map((g, i) => [g.name, app.args[i]]));
@@ -139,7 +139,7 @@ export class PatternAnalyzer {
         return;
       }
       case 'variantPattern': {
-        const constructor = this.analyzer.index.constructorFor(pattern.name === 'Self' ? context.instance.fn.owner : pattern.name, context.instance.fn.module, pattern);
+        const constructor = this.analyzer.index.constructorFor(pattern.name === 'Self' ? context.instance.fn.owner : pattern.name.startsWith('Self::') ? context.instance.fn.owner + pattern.name.slice(4) : pattern.name, context.instance.fn.module, pattern);
         const app = T.application(type);
         if (!constructor || constructor.owner.name !== app.name) throw new Diagnostic('E0532', `Pattern ${pattern.name} does not match ${type}`, pattern.span);
         if (constructor.kind === 'struct') {

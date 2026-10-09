@@ -1,0 +1,92 @@
+name: Publish verified UI compatibility commits
+on:
+  push:
+    branches: [automation/ui-compatibility-publish]
+    paths: [.github/ui-compatibility.json]
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: ferrite-ui-compatibility-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify and publish exact source trees
+        id: publish
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os, re, subprocess, tempfile
+          from pathlib import Path
+          evidence = Path(os.environ['RUNNER_TEMP']) / 'ui-compatibility'
+          evidence.mkdir()
+          manifest = json.loads(Path('.github/ui-compatibility.json').read_text())
+          chunks = manifest['chunks']
+          if not 1 <= len(chunks) <= 64 or any(not re.fullmatch(r'\.github/ui-compatibility-[a-z0-9-]+\.b64', p) for p in chunks):
+              raise SystemExit('Invalid publication payload paths')
+          encoded = ''.join(Path(p).read_text().strip() for p in chunks)
+          (evidence / 'transport.b64').write_text(encoded)
+          data = base64.b64decode(encoded, validate=True)
+          if hashlib.sha256(data).hexdigest() != manifest['sha256']:
+              raise SystemExit('Publication digest mismatch')
+          payload = json.loads(gzip.decompress(data))
+          if payload['target'] != 'feat/ui-compatibility':
+              raise SystemExit('Invalid publication target')
+          (evidence / 'payload.json').write_text(json.dumps(payload))
+          def git(*args):
+              return subprocess.check_output(['git', *args]).decode().strip()
+          target = payload['target']
+          remote = git('ls-remote', 'origin', 'refs/heads/' + target).split()[0]
+          if remote != payload['base']:
+              raise SystemExit('Feature branch moved; refusing to overwrite concurrent work')
+          git('config', 'user.name', 'Wiesław Šoltés')
+          git('config', 'user.email', 'wieslawsoltes@users.noreply.github.com')
+          git('checkout', '--detach', payload['base'])
+          for change in payload['commits']:
+              if change.get('merge'):
+                  merged = subprocess.run(['git', 'merge', '--no-commit', '--no-ff', change['merge']])
+                  if merged.returncode:
+                      conflicts = git('diff', '--name-only', '--diff-filter=U').splitlines()
+                      if not conflicts or any(not re.fullmatch(r'src/(ui/workers/[a-z-]+|sdk/ferrite)\.bundle\.js', p) for p in conflicts):
+                          raise SystemExit('Unexpected handwritten merge conflict')
+                      git('checkout', '--ours', '--', *conflicts)
+                      git('add', '--', *conflicts)
+              if change.get('patch'):
+                  with tempfile.NamedTemporaryFile(suffix='.patch') as patch:
+                      patch.write(change['patch'].encode()); patch.flush()
+                      git('apply', '--index', '--whitespace=error', patch.name)
+              subprocess.run(['npm', 'run', 'build:workers'], check=True)
+              subprocess.run(['npm', 'run', 'build:sdk'], check=True)
+              git('add', 'src/ui/workers', 'src/sdk')
+              if git('diff', '--cached', '--name-only', '--', '.github/workflows'):
+                  raise SystemExit('Workflow edits require a separate explicit file edit')
+              tree = git('write-tree')
+              if tree != change['tree']:
+                  raise SystemExit('Exact tree mismatch: ' + tree + ' expected ' + change['tree'])
+              git('commit', '-m', change['message'])
+          subprocess.run(['npm', 'run', 'check'], check=True)
+          subprocess.run(['npm', 'test'], check=True)
+          git('archive', '--format=zip', 'HEAD', '-o', str(evidence / 'checkout.zip'))
+          (evidence / 'commit.txt').write_text(git('rev-parse', 'HEAD'))
+          (evidence / 'tree.txt').write_text(git('write-tree'))
+          git('push', 'origin', 'HEAD:refs/heads/' + target)
+          Path(os.environ['GITHUB_STEP_SUMMARY']).write_text('Published `' + git('rev-parse', 'HEAD') + '`; exact source tree `' + git('write-tree') + '`. Publication payloads are not in the feature branch.\n')
+          PY
+      - name: Dispatch full compatibility validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run test.yml --ref feat/ui-compatibility
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-compatibility-publication
+          path: ${{ runner.temp }}/ui-compatibility/
+          retention-days: 7

@@ -25,11 +25,13 @@ const empty = Object.freeze([]);
  * modified. User and builtin identities cannot collide on a last path segment.
  * Cycle detection is iterative and independent of runtime impl availability. */
 export class TraitHierarchy {
-  constructor(index, {maxEdges = 65536, maxVisits = 1000000, maxEntries = 1024, maxCharacters = 4000000} = {}) {
-    for (const value of [maxEdges, maxVisits, maxEntries, maxCharacters])
+  constructor(index, {maxEdges = 65536, maxVisits = 1000000, maxEntries = 1024, maxCharacters = 4000000, maxQueryVisits = 200000, maxTotalVisits = 4000000} = {}) {
+    for (const value of [maxEdges, maxVisits, maxEntries, maxCharacters, maxQueryVisits, maxTotalVisits])
       if (!Number.isSafeInteger(value) || value < 0) throw new RangeError('Trait hierarchy limits must be nonnegative safe integers');
     this.index = index; this.direct = new Map(); this.cache = new Map();
     this.maxEdges = maxEdges; this.maxVisits = maxVisits; this.maxEntries = maxEntries; this.maxCharacters = maxCharacters;
+    this.maxQueryVisits = maxQueryVisits; this.maxTotalVisits = maxTotalVisits; this.queryVisits = 0;
+    this.membership = new WeakMap(); this.ancestorLists = new WeakMap();
     this.edges = 0; this.visits = 0; this.hits = 0; this.characters = 0;
     for (const trait of index.traits.values()) {
       const parents = new Set();
@@ -39,6 +41,8 @@ export class TraitHierarchy {
           'Trait-level predicates currently require Self as their subject', predicate.span);
         for (const bound of predicate.bounds) parents.add(this.canonical(bound, trait.module, predicate));
       }
+      for (const parent of parents) if (/^(Fn|FnMut|FnOnce)\(/.test(parent)) throw new Diagnostic('F_SUPERTRAIT_CALLABLE',
+        'Callable supertraits require their associated output-type contract', trait.span);
       this.edges += parents.size;
       if (this.edges > maxEdges) this.limit(trait);
       this.direct.set(trait.name, Object.freeze([...parents]));
@@ -83,9 +87,14 @@ export class TraitHierarchy {
   }
   /** Includes the trait itself; deterministic preorder deduplicates diamonds. */
   closure(identity) {
-    if (this.cache.has(identity)) { this.hits++; return this.cache.get(identity); }
+    if (this.cache.has(identity)) {
+      this.hits++; const value = this.cache.get(identity);
+      this.cache.delete(identity); this.cache.set(identity, value); return value;
+    }
     const seen = new Set(), pending = [identity], result = [];
+    let queryVisits = 0;
     while (pending.length) {
+      if (++queryVisits > this.maxQueryVisits || ++this.queryVisits > this.maxTotalVisits) this.limit(this.index.traits.get(identity));
       const next = pending.pop(); this.tick(this.index.traits.get(identity));
       if (seen.has(next)) continue;
       seen.add(next); result.push(next);
@@ -101,6 +110,17 @@ export class TraitHierarchy {
       this.cache.set(identity, value); this.characters += cost;
     }
     return value;
+  }
+  ancestors(identity) {
+    const value = this.closure(identity);
+    if (!this.ancestorLists.has(value)) this.ancestorLists.set(value, Object.freeze(value.slice(1)));
+    return this.ancestorLists.get(value);
+  }
+  implies(child, parent) {
+    if (child === parent) return true;
+    const value = this.closure(child);
+    if (!this.membership.has(value)) this.membership.set(value, new Set(value));
+    return this.membership.get(value).has(parent);
   }
   snapshot() { return {traits: this.direct.size, edges: this.edges, visits: this.visits, cacheHits: this.hits, cacheEntries: this.cache.size, cacheCharacters: this.characters}; }
 }

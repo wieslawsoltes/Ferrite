@@ -110,9 +110,9 @@ export class ImplementationResolver {
     if ([...mapping.values()].some(type => type === null)) return true;
     const normalize = type => this.index.type(T.substitute(type, mapping), entry.impl.module, T.substitute(entry.target, mapping));
     for (const parameter of entry.impl.generics ?? []) for (const bound of parameter.bounds)
-      if (!prove(mapping.get(parameter.name), normalize(bound))) return false;
+      if (!prove(mapping.get(parameter.name), this.traits.hierarchy.canonical(normalize(bound), entry.impl.module, entry.impl))) return false;
     for (const predicate of entry.impl.predicates ?? []) for (const bound of predicate.bounds)
-      if (!prove(normalize(predicate.type), normalize(bound))) return false;
+      if (!prove(normalize(predicate.type), this.traits.hierarchy.canonical(normalize(bound), entry.impl.module, entry.impl))) return false;
     return true;
   }
   lookup(type, method, module, node, context=null, boundTraits=null) {

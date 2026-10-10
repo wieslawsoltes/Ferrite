@@ -1,3 +1,4 @@
+import {supertraitCases as recoveredSupertraitCases, supertraitCompileFailCases as recoveredSupertraitCompileFailCases} from './recovered-supertraits.js';
 import {supertraitCases, supertraitCompileFailCases} from './supertraits.js';
 import {receiverReborrowCases,receiverReborrowCompileFailCases,receiverReborrowPanicCases} from './receiver-reborrows.js';
 import {traitHardeningCases,traitHardeningCompileFailCases} from './trait-hardening.js';
@@ -129,9 +130,9 @@ export const runtimePanicCases = [
   ['explicit panic', 'fn main(){panic!("expected");}', 'R_PANIC'],
 ];
 export const languageCases = [
-  ...supertraitCases, ...uiGenericCases, ...genericImplCases, ...primitiveCases, ...sequenceCases, ...constantCases, ...controlCases, ...floatCases, ...destructuringCases, ...nominalCases, ...enumRecordCases, ...callableCases, ...discriminantCases,
+  ...recoveredSupertraitCases, ...supertraitCases, ...uiGenericCases, ...genericImplCases, ...primitiveCases, ...sequenceCases, ...constantCases, ...controlCases, ...floatCases, ...destructuringCases, ...nominalCases, ...enumRecordCases, ...callableCases, ...discriminantCases,
 ].map(([name,source,output])=>({name,source,output,kind:'run'})).concat(
-  [...supertraitCompileFailCases, ...uiGenericCompileFailCases, ...genericImplCompileFailCases, ...compileFailCases, ...floatCompileFailCases, ...destructuringCompileFailCases, ...nominalCompileFailCases, ...enumRecordCompileFailCases, ...callableCompileFailCases, ...discriminantCompileFailCases].map(([name,source])=>({name,source,kind:'compile-fail'})),
+  [...recoveredSupertraitCompileFailCases, ...supertraitCompileFailCases, ...uiGenericCompileFailCases, ...genericImplCompileFailCases, ...compileFailCases, ...floatCompileFailCases, ...destructuringCompileFailCases, ...nominalCompileFailCases, ...enumRecordCompileFailCases, ...callableCompileFailCases, ...discriminantCompileFailCases].map(([name,source])=>({name,source,kind:'compile-fail'})),
   [...runtimePanicCases, ...floatPanicCases, ...destructuringPanicCases, ...nominalPanicCases, ...enumRecordPanicCases, ...callablePanicCases].map(([name,source,code,output])=>({name,source,code,output,kind:'panic'})),
 );
 

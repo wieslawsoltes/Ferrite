@@ -1,3 +1,4 @@
+import {literalTextValue} from './DesignerLiterals.js';
 import {Dom} from '../views/Dom.js';
 import {CanvasLayout} from '../../ui-framework/CanvasLayout.js';
 
@@ -30,14 +31,16 @@ export function renderDesignerProperties(s) {
   actions.append(s.button('Undo edit',async()=>{if(s.model.undoTransaction()){s.model.save();await s.build();}},'reset'));s.properties.append(actions);
   const content=section('Content');
   if(node.kind!=='element'){
-    const value=s.input('Selected text',node.kind==='text'?node.value:'');const apply=()=>s.edit({op:'setText',node:node.id,value:value.value});applyOnEnter(value,apply);
+    const literal=literalTextValue(node);
+    if(literal===undefined)content.append(Dom.element('p','studio-hint','This is a Rust expression. Set text replaces it with a literal; use Source to edit the expression.'));
+    const value=s.input('Selected text',literal??'');const apply=()=>s.edit({op:'setText',node:node.id,value:value.value});applyOnEnter(value,apply);
     content.append(s.field('Literal text',value),s.button('Set text',apply));return;
   }
   if(node.tag){
     const tag=s.input('Element tag',node.tag),row=Dom.element('div','studio-inline-field'),apply=()=>s.edit({op:'setTag',node:node.id,value:tag.value});applyOnEnter(tag,apply);row.append(s.field('Tag',tag),s.button('Change tag',apply));content.append(row);
   }
-  const text=node.children?.length===1&&node.children[0].kind==='text'?node.children[0]:null;
-  if(text){const input=s.input('Element text',text.value),apply=()=>s.edit({op:'setText',node:text.id,value:input.value});applyOnEnter(input,apply);content.append(s.field('Text',input),s.button('Apply text',apply));}
+  const text=node.children?.length===1?node.children[0]:null,literal=literalTextValue(text);
+  if(text&&literal!==undefined){const input=s.input('Element text',literal),apply=()=>s.edit({op:'setText',node:text.id,value:input.value});applyOnEnter(input,apply);content.append(s.field('Text',input),s.button('Apply text',apply));}
   if(node.tag){
     const attributes=section('Attributes');
     for(const attribute of node.attributes){

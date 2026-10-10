@@ -39,7 +39,7 @@ export class UIStudio {
       for(const session of this.sessions.values())session.setPresentation(session===owner&&mode!=='code',session===owner?mode:session.root.dataset.mode);
       for(const [value,button] of this.modes){button.disabled=!owner&&value!=='code'&&value!=='split';button.setAttribute('aria-pressed',String(value===mode));}
       this.orientation.hidden=mode!=='split';const orientationLabel=state.orientation==='down'?'Split Right':'Split Down';this.orientation.querySelector('span').textContent=orientationLabel;this.orientation.setAttribute('aria-label',orientationLabel);this.orientation.title=orientationLabel;
-      this.splitter.refresh();if(owner&&build&&mode!=='code'){this.ensurePreview(owner);if(owner!==previous)this.focusDocument();}
+      this.splitter.refresh();if(owner&&build)owner.publishInspection();if(owner&&build&&mode!=='code'){this.ensurePreview(owner);if(owner!==previous)this.focusDocument();}
       if(this.secondary){this.secondary.root.hidden=!!owner;if(!Object.hasOwn(this.model.files,this.secondary.path))this.closeSecondary();else{this.secondary.editor.open(this.secondary.path);this.refreshSecondaryFiles();}}
     }finally{this.syncing=false;}
   }

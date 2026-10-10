@@ -6,7 +6,7 @@ export class DockLayout {
     this.root = root; this.storage = storage; this.definitions = definitions; this.panels = new Map(definitions.map(p => [p.id, p]));
     this.initial = {left: ['project','structure','repositories','crates','cargo'], right: ['compiler','profile','native-artifacts','language','agent','ui-studio'], bottom: ['run','terminal','search','problems','debugger','tests']};
     this.layout = structuredClone(this.initial); this.active = {left:'project',right:'compiler',bottom:'run'};
-    this.sizes = {left:245,right:560,bottom:235}; this.hidden = new Set(); this.floating = new Set(); this.homes = new Map(); this.floatBoxes = new Map();
+    this.collapsedRegions=new Set(); this.sizes = {left:245,right:560,bottom:235}; this.hidden = new Set(); this.floating = new Set(); this.homes = new Map(); this.floatBoxes = new Map();
     this.restore(); this.regions = new Map();
     for (const side of ['left','right','bottom']) {
       const host = root.querySelector(`[data-dock="${side}"]`), tabs = Dom.element('div','tool-tabs'), body = Dom.element('div','tool-body');
@@ -32,12 +32,13 @@ export class DockLayout {
       }
       this.layout=value.layout;
       for(const side of ['left','right','bottom']){if(this.layout[side].includes(value.active?.[side]))this.active[side]=value.active[side];const n=value.sizes?.[side];if(Number.isFinite(n))this.sizes[side]=Math.max(side==='bottom'?130:180,Math.min(side==='bottom'?600:850,n));}
-      this.hidden=new Set((value.hidden??[]).filter(id=>this.panels.has(id)));
+      this.hidden=new Set((value.hidden??[]).filter(id=>this.panels.has(id)));this.collapsedRegions=new Set((value.collapsedRegions??[]).filter(side=>['left','right','bottom'].includes(side)));
     } catch { /* Invalid saved layouts cannot prevent startup. */ }
   }
-  save(){try{this.storage?.setItem('ferrite.layout.v3',JSON.stringify({layout:this.layout,active:this.active,sizes:this.sizes,hidden:[...this.hidden]}));}catch{}}
+  save(){try{this.storage?.setItem('ferrite.layout.v3',JSON.stringify({layout:this.layout,active:this.active,sizes:this.sizes,hidden:[...this.hidden],collapsedRegions:[...this.collapsedRegions]}));}catch{}}
   side(id){return Object.keys(this.layout).find(side=>this.layout[side].includes(id))??'right';}
-  open(id){if(!this.panels.has(id))return;this.hidden.delete(id);if(!this.floating.has(id)&&((window.innerWidth<620&&this.side(id)!=='bottom')||(window.innerWidth<900&&this.side(id)==='left'))){this.float(id);return;}if(this.floating.has(id)){this.floatBoxes.get(id)?.focus();return;}this.active[this.side(id)]=id;this.render();}
+  collapse(side){if(this.collapsedRegions.has(side))return;this.collapsedRegions.add(side);this.render();}
+  open(id){if(!this.panels.has(id))return;this.collapsedRegions.delete(this.side(id));this.hidden.delete(id);if(!this.floating.has(id)&&((window.innerWidth<620&&this.side(id)!=='bottom')||(window.innerWidth<900&&this.side(id)==='left'))){this.float(id);return;}if(this.floating.has(id)){this.floatBoxes.get(id)?.focus();return;}this.active[this.side(id)]=id;this.render();}
   toggle(id){
     if(!this.panels.has(id))return;
     // An active tab can still be invisible because the responsive layout
@@ -45,10 +46,10 @@ export class DockLayout {
     const host=this.regions.get(this.side(id))?.host;
     const collapsed=host&&!host.getClientRects().length;
     if(this.floating.has(id)){this.floatBoxes.get(id)?.focus();return;}
-    if(collapsed||this.hidden.has(id)||this.active[this.side(id)]!==id)this.open(id);
+    if(collapsed||this.collapsedRegions.has(this.side(id))||this.hidden.has(id)||this.active[this.side(id)]!==id)this.open(id);
     else{this.hidden.add(id);this.render();}
   }
-  move(id,side){if(!this.regions.has(side))return;this.floating.delete(id);this.floatBoxes.get(id)?.remove();this.floatBoxes.delete(id);for(const key of Object.keys(this.layout))this.layout[key]=this.layout[key].filter(p=>p!==id);this.layout[side].push(id);this.hidden.delete(id);this.active[side]=id;this.render();}
+  move(id,side){if(!this.regions.has(side))return;this.collapsedRegions.delete(side);this.floating.delete(id);this.floatBoxes.get(id)?.remove();this.floatBoxes.delete(id);for(const key of Object.keys(this.layout))this.layout[key]=this.layout[key].filter(p=>p!==id);this.layout[side].push(id);this.hidden.delete(id);this.active[side]=id;this.render();}
   float(id){
     if(this.floating.has(id))return;this.floating.add(id);const panel=this.panels.get(id),box=Dom.element('section','floating-tool'),header=Dom.element('div','floating-title');
     box.tabIndex=-1;box.style.left=Math.max(8,Math.min(window.innerWidth*.35,window.innerWidth-620))+'px';box.style.top=Math.min(140,window.innerHeight*.15)+'px';
@@ -61,7 +62,7 @@ export class DockLayout {
   }
   render(){
     for(const [side,{host,tabs,body}] of this.regions){
-      const ids=this.layout[side].filter(id=>!this.hidden.has(id)&&!this.floating.has(id));
+      const ids=this.collapsedRegions.has(side)?[]:this.layout[side].filter(id=>!this.hidden.has(id)&&!this.floating.has(id));
       if(!ids.includes(this.active[side]))this.active[side]=ids[0]??null;
       host.hidden=ids.length===0;rootStyle(this.root,side,ids.length?this.sizes[side]:0);this.root.querySelector(`[data-resize="${side}"]`).hidden=ids.length===0;
       tabs.replaceChildren();body.replaceChildren();
@@ -77,6 +78,6 @@ export class DockLayout {
     const end=()=>{start=null;document.body.classList.remove('resizing');this.save();};for(const name of ['pointerup','pointercancel','lostpointercapture'])handle.addEventListener(name,end);
     handle.addEventListener('keydown',e=>{const increase=side==='left'?'ArrowRight':side==='bottom'?'ArrowUp':'ArrowLeft';const decrease=side==='left'?'ArrowLeft':side==='bottom'?'ArrowDown':'ArrowRight';if([increase,decrease].includes(e.key)){e.preventDefault();change(this.sizes[side]+(e.key===increase?20:-20));this.save();}});
   }
-  reset(){for(const box of this.floatBoxes.values())box.remove();this.floatBoxes.clear();this.floating.clear();this.hidden.clear();this.layout=structuredClone(this.initial);this.active={left:'project',right:'compiler',bottom:'run'};this.sizes={left:245,right:560,bottom:235};this.render();}
+  reset(){this.collapsedRegions.clear();for(const box of this.floatBoxes.values())box.remove();this.floatBoxes.clear();this.floating.clear();this.hidden.clear();this.layout=structuredClone(this.initial);this.active={left:'project',right:'compiler',bottom:'run'};this.sizes={left:245,right:560,bottom:235};this.render();}
 }
 function rootStyle(root,side,size){root.style.setProperty(`--${side}-size`,`${size}px`);}

@@ -1,335 +1,109 @@
 import {Dom} from '../views/Dom.js';
-import {BrowserCompiler} from '../../agent/browser/BrowserCompiler.js';
+import {PaneSplitter} from '../views/PaneSplitter.js';
+import {CodeEditor} from '../views/CodeEditor.js';
+import {SelectionModel} from '../model/SelectionModel.js';
+import {UIStudioSession} from './UIStudioSession.js';
 import {UIProject} from '../../ui-framework/UIProject.js';
-import {SourceDesigner} from '../../ui-framework/SourceDesigner.js';
-import {UI_SAMPLES, UI_SAMPLE_CSS} from '../../ui-framework/Samples.js';
-import {exportNativeHTML, decodeNativeBase64} from '../../ui-framework/NativeWasm.js';
-import {PreviewChannel} from './PreviewChannel.js';
 
-/** IDE projection over real source files, bounded compilation and an isolated app. */
+/** Document-scoped designer host. Mounted inactive frames retain independent app state. */
 export class UIStudio {
   constructor(app) {
-    this.app = app; this.model = app.model; this.root = app.panels.get('ui-studio'); this.root.classList.add('ui-studio');
-    this.compiler = new BrowserCompiler(); this.file = 'src/app.ui.rs'; this.entryFile = this.file; this.project = null; this.savingProject = false; this.entry = 'app'; this.backend = 'javascript';
-    this.nativeAsset = null; this.selected = null; this.snapshot = null; this.artifact = null; this.generation = 0; this.compiledSource = null;
-    this.view();
-    this.preview = new PreviewChannel(this.frame, {onEvent: message => this.event(message)});
-    this.unsubscribe = this.model.subscribe(event => this.changed(event));
-    this.unselect = app.selection.subscribe(({span, origin}) => {
-      if (origin === 'ui-studio' || !span || span.file !== this.file || !this.designer) return;
-      const nodes = this.designer.nodes.filter(node => node.start <= span.start && node.end >= span.end);
-      nodes.sort((a, b) => a.end - a.start - (b.end - b.start)); if (nodes[0] && nodes[0].id !== this.selected) this.select(nodes[0].id, false);
-    });
-    const stored = Object.keys(this.model.files).find(file => file.endsWith('.rs') && Object.hasOwn(this.model.files, UIProject.manifestPath(file)));
-    if (stored) this.loadProject(stored);
-    this.refreshFiles(); this.refreshSource();
-  }
-  button(label, action, icon) {
-    return Dom.button(label, () => { Promise.resolve().then(action).catch(error => this.error(error)); }, {icon, className: 'studio-button'});
-  }
-  field(label, node) { const field = Dom.element('label', 'studio-field'); field.append(Dom.element('span', '', label), node); return field; }
-  input(label, value = '') { const node = Dom.element('input'); node.setAttribute('aria-label', label); node.value = value; return node; }
-  selectInput(label, values) {
-    const node = Dom.element('select'); node.setAttribute('aria-label', label);
-    for (const [value, title] of values) { const option = Dom.element('option', '', title); option.value = value; node.append(option); }
-    return node;
-  }
-  view() {
-    const header = Dom.element('div', 'studio-header'); header.append(Dom.element('strong', '', 'RUST UI STUDIO'), Dom.element('span', 'studio-badge', 'SOURCE ↔ DESIGN'));
-    const controls = Dom.element('div', 'studio-toolbar');
-    this.files = this.selectInput('UI source file', []); this.files.onchange = () => { this.file = this.files.value; this.model.open(this.file); this.selected = null; this.refreshSource({invalidate: false}); };
-    this.entryFiles = this.selectInput('UI project entry file', []); this.entryFiles.onchange = () => { try { this.loadProject(this.entryFiles.value); this.refreshFiles(); this.refreshSource(); } catch (error) { this.error(error); } };
-    this.backendSelect = this.selectInput('UI backend', [['javascript', 'JavaScript'], ['wasm', 'WebAssembly'], ['mir', 'MIR / trace']]);
-    this.backendSelect.onchange = () => { this.backend = this.backendSelect.value; this.saveProject(); this.markStale(); };
-    this.entryInput = this.input('UI entry function', 'app'); this.entryInput.onchange = () => { this.entry = this.entryInput.value; this.saveProject(); this.refreshSource(); };
-    controls.append(this.entryFiles, this.files, this.backendSelect, this.entryInput, this.button('Preview', () => this.build(), 'run'), this.button('Export HTML', () => this.download(), 'export'), this.button('Export hydrated HTML', () => this.download({hydrate: true}), 'export'));
-    this.nativeInput = Dom.element('input'); this.nativeInput.type = 'file'; this.nativeInput.accept = '.wasm,application/wasm'; this.nativeInput.hidden = true;
-    this.nativeInput.setAttribute('aria-label', 'Load trusted Cargo UI Wasm');
-    this.nativeInput.onchange = () => {
-      const file = this.nativeInput.files?.[0]; this.nativeInput.value = '';
-      if (!file) return;
-      if (file.size > 8 * 1024 * 1024) { this.error(Error('Native UI binaries are limited to 8 MiB')); return; }
-      const generation = this.generation;
-      file.arrayBuffer().then(buffer => {
-        if (generation !== this.generation) throw Error('Editor changed while loading the native binary');
-        return this.buildNative(new Uint8Array(buffer), {name: file.name});
-      }).catch(error => this.error(error));
-    };
-    controls.append(this.button('Load Cargo Wasm', () => this.nativeInput.click(), 'run'), this.nativeInput);
-    const samples = Dom.element('div', 'studio-toolbar'); samples.append(Dom.element('span', '', 'New example:'));
-    for (const name of Object.keys(UI_SAMPLES)) samples.append(this.button(name, () => this.createExample(name), 'plus'));
-    this.status = Dom.element('div', 'studio-status', 'Create an example or choose a Rust UI source file.'); this.status.setAttribute('role', 'status');
-    const workspace = Dom.element('div', 'studio-workspace');
-    const previewArea = Dom.element('div', 'studio-preview-area');
-    const previewBar = Dom.element('div', 'studio-toolbar');
-    this.pickButton = this.button('Pick element', () => this.pick(), 'fit');
-    this.viewport = this.selectInput('Preview width', [['100%', 'Responsive'], ['375px', 'Phone · 375'], ['768px', 'Tablet · 768'], ['1280px', 'Desktop · 1280']]);
-    this.viewport.onchange = () => { this.frame.style.width = this.viewport.value; this.saveProject(); };
-    this.layoutMode = this.selectInput('Canvas editing', [['off', 'Run application'], ['move', 'Move element'], ['resize', 'Resize element']]);
-    this.layoutMode.dataset.activeMode = 'off';
-    this.layoutMode.onchange = () => this.configureLayout().catch(error => this.error(error));
-    previewBar.append(this.pickButton, this.layoutMode, this.viewport, this.button('Inspect', () => this.inspect(), 'tree'));
-    const canvas = Dom.element('div', 'studio-canvas'); this.frame = Dom.element('iframe', 'studio-preview'); this.frame.title = 'Sandboxed Rust UI preview'; canvas.append(this.frame);
-    previewArea.append(previewBar, canvas);
-    const inspector = Dom.element('div', 'studio-inspector');
-    this.outline = Dom.element('div', 'studio-outline'); this.outline.setAttribute('role', 'tree'); this.outline.setAttribute('aria-label', 'UI source outline');
-    this.properties = Dom.element('div', 'studio-properties'); inspector.append(this.outline, this.properties); workspace.append(previewArea, inspector);
-    const sourceDetails = Dom.element('details', 'studio-details'); sourceDetails.append(Dom.element('summary', '', 'Rust source · synchronized with the editor'));
-    this.source = Dom.element('textarea', 'studio-source'); this.source.setAttribute('aria-label', 'UI Rust source'); this.source.spellcheck = false;
-    this.source.oninput = () => { if (Object.hasOwn(this.model.files, this.file)) this.model.update(this.file, this.source.value); }; sourceDetails.append(this.source);
-    const stylesDetails = Dom.element('details', 'studio-details'); stylesDetails.append(Dom.element('summary', '', 'Application CSS'));
-    this.css = Dom.element('textarea', 'studio-source'); this.css.setAttribute('aria-label', 'UI application CSS'); this.css.value = UI_SAMPLE_CSS; this.css.oninput = () => { this.saveProject(); this.markStale(); }; stylesDetails.append(this.css);
-    const debugDetails = Dom.element('details', 'studio-details'); debugDetails.open = true; debugDetails.append(Dom.element('summary', '', 'Live state / event debugger'));
-    const debugBar = Dom.element('div', 'studio-toolbar');
-    for (const [label, command, icon] of [['Arm events', 'arm', 'debug'], ['Instruction', 'step', 'step'], ['Source line', 'step-line', 'line'], ['Back instruction', 'back', 'step'], ['Back line', 'back-line', 'line'], ['Restart event', 'restart', 'debug'], ['Continue', 'continue', 'run'], ['Disarm', 'stop', 'stop']])
-      debugBar.append(this.button(label, () => this.debug(command), icon));
-    this.states = Dom.element('div', 'studio-states'); this.debugOutput = Dom.element('pre', 'studio-debug');
-    debugDetails.append(debugBar, this.states, this.debugOutput);
-    this.root.append(header, controls, samples, this.status, workspace, sourceDetails, stylesDetails, debugDetails);
-  }
-  refreshFiles() {
-    const before = this.file; this.files.replaceChildren(); this.entryFiles.replaceChildren();
-    for (const path of Object.keys(this.model.files).filter(path => path.endsWith('.rs'))) { const option = Dom.element('option', '', path); option.value = path; this.files.append(option); this.entryFiles.append(option.cloneNode(true)); }
-    this.files.value = before; this.entryFiles.value = this.entryFile;
-  }
-  refreshSource({preserve = false, invalidate = true} = {}) {
-    const source = this.model.files[this.file]; this.source.disabled = typeof source !== 'string';
-    if (this.source.value !== (source ?? '')) this.source.value = source ?? '';
-    if (source === this.designer?.source && preserve) return;
-    if (invalidate) this.markStale();
-    try {
-      this.designer = typeof source === 'string' ? new SourceDesigner(source, {file: this.file, entry: this.entry, revision: this.model.revision, validate: false, files: this.model.files, entryFile: this.entryFile}) : null;
-      if (!this.designer?.index.has(this.selected)) this.selected = this.designer?.nodes.find(node => node.kind === 'element')?.id ?? null;
-      this.renderOutline(); this.renderProperties();
-    } catch (error) { this.designer = null; this.outline.replaceChildren(); this.properties.replaceChildren(); this.error(error); }
-  }
-  loadProject(file) {
-    this.project = UIProject.load(this.model.files, file, {css: UI_SAMPLE_CSS}); this.entryFile = file; this.file = file;
-    const settings = this.project.settings; this.entry = settings.entry; this.backend = settings.backend;
-    this.entryInput.value = this.entry; this.backendSelect.value = this.backend; this.css.value = this.project.css;
-    this.viewport.value = settings.viewport; this.frame.style.width = settings.viewport;
-  }
-  saveProject() {
-    if (!Object.hasOwn(this.model.files, this.entryFile) || this.savingProject) return;
-    try {
-      const project = UIProject.load(this.model.files, this.entryFile, {css: this.css.value});
-      const changes = project.changes({entry: this.entry, backend: this.backend, viewport: this.viewport.value}, this.css.value);
-      this.savingProject = true; this.model.applyWorkspaceTransaction(changes); this.model.save();
-      this.project = UIProject.load(this.model.files, this.entryFile);
-    } catch (error) { this.error(error); } finally { this.savingProject = false; }
-  }
-  changed(event) {
-    if (['files', 'replace'].includes(event.kind)) this.refreshFiles();
-    if (!['edit', 'files', 'replace'].includes(event.kind)) return;
-    this.markStale();
-    if (!this.savingProject && this.project && Object.hasOwn(this.model.files, this.entryFile)) {
-      try {
-        const project = UIProject.load(this.model.files, this.entryFile, {css: this.css.value});
-        this.project = project; this.css.value = project.css;
-        this.entry = project.settings.entry; this.backend = project.settings.backend;
-        this.entryInput.value = this.entry; this.backendSelect.value = this.backend;
-        this.viewport.value = project.settings.viewport; this.frame.style.width = project.settings.viewport;
-      } catch (error) { this.error(error); }
-    }
-    this.refreshSource({preserve: true, invalidate: false});
-  }
-  markStale() {
-    this.generation++; this.active?.abort(); this.nativeAsset = null; this.artifact = null; this.snapshot = null; this.renderState();
-    this.status.textContent = 'Source changed · Preview to compile. The previous preview is read-only to tooling.'; this.status.dataset.kind = 'stale';
-  }
-  error(error) {
-    if (error.name === 'AbortError') return;
-    this.status.dataset.kind = 'error'; this.status.textContent = `${error.code ? error.code + ': ' : ''}${error.message}`;
-    if (error.span?.file === this.file) this.app.selection.select(error.span, 'ui-studio', this.model.revision);
-  }
-  async createExample(name) {
-    if (!Object.hasOwn(UI_SAMPLES, name)) throw Error('Unknown UI example');
-    let file = `src/${name}.ui.rs`, n = 1; while (Object.hasOwn(this.model.files, file)) file = `src/${name}-${++n}.ui.rs`;
-    this.file = this.entryFile = file; this.entry = 'app'; this.entryInput.value = 'app'; this.model.create(file, UI_SAMPLES[name]);
-    this.loadProject(file); this.saveProject();
-    this.refreshFiles(); this.refreshSource(); return this.build();
-  }
-  async build({signal} = {}) {
-    this.nativeAsset = null; this.saveProject(); const source = this.model.files[this.entryFile]; if (typeof source !== 'string') throw Error('Create an example or select an existing UI source');
-    this.active?.abort(); this.active = new AbortController(); const combined = AbortSignal.any([this.active.signal, signal].filter(Boolean));
-    const generation = ++this.generation, file = this.entryFile, channel = this.preview.reset();
-    this.layoutMode.value = 'off'; this.layoutMode.dataset.activeMode = 'off'; this.frame.style.pointerEvents = ''; this.layoutMode.removeAttribute('aria-busy'); this.picking = false; this.pickButton.setAttribute('aria-pressed', 'false'); this.artifact = null;
-    this.status.textContent = 'Compiling typed Rust UI in a worker…'; this.status.dataset.kind = 'building';
-    const {artifact, html} = await this.compiler.compile({...this.model.files}, 'ui-compile', {file, entry: this.entry, backend: this.backend, css: this.css.value, channel}, combined);
-    combined.throwIfAborted(); if (generation !== this.generation || source !== this.model.files[file]) throw new DOMException('Stale UI build', 'AbortError');
-    this.artifact = artifact; this.compiledSource = source; this.compiledFile = file; this.compiledGeneration = generation;
-    this.snapshot = null; this.preview.load(html, channel); this.status.textContent = 'Loading isolated preview…'; this.renderOutline();
-    return {file, entry: artifact.entry, backend: this.backend, nodes: artifact.nodes.length, revision: this.model.revision};
-  }
-  buildNative(bytes, {name = 'native-app.wasm', signal} = {}) {
-    signal?.throwIfAborted();
-    if (typeof name !== 'string' || name.length > 200 || !name.endsWith('.wasm') || /[/\\\0]/.test(name)) throw Error('Invalid native Wasm filename');
-    // A loaded binary is never silently reinterpreted as editable browser-compiler source.
-    const channel = this.preview.reset(), html = exportNativeHTML(bytes, {title: name, css: this.css.value, channel});
-    this.active?.abort(); const generation = ++this.generation;
-    this.nativeAsset = {bytes: bytes.slice(), name}; this.compiledGeneration = generation;
-    this.artifact = {format: 'ferrite-native-ui-v1', nodes: []}; this.snapshot = null;
-    this.selected = null; this.picking = false; this.layoutMode.value = 'off'; this.layoutMode.dataset.activeMode = 'off'; this.frame.style.pointerEvents = ''; this.layoutMode.removeAttribute('aria-busy'); this.pickButton.setAttribute('aria-pressed', 'false');
-    this.outline.replaceChildren(); this.properties.replaceChildren();
-    this.app.dock.open('ui-studio'); this.preview.load(html, channel); this.renderState();
-    this.status.dataset.kind = 'building'; this.status.textContent = 'Loading trusted rustc Wasm in an isolated origin…';
-    return {backend: 'native-wasm', name, bytes: bytes.length, revision: this.model.revision, sourceEditing: false, mirDebugging: false};
-  }
-  assertSourcePreview() { if (this.nativeAsset) throw Error('Native Cargo binaries support live inspection and export. Source design and MIR stepping require a browser-compiler project.'); }
-  assertLive() { if (!this.artifact || this.compiledGeneration !== this.generation || !this.nativeAsset && this.compiledSource !== this.model.files[this.entryFile]) throw Error('UI preview is stale; compile the current source first'); }
-  async inspect(signal) { this.assertLive(); const snapshot = await this.preview.request('inspect', {}, {signal}); this.snapshot = snapshot; this.renderState(); return this.state(); }
-  state() { return {file: this.file, entryFile: this.entryFile, stylesheet: this.project?.settings.stylesheet, entry: this.entry, revision: this.model.revision, selected: this.selected, backend: this.nativeAsset ? 'native-wasm' : this.backend, nativeArtifact: this.nativeAsset?.name, stale: !this.artifact, snapshot: this.snapshot}; }
-  event(message) {
-    // A retained older preview cannot navigate or overwrite a newer source revision.
-    if (!this.artifact) return;
-    if (message.event === 'error') { this.error(Object.assign(Error(message.error?.message ?? 'Preview error'), message.error)); return; }
-    if (message.event === 'layout') { this.assertLive(); this.select(message.id); this.edit({op: 'setLayout', node: message.id, rectangle: message.rectangle, grid: 1, snap: false}).catch(error => this.error(error)); return; }
-    if (message.event === 'select') { if (this.artifact) this.select(message.id); return; }
-    if (message.event === 'ready' || message.event === 'snapshot') {
-      this.snapshot = message.snapshot; this.renderState();
-      if (message.event === 'ready' && this.artifact) { this.status.dataset.kind = 'ready'; this.status.textContent = this.nativeAsset ? `Live native rustc Wasm · ${this.nativeAsset.name} · isolated origin · inspection/export only` : `Live ${this.backend} preview · ${this.artifact.nodes.length} source nodes · isolated origin`; }
-    } else if (message.event.startsWith('debug-')) {
-      if (this.snapshot) this.snapshot.debugger = message.detail;
-      this.renderState(); const span = message.detail?.state?.next ?? message.detail?.state?.last?.span;
-      if (span?.file === this.file) this.app.selection.select(span, 'ui-studio', this.model.revision);
-    }
-  }
-  select(id, reveal = true) {
-    if (this.nativeAsset) throw Error('Native binaries have no browser-compiler source node identities');
-    const target = this.artifact?.nodes.find(node => node.id === id);
-    if (target?.span.file && target.span.file !== this.file) { this.file = target.span.file; this.refreshFiles(); this.refreshSource({invalidate: false}); }
-    const node = this.designer?.index.get(id); if (!node) throw Error('Selected source node no longer exists');
-    // Editor selection can echo the canvas/outline selection asynchronously.
-    // Replacing the same inspector would discard an in-progress attribute edit.
-    // Source changes rebuild properties through refreshSource instead.
-    if (this.selected !== id) {
-      this.selected = id; this.renderOutline(); this.renderProperties();
-    }
-    if (reveal) { this.model.open(this.file); this.app.selection.select(node.span, 'ui-studio', this.model.revision); }
-    return {id, span: node.span};
-  }
-  async configureLayout() {
-    this.assertLive(); this.assertSourcePreview();
-    const generation = this.generation, epoch = this.layoutEpoch = (this.layoutEpoch ?? 0) + 1;
-    const mode = this.layoutMode.value;
-    this.layoutMode.setAttribute('aria-busy', 'true'); this.frame.style.pointerEvents = 'none';
-    try {
-      const result = await this.preview.request('layout', {mode, grid: this.project?.settings.grid ?? 8, snap: this.project?.settings.snap ?? true});
-      if (epoch !== this.layoutEpoch || generation !== this.generation) return;
-      if (result?.mode !== mode) throw Error('Preview did not acknowledge the requested canvas mode');
-      this.layoutMode.dataset.activeMode = mode;
-      this.layoutMode.removeAttribute('aria-busy'); this.frame.style.pointerEvents = '';
-      return result;
-    } catch (error) {
-      // Old replies must not re-enable a newer preview or overwrite its status.
-      if (epoch !== this.layoutEpoch || generation !== this.generation) return;
-      this.layoutMode.removeAttribute('aria-busy');
-      this.layoutMode.dataset.activeMode = 'unknown';
-      // An uncertain mode must not turn a design gesture into an application click.
-      // Another explicit mode selection or a new preview restores interaction.
-      throw error;
-    }
-  }
-  async pick() {
-    this.assertLive(); this.assertSourcePreview(); this.picking = !this.picking; await this.preview.request('pick', {value: this.picking});
-    this.pickButton.setAttribute('aria-pressed', String(this.picking));
-  }
-  renderOutline() {
-    this.outline.replaceChildren(); if (!this.designer) return;
-    const render = (node, depth = 0) => {
-      const row = this.button(node.kind === 'element' ? `<${node.tag ?? 'Fragment'}>` : node.kind === 'text' ? node.value.slice(0, 35) : '{ Rust expression }', () => this.select(node.id));
-      row.dataset.sourceNode = node.id; row.setAttribute('role', 'treeitem'); row.setAttribute('aria-level', String(depth + 1)); row.setAttribute('aria-selected', String(node.id === this.selected));
-      row.style.paddingLeft = `${8 + depth * 12}px`; row.draggable = !!this.designer.parents.get(node.id);
-      row.ondragstart = event => { event.dataTransfer.setData('application/x-ferrite-ui-node', JSON.stringify({id: node.id, revision: this.model.revision})); };
-      row.ondragover = event => { if (node.kind === 'element' && event.dataTransfer.types.includes('application/x-ferrite-ui-node')) event.preventDefault(); };
-      row.ondrop = event => { event.preventDefault(); try { const value = JSON.parse(event.dataTransfer.getData('application/x-ferrite-ui-node')); if (value.revision !== this.model.revision) throw Error('Drag source is stale'); this.edit({op: 'move', node: value.id, parent: node.id}).catch(error => this.error(error)); } catch (error) { this.error(error); } };
-      this.outline.append(row); for (const child of node.children ?? []) render(child, depth + 1);
-    };
-    for (const node of this.designer.nodes.filter(node => !this.designer.parents.has(node.id))) render(node);
-  }
-  renderProperties() {
-    this.properties.replaceChildren(); const node = this.designer?.index.get(this.selected); if (!node) return;
-    this.properties.append(Dom.element('strong', '', `${node.kind} · line ${node.span.line}`));
-    const actions = Dom.element('div', 'studio-toolbar');
-    if (this.designer.parents.has(node.id)) actions.append(this.button('Duplicate', () => this.edit({op: 'duplicate', node: node.id})), this.button('Delete', () => this.edit({op: 'remove', node: node.id}), 'trash'));
-    actions.append(this.button('Undo edit', async () => { if (this.model.undoTransaction()) { this.model.save(); await this.build(); } })); this.properties.append(actions);
-    if (node.kind !== 'element') {
-      const value = this.input('Selected text', node.kind === 'text' ? node.value : '');
-      this.properties.append(this.field('Literal text', value), this.button('Set text', () => this.edit({op: 'setText', node: node.id, value: value.value}))); return;
-    }
-    if (node.tag) {
-      const tag = this.input('Element tag', node.tag); this.properties.append(this.field('Tag', tag), this.button('Change tag', () => this.edit({op: 'setTag', node: node.id, value: tag.value})));
-      for (const attribute of node.attributes) {
-        const value = this.input(`Attribute ${attribute.name}`, attribute.kind === 'boolean' ? 'true' : attribute.value);
-        const row = Dom.element('div', 'studio-property'); row.append(this.field(`${attribute.name} · ${attribute.kind}`, value),
-          this.button('Apply', () => this.edit({op: 'setAttribute', node: node.id, name: attribute.name, kind: attribute.kind, value: value.value})),
-          this.button('Remove', () => this.edit({op: 'removeAttribute', node: node.id, name: attribute.name}))); this.properties.append(row);
+    this.app=app; this.model=app.model; this.sessions=new Map(); this.current=null; this.revealing=null; this.syncing=false; this.sourceOwners=new Map();
+    const editor=app.$('editor-root'); this.toolbar=Dom.element('div','document-mode-toolbar'); this.toolbar.setAttribute('role','toolbar');this.toolbar.setAttribute('aria-label','Document layout');
+    this.workspace=Dom.element('div','document-workspace'); this.designers=Dom.element('div','document-designers'); this.separator=Dom.element('div','pane-splitter document-splitter');
+    editor.before(this.toolbar,this.workspace); this.workspace.append(editor,this.separator,this.designers);
+    this.modes=new Map();for(const [mode,label] of [['code','Code'],['split','Split'],['design','Design'],['preview','Preview']]){const button=Dom.button(label,()=>this.setMode(mode),{className:'document-mode'});button.dataset.mode=mode;this.modes.set(mode,button);this.toolbar.append(button);}
+    this.orientation=Dom.button('Split Down',()=>{const state=this.model.documentState();if(this.model.active)this.model.setDocumentState(this.model.active,{orientation:state.orientation==='down'?'right':'down'});},{icon:'split',className:'document-orientation'});this.toolbar.append(this.orientation);
+    this.splitter=new PaneSplitter(this.separator,{label:'Resize code and designer',getValue:()=>this.model.documentState().ratio,setValue:ratio=>{if(this.model.active)this.model.setDocumentState(this.model.active,{ratio});},getOrientation:()=>matchMedia('(max-width:620px)').matches?'down':this.model.documentState().orientation,getBounds:()=>this.workspace.getBoundingClientRect()});
+    this.landing=app.panels.get('ui-studio');this.renderLanding();
+    this.unsubscribe=this.model.subscribe(event=>{
+      if(event.kind==='replace'){this.sourceOwners.clear();this.disposeSessions();this.closeSecondary();}
+      if(['files','replace'].includes(event.kind)){
+        for(const [path,session] of this.sessions)if(!Object.hasOwn(this.model.files,path)||event.renamed?.[path])this.release(path,session);
+        if(this.secondary&&event.renamed?.[this.secondary.path])this.secondary.path=event.renamed[this.secondary.path];
+        this.renderLanding();
       }
-      const name = this.input('New attribute name', 'className'), value = this.input('New attribute value');
-      const kind = this.selectInput('New attribute kind', [['string', 'String'], ['expression', 'Rust expression'], ['boolean', 'Boolean']]);
-      this.properties.append(this.field('New attribute', name), value, kind, this.button('Add attribute', () => this.edit({op: 'setAttribute', node: node.id, name: name.value, value: value.value, kind: kind.value})));
-    }
-    if (node.tag && !/^[A-Z]/.test(node.tag) && !node.tag.includes('::')) {
-      const geometry = Object.fromEntries(['x', 'y', 'width', 'height'].map(name => [name, this.input(`Canvas ${name}`, ['width', 'height'].includes(name) ? '120' : '0')]));
-      for (const [name, input] of Object.entries(geometry)) { input.type = 'number'; this.properties.append(this.field(name, input)); }
-      this.properties.append(this.button('Set canvas rectangle', () => this.edit({op: 'setLayout', node: node.id,
-        rectangle: Object.fromEntries(Object.entries(geometry).map(([key, input]) => [key, Number(input.value)])), grid: this.project?.settings.grid ?? 8, snap: this.project?.settings.snap ?? true})));
-    }
-    const palette = this.selectInput('Insert element', [['<div></div>', 'Container'], ['<h2>Heading</h2>', 'Heading'], ['<p>Text</p>', 'Paragraph'], ['<button>Button</button>', 'Button'], ['<input placeholder="Type here" />', 'Input'], ['<label>Label</label>', 'Label'], ['<ul><li>Item</li></ul>', 'List']]);
-    this.properties.append(palette, this.button('Insert child', () => this.edit({op: 'insert', node: node.id, markup: palette.value}), 'plus'));
+      if(['open','files','replace','document'].includes(event.kind))this.sync(event.kind==='open'||event.kind==='replace');
+    });
+    this.sync(true);
   }
-  async edit(operation, {signal} = {}) {
-    this.assertSourcePreview();
-    if (!this.designer) throw Error('Fix UI syntax before visual editing');
-    const file = this.file, source = this.model.read(file), revision = this.model.revision;
-    const result = await this.compiler.compile({...this.model.files}, 'ui-design', {file, entryFile: this.entryFile, entry: this.entry, operation, revision}, signal);
-    signal?.throwIfAborted(); if (this.model.revision !== revision || this.model.read(file) !== source) throw Error('Editor changed while validating the visual edit; no source was overwritten');
-    this.model.applyTransaction({[file]: result.source}); this.model.save();
-    this.refreshSource({preserve: true}); return this.build({signal});
+  isView(path) { return typeof path==='string'&&path.endsWith('.rs')&&Object.hasOwn(this.model.files,path)&&(this.sessions.has(path)||path.endsWith('.ui.rs')||Object.hasOwn(this.model.files,UIProject.manifestPath(path))||/\bview!\s*[{(]/.test(this.model.files[path])); }
+  renderLanding() {
+    this.landing.replaceChildren(Dom.element('h3','','UI Views'),Dom.element('p','view-note','Open a view file in Project, then choose Code, Split, Design or Preview above the editor. Each view owns its preview, selection and settings.'),Dom.button('New UI View',()=>this.app.projects.newView(),{icon:'plus'}));
+    for(const path of Object.keys(this.model.files).filter(path=>this.isView(path)))this.landing.append(Dom.button(path,()=>this.open(path),{icon:'fit',className:'project-row'}));
   }
-  async debug(command, signal) {
-    this.assertLive(); this.assertSourcePreview(); const result = await this.preview.request(`debug.${command}`, command === 'arm' ? {breakpoints: this.model.breakpointList} : {}, {signal});
-    if (this.snapshot) this.snapshot.debugger = result; this.renderState(); return result;
+  session(path) {
+    let session=this.sessions.get(path);if(session)return session;
+    this.model.read(path);if(!path.endsWith('.rs'))throw Error('Open a Rust view source');
+    const root=Dom.element('div','ui-session');root.hidden=true;this.designers.append(root);
+    session=new UIStudioSession(this.app,{root,file:path});this.sessions.set(path,session);
+    // Bound dormant workers/iframes while retaining all document/source settings.
+    if(this.sessions.size>16)for(const [old,instance] of this.sessions)if(old!==path&&instance!==this.current){this.release(old,instance);break;}
+    return session;
   }
-  renderState() {
-    this.states.replaceChildren();
-    for (const state of this.snapshot?.states ?? []) {
-      const value = this.input(`State ${state.handle}`, !['i64', 'String', 'bool'].includes(state.type) ? JSON.stringify(state.value) : String(state.value));
-      const row = Dom.element('div', 'studio-state'); row.append(this.field(`${state.type} · handle ${state.handle}`, value), this.button('Set', async () => {
-        this.assertLive(); const next = state.type === 'bool' ? (() => { if (!['true', 'false'].includes(value.value)) throw Error('Boolean state must be true or false'); return value.value === 'true'; })() : !['i64', 'String'].includes(state.type) ? JSON.parse(value.value) : value.value;
-        this.snapshot = await this.preview.request('state.set', {handle: state.handle, value: next}); this.renderState();
-      })); this.states.append(row);
-    }
-    this.debugOutput.textContent = JSON.stringify({calls: this.snapshot?.calls, handles: this.snapshot?.handles, debugger: this.snapshot?.debugger}, null, 2)?.slice(0, 100000) ?? 'Preview an app to inspect its state.';
+  release(path,session) { session.dispose();session.root.remove();this.sessions.delete(path);for(const [source,owner] of this.sourceOwners)if(owner===path)this.sourceOwners.delete(source);if(this.current===session)this.current=null; }
+  disposeSessions() { for(const [path,session] of this.sessions)this.release(path,session); }
+  ensurePreview(session) {
+    if(session.artifact||session.startQueued||session.disposed)return;session.startQueued=true;
+    queueMicrotask(async()=>{try{if(!session.disposed&&!session.root.hidden)await session.build();}catch(error){session.error(error);}finally{session.startQueued=false;}});
   }
-  async download({hydrate = false} = {}) {
-    let file, html, backend = this.backend;
-    if (this.nativeAsset) {
-      this.assertLive(); if (hydrate) throw Error('Native Cargo exports mount Wasm; native server hydration is not implemented');
-      file = this.nativeAsset.name; backend = 'native-wasm'; html = exportNativeHTML(this.nativeAsset.bytes, {title: file, css: this.css.value});
-    } else {
-      this.saveProject(); file = this.entryFile;
-      ({html} = await this.compiler.compile({...this.model.files}, hydrate ? 'ui-render' : 'ui-export', {file, entry: this.entry, backend: this.backend, css: this.css.value}));
-    }
-    const url = URL.createObjectURL(new Blob([html], {type: 'text/html;charset=utf-8'})); const link = document.createElement('a');
-    link.href = url; link.download = file.split('/').pop().replace(/\.(?:rs|wasm)$/, '.html'); document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-    return {characters: html.length, backend};
+  sync(build=false) {
+    if(this.syncing)return;this.syncing=true;
+    try{
+      const path=this.model.active,previous=this.current;
+      if(path&&this.isView(path)&&!this.model.documentStates.has(path))this.model.setDocumentState(path,{mode:'split'});
+      const linked=this.sourceOwners.get(path);const owner=this.revealing??(linked&&this.sessions.has(linked)?this.sessions.get(linked):path&&this.isView(path)?this.session(path):null);this.current=owner;
+      for(const [file,session] of this.sessions){session.root.hidden=session!==owner;session.root.classList.toggle('ui-studio',session===owner);if(!this.model.tabs.includes(file)&&session!==owner)this.release(file,session);}
+      const state=this.model.documentState(path),mode=owner?state.mode:(this.secondary?'split':'code');
+      this.workspace.dataset.mode=mode;this.workspace.dataset.orientation=state.orientation;
+      this.workspace.style.setProperty('--document-ratio',state.ratio+'%');this.designers.hidden=!owner||mode==='code';
+      this.app.$('editor-root').hidden=!!owner&&['design','preview'].includes(mode);this.separator.hidden=mode!=='split';
+      if(owner)owner.root.dataset.mode=mode;
+      for(const [value,button] of this.modes){button.disabled=!owner&&value!=='code'&&value!=='split';button.setAttribute('aria-pressed',String(value===mode));}
+      this.orientation.hidden=mode!=='split';const orientationLabel=state.orientation==='down'?'Split Right':'Split Down';this.orientation.querySelector('span').textContent=orientationLabel;this.orientation.setAttribute('aria-label',orientationLabel);this.orientation.title=orientationLabel;
+      this.splitter.refresh();if(owner&&build&&mode!=='code'){this.ensurePreview(owner);if(owner!==previous)this.focusDocument();}
+      if(this.secondary){this.secondary.root.hidden=!!owner;if(!Object.hasOwn(this.model.files,this.secondary.path))this.closeSecondary();else{this.secondary.editor.open(this.secondary.path);this.refreshSecondaryFiles();}}
+    }finally{this.syncing=false;}
   }
-  async command(command, args = {}, {signal} = {}) {
-    if (args.expectedRevision !== undefined && args.expectedRevision !== this.model.revision) throw Error('Stale IDE revision');
-    if (command === 'ui.native.preview') return this.buildNative(decodeNativeBase64(args.wasm), {name: args.name, signal});
-    if (command === 'ui.inspect') return this.inspect(signal);
-    if (command === 'ui.preview') {
-      if (args.file !== undefined) { this.model.read(args.file); this.loadProject(args.file); }
-      if (args.entry !== undefined) this.entry = args.entry;
-      if (args.backend !== undefined) { if (!['javascript', 'wasm', 'mir'].includes(args.backend)) throw Error('Unknown UI backend'); this.backend = args.backend; }
-      this.backendSelect.value = this.backend; this.entryInput.value = this.entry; this.refreshFiles(); this.refreshSource(); this.app.dock.open('ui-studio'); return this.build({signal});
-    }
-    this.assertLive();
-    if (command === 'ui.select') return this.select(args.node);
-    if (command === 'ui.debug') return this.debug(args.action, signal);
-    if (command === 'ui.state.set') { const value = await this.preview.request('state.set', {handle: args.handle, value: args.value}, {signal}); this.snapshot = value; this.renderState(); return value; }
-    throw Error('Unknown UI Studio command');
+  focusDocument() { this.app.dock.collapse?.('right');this.app.dock.collapse?.('bottom'); }
+  setMode(mode) {
+    const path=this.model.active;if(!path)return;
+    if(mode==='split'&&!this.isView(path)){this.split(path);return;}
+    if(!this.isView(path)&&!this.current){if(mode==='code')this.closeSecondary();return;}
+    this.model.setDocumentState(path,{mode});this.sync(mode!=='code');if(mode!=='code')this.focusDocument();this.model.save();
   }
-  dispose() { this.active?.abort(); this.unsubscribe(); this.unselect(); this.preview.dispose(); void this.compiler.close(); }
+  open(path) {
+    path??=this.isView(this.model.active)?this.model.active:Object.keys(this.model.files).find(file=>this.isView(file));
+    if(!path){this.app.dock.open('ui-studio');return;}
+    this.model.read(path);this.sourceOwners.delete(path);this.model.setDocumentState(path,{mode:this.model.documentState(path).mode==='code'?'split':this.model.documentState(path).mode});
+    this.model.open(path);this.focusDocument();this.sync(true);return this.current;
+  }
+  showSession(session) { this.current=session;this.model.open(session.entryFile);this.model.setDocumentState(session.entryFile,{mode:'split'});this.sync();this.focusDocument(); }
+  revealSource(session,action) { this.revealing=session;try{action();this.sourceOwners.set(this.model.active,session.entryFile);if(this.model.documentState().mode==='code')this.model.setDocumentState(this.model.active,{mode:'split'});this.sync();}finally{this.revealing=null;} }
+  split(path=this.model.active,orientation='right') {
+    if(!path)return;this.model.setDocumentState(path,{mode:'split',orientation});
+    if(this.isView(path)){this.open(path);return;}
+    if(!this.secondary){
+      const root=Dom.element('section','secondary-editor'),bar=Dom.element('div','secondary-toolbar'),select=Dom.element('select'),host=Dom.element('div','editor-root');
+      select.setAttribute('aria-label','Split editor file');bar.append(select,Dom.button('Unsplit',()=>{this.closeSecondary();this.sync();},{icon:'close'}));root.append(bar,host);this.workspace.append(root);
+      const positions=new Map(),model=this.model,proxy=new Proxy(model,{get(target,key){if(key==='positions')return positions;const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value;}});
+      const selection=new SelectionModel();selection.reset(model.revision);const editor=new CodeEditor(host,proxy,selection);editor.textarea.id='split-source';editor.textarea.setAttribute('aria-label','Split source editor');
+      this.secondary={root,select,editor,path};select.onchange=()=>{this.secondary.path=select.value;editor.open(select.value);};
+    }else this.secondary.path=path;
+    this.secondary.root.hidden=false;this.secondary.editor.open(path);this.refreshSecondaryFiles();this.sync();this.focusDocument();
+  }
+  refreshSecondaryFiles() {
+    const group=this.secondary;if(!group)return;const names=Object.keys(this.model.files).sort();
+    if(group.select.options.length!==names.length||[...group.select.options].some((option,i)=>option.value!==names[i])){group.select.replaceChildren();for(const path of names){const option=Dom.element('option','',path);option.value=path;group.select.append(option);}}
+    group.select.value=group.path;
+  }
+  closeSecondary() { if(!this.secondary)return;this.secondary.editor.dispose();this.secondary.root.remove();this.secondary=null;this.sync(); }
+  state() { return {...(this.current?.state()??{file:null,entryFile:null,stale:true,snapshot:null}),mode:this.model.documentState().mode,documents:[...this.sessions].map(([file,session])=>({file,stale:!session.artifact,active:session===this.current}))}; }
+  async command(command,args={},options={}) {
+    if(args.expectedRevision!==undefined&&args.expectedRevision!==this.model.revision)throw Error('Stale IDE revision');
+    const path=args.file??this.current?.entryFile??this.model.active;const session=this.session(path);
+    if(command==='ui.preview'||command==='ui.native.preview'){this.showSession(session);this.current=session;}
+    return session.command(command,args,options);
+  }
+  dispose() { this.unsubscribe();this.disposeSessions();this.closeSecondary(); }
 }

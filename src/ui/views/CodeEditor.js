@@ -14,7 +14,9 @@ export class CodeEditor {
     for (const name of ['click','keyup','select']) this.textarea.addEventListener(name,()=>this.queueSelection());
     this.textarea.addEventListener('keydown',event=>this.keydown(event));
     this.unsubscribe=selection.subscribe(event=>{if(event.span && !['editor','reset'].includes(event.origin))this.reveal(event.span);});
-    this.model.subscribe(event=>{
+    this.unmodel=this.model.subscribe(event=>{
+      if(event.renamed){for(const [from,to] of Object.entries(event.renamed)){if(this.histories.has(from)){this.histories.set(to,this.histories.get(from));this.histories.delete(from);}if(this.path===from){this.path=to;this.render();}}}
+      if(event.kind==='replace')this.clearHistory();
       if(event.kind==='breakpoint')this.renderGutter();
       // External source projections must not leave this editor showing stale text.
       // Self-edits already have the new value and retain their local undo history.
@@ -54,5 +56,6 @@ export class CodeEditor {
   line(){const position=this.source?.position(this.textarea.selectionStart);if(position){this.currentLine.style.top=`${14+(position.line-1)*22-this.textarea.scrollTop}px`;this.root.dispatchEvent(new CustomEvent('editor-position',{detail:position}));}}
   queueSelection(){if(this.frame)return;this.frame=requestAnimationFrame(()=>{this.frame=0;this.line();this.capture();if(this.path)this.selection.select(this.source.span(this.textarea.selectionStart,this.textarea.selectionEnd),'editor',this.model.revision);});}
   reveal(span){if(!Object.hasOwn(this.model.files,span.file))return;if(this.model.active!==span.file)this.model.open(span.file);this.open(span.file);const start=Math.min(span.start,this.textarea.value.length),end=Math.min(Math.max(span.end,start),this.textarea.value.length);this.textarea.focus({preventScroll:true});this.textarea.setSelectionRange(start,end);const line=this.source.position(start).line;this.textarea.scrollTop=Math.max(0,(line-5)*22);this.line();this.capture();}
+  dispose(){this.unsubscribe();this.unmodel();if(this.frame)cancelAnimationFrame(this.frame);this.root.replaceChildren();}
   clearHistory(){this.histories.clear();this.path=null;}
 }

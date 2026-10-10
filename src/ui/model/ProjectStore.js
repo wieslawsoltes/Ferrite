@@ -15,6 +15,7 @@ export class ProjectStore {
   }
   open(id) {
     if (!/^[a-zA-Z0-9-]{1,100}$/.test(id)) throw Error('Invalid project id');
+    if (id === this.model.workspaceId) { this.archive(); this.model.save(); return; }
     const data = this.memory.get(id) ?? JSON.parse(this.storage?.getItem(`${this.key}.${id}`) ?? 'null');
     if (!data) throw Error('This recent project is no longer available');
     this.archive(); this.model.loadWorkspace(data); this.model.save();

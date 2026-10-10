@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {UIStudio} from '../src/ui/studio/UIStudio.js';
+import {UIStudioSession as UIStudio} from '../src/ui/studio/UIStudioSession.js';
 
 function fixture() {
   const heading = {id: 'heading', span: {file: 'src/app.ui.rs', start: 4, end: 20}};
@@ -12,7 +12,7 @@ function fixture() {
     renderOutline() { counters.outline++; },
     renderProperties() { counters.properties++; this.draft = 'className'; },
     model: {revision: 7, open(file) { assert.equal(file, studio.file); counters.open++; }},
-    app: {selection: {select(span, origin, revision) {
+    app: {studio: {revealSource(_session, action) { action(); }}, selection: {select(span, origin, revision) {
       assert.equal(origin, 'ui-studio'); assert.equal(revision, 7); counters.reveal++;
       // Reproduce the editor's delayed selection echo without a timing sleep.
       UIStudio.prototype.select.call(studio, studio.selected, false);

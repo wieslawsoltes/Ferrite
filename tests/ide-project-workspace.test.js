@@ -71,3 +71,7 @@ test('project catalog works without localStorage and preserves breakpoint settin
   const model=new WorkspaceModel(base),store=new ProjectStore(model,null);model.toggleBreakpoint('src/main.rs',1);const id=store.archive();
   model.replace({'Cargo.toml':'[package]','src/lib.rs':'// next'});store.archive();assert.equal(store.list().length,2);store.open(id);assert(model.breakpoints.get('src/main.rs').has(1));
 });
+
+test('selecting the current recent project never reloads an older archive', () => {
+  const model=new WorkspaceModel(base),store=new ProjectStore(model);const id=store.archive();model.update('src/main.rs','// latest');store.open(id);assert.equal(model.read(),'// latest');
+});

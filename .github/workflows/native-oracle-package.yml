@@ -1,0 +1,29 @@
+name: Package pinned native compiler oracle
+on:
+  push:
+    branches: [automation/compiler-recovery-20261010]
+    paths: [.github/workflows/native-oracle-package.yml]
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install and package official Rust 1.99.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.99.0 --profile minimal
+          root="$(rustc +1.99.0 --print sysroot)"
+          mkdir -p "$RUNNER_TEMP/oracle"
+          rustc +1.99.0 --version --verbose > "$RUNNER_TEMP/oracle/version.txt"
+          tar -C "$root" -czf "$RUNNER_TEMP/oracle/rustc-1.99.0-linux.tar.gz" bin/rustc lib
+          cd "$RUNNER_TEMP/oracle"
+          sha256sum rustc-1.99.0-linux.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustc-1.99.0-linux-oracle
+          path: ${{ runner.temp }}/oracle/
+          compression-level: 0
+          retention-days: 1

@@ -199,7 +199,7 @@ export class UIStudioSession {
     } else if (message.event.startsWith('debug-')) {
       if (this.snapshot) this.snapshot.debugger = message.detail;
       this.renderState(); const span = message.detail?.state?.next ?? message.detail?.state?.last?.span;
-      if (span?.file === this.file) this.app.selection.select(span, 'ui-studio', this.model.revision);
+      if (!this.root.hidden && span?.file === this.file) this.app.selection.select(span, 'ui-studio', this.model.revision);
     }
   }
   select(id, reveal = true) {

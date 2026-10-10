@@ -37,7 +37,8 @@
     "test:7guis": "node --test tests/seven-guis-*.test.js",
     "test:7guis:browser": "python tools/seven-guis-acceptance.py",
     "format:samples": "node tools/format-samples.mjs",
-    "format:samples:check": "node tools/format-samples.mjs --check"
+    "format:samples:check": "node tools/format-samples.mjs --check",
+    "test:ui:debugger": "python tools/ui-debugger-acceptance.py"
   },
   "engines": {
     "node": ">=22"

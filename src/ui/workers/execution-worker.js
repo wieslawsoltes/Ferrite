@@ -55,6 +55,8 @@ self.onmessage = ({data}) => {
     else if (!running && machine && data.command === 'back') { machine.stepBack(); publish(); }
     else if (!running && machine && data.command === 'back-line') { machine.stepBackLine(); publish(); }
     else if (!running && machine && !machine.done && data.command === 'step') { machine.step({capture: false}); publish(); }
+    else if (!running && machine && !machine.done && data.command === 'step-over') { machine.stepOver(); publish(); }
+    else if (!running && machine && !machine.done && data.command === 'step-out') { machine.stepOut(); publish(); }
     else if (!running && machine && !machine.done && data.command === 'step-line') { machine.stepLine(); publish(); }
   } catch (error) { running = false; postMessage(errorData(error)); }
 };

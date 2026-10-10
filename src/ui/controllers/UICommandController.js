@@ -16,6 +16,14 @@ export class UICommandController {
     }
     return null;
   }
+  async debug(command) {
+    const file = this.entry(); if (!file) return false;
+    const session = this.app.studio.sessions.get(file);
+    if (command === 'stop') { this.cancel(); session?.stopDebugging(); return true; }
+    if (command === 'continue' && (!session?.artifact || !session.preview.ready || !session.snapshot?.debugger?.armed)) await this.run('debug', file);
+    else if (session) await session.debug(command);
+    return true;
+  }
   cancel(){this.generation++;this.request?.abort();this.checkRequest?.abort();}
   async run(command,file){
     if(command==='check')this.checkRequest?.abort();else this.cancel();const app=this.app,model=app.model,epoch=model.workspaceEpoch,revision=model.revision,generation=this.generation;
@@ -31,12 +39,23 @@ export class UICommandController {
         const result=await this.compiler.compile(model.files,'ui-export',options,controller.signal);
         if(current()){app.download(file.split('/').pop().replace(/\.rs$/,'.html'),result.html,'text/html;charset=utf-8');app.status('Standalone Rust UI HTML exported','success');}
       }else{
+        // A stale CLI completion cannot take over the UI debugger or source selection.
+        app.execution?.stop(false); app.compiler?.cancel(); app.requestSerial = (app.requestSerial ?? 0) + 1;
         const session=app.studio.session(file);session.backend=options.backend;session.backendSelect.value=options.backend;
         // Avoid a second queued automatic preview; this command owns the build.
-        session.armOnReady=command==='debug';session.startQueued=true;try{app.studio.showSession(session);await session.build({signal:controller.signal});}finally{session.startQueued=false;}
+        session.startQueued=true;
+        try {
+          app.studio.showSession(session);
+          const reusable = command === 'debug' && session.artifact && session.preview.ready && session.compiledGeneration === session.generation && !session.nativeAsset && session.compiledBackend === options.backend;
+          if (!reusable) await session.build({signal:controller.signal});
+          await session.preview.waitUntilReady({signal:controller.signal});
+          controller.signal.throwIfAborted();
+          if (!live() || this.entry() !== file) return;
+          if (command === 'debug') await session.debug(session.snapshot?.debugger?.armed ? 'continue' : 'arm', controller.signal);
+        } finally { session.startQueued=false; }
         if(live()&&this.entry()===file){
-          if(command==='debug')session.dock.open('debug');
-          app.status('Rust UI preview loading','success');
+          if(command==='debug') { session.dock.open('debug'); app.dock.open('debugger'); }
+          app.status(command === 'debug' ? 'Rust UI debugger attached · interact with the preview to hit breakpoints' : 'Rust UI preview ready','success');
         }
       }
     }catch(error){if((['check','build'].includes(command)?current():live()&&this.entry()===file)&&error.name!=='AbortError')app.error(error);}

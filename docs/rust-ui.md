@@ -279,7 +279,7 @@ compatibility tools (`ui_project_inspect`, `ui_project_set`, `ui_render_html`,
 | `ui_design_edit` | Edit approval; expected hash, typed atomic operation, checkpoint |
 | `ui_preview` | Execute approval; compile/mount in the connected IDE |
 | `ui_inspect` | Read; current live tree/state/debugger; rejects stale preview |
-| `ui_debug` | Execute approval; arm/step/step-line/continue/stop |
+| `ui_debug` | Execute approval; arm/pause, instruction/source/over/out stepping, reverse/restart, continue/stop |
 | `ui_state_set` | Execute approval; checked live state mutation |
 
 The IDE command bridge also recognizes `ui.preview`, `ui.inspect`, `ui.select`,
@@ -288,6 +288,16 @@ read-only authority. Edits recheck hashes at application time; concurrent edits 
 not overwritten. External native MCP requires a real connected IDE for live tools.
 Compilation/export work without one. A preview command starts asynchronous mounting;
 wait for readiness before inspecting. No fake browser session is returned.
+
+## Debug UI projects
+
+The main Debug action, F5, the main Debugger tool window, the designer Debug panel
+and `ui_debug` operate on the same retained view session. F5 attaches to an existing
+preview without resetting application state and resumes paused callbacks. F10 steps
+over; F11 steps into a source line; Shift+F11 steps out; Shift+F10 reverses a source
+line; Shift+F5 stops. These shortcuts also work with keyboard focus inside the isolated
+preview. The [debugger guide](ui-debugger.md) describes source breakpoints, helper-file
+navigation, live locals, timer callbacks, staged state and explicit execution boundaries.
 
 ## Export and isolation
 

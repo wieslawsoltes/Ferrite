@@ -21,8 +21,17 @@ export const StudioDocuments = {
   disposeSessions() { for(const [path,session] of this.sessions)this.release(path,session); },
   ensurePreview(session) {
     if(session.artifact){session.publishInspection();return;}
-    if(session.startQueued||session.disposed)return;session.startQueued=true;
-    queueMicrotask(async()=>{try{if(!session.disposed&&!session.root.hidden)await session.build();}catch(error){session.error(error);}finally{session.startQueued=false;}});
+    if (session.startQueued || session.disposed || session.buildingGeneration != null) return;
+    const generation = session.generation; session.startQueued = true;
+    queueMicrotask(async () => {
+      try {
+        // Showing a document can queue this before an explicit agent/user preview starts.
+        // Never let that older automatic request abort the newer build or replace native output.
+        if (!session.disposed && !session.root.hidden && !session.artifact &&
+            session.buildingGeneration == null && session.generation === generation) await session.build();
+      } catch (error) { session.error(error); }
+      finally { session.startQueued = false; }
+    });
   },
   focusDocument() { /* Opening a document must not hide the user's compiler or output tools. */ },
   open(path) {

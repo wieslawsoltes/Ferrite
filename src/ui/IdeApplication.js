@@ -1,3 +1,4 @@
+import {EditorLanguageController} from './controllers/EditorLanguageController.js';
 import {ProjectController} from './controllers/ProjectController.js';
 import {UIStudio} from './studio/UIStudio.js';
 import {AgentWorkbench} from './agent/AgentWorkbench.js';
@@ -61,7 +62,7 @@ export class IdeApplication {
     this.cargo=new CargoView(this.panels.get('cargo'),this.model,this.native,{onCommand:command=>this.compile(command),onOptions:options=>{this.options=options;this.invalidate();this.schedule();},onConnected:connected=>{if(!connected)this.repositories.detach();this.repositoryView.render();this.dependencyView.render();this.backend=connected?'native':'browser';this.$('backend-select').value=this.backend;this.status(connected?'Connected to the trusted native Cargo toolchain.':'Native bridge disconnected.','success');}});
     this.structureRegistry=new SpanRegistry(this.selection,'structure');this.runOutput=Dom.element('pre','run-output');this.runOutput.id='terminal';this.runOutput.setAttribute('aria-label','Program output');
     this.runLabel=Dom.element('span','','No program running');const runHeader=Dom.element('div','run-header');runHeader.append(Dom.icon('console'),this.runLabel,Dom.button('Clear',()=>{this.runOutput.textContent='';},{className:'subtle-button'}));this.panels.get('run').append(runHeader,this.runOutput);
-    this.studio=new UIStudio(this);
+    this.studio=new UIStudio(this);this.editorLanguage=new EditorLanguageController(this);
     this.agent=new AgentWorkbench(this);
     const stdinForm=Dom.element('form','native-stdin'),stdin=Dom.element('input','text-field');stdin.placeholder='Native stdin (line input; not a PTY)';stdin.setAttribute('aria-label','Native standard input');const send=Dom.button('Send input',null);send.type='submit';stdinForm.append(stdin,send);stdinForm.onsubmit=async event=>{event.preventDefault();try{if(!this.repositories.session)throw Error('Open a native repository to send input');await this.native.sendInput(this.repositories.session.id,stdin.value+'\n');stdin.value='';}catch(error){this.status(error.message,'error');}};this.panels.get('run').append(stdinForm);stdinForm.append(Dom.button('Close stdin',async()=>{try{if(!this.repositories.session)throw Error('Open a native repository first');await this.native.sendInput(this.repositories.session.id,null);}catch(error){this.status(error.message,'error');}},{className:'subtle-button'}));
     this.palette=new CommandPalette(()=>this.commands());this.toolbar(definitions);this.events();
@@ -85,7 +86,7 @@ export class IdeApplication {
   }
   events(){
     document.addEventListener('keydown',event=>{
-      if(event.target.closest('dialog'))return;
+      if(event.defaultPrevented||event.isComposing||event.target.closest('dialog'))return;
       const modifier=event.ctrlKey||event.metaKey,key=event.key.toLowerCase();
       if(modifier&&key==='w'){event.preventDefault();if(this.model.active)this.model.close(this.model.active);}
       else if(modifier&&event.shiftKey&&key==='t'){event.preventDefault();this.model.reopenClosed();}
@@ -93,6 +94,7 @@ export class IdeApplication {
       else if(modifier&&key==='n'){event.preventDefault();event.shiftKey?this.projects.newProject():this.projects.createFile();}
       else if(modifier&&key==='p'&&!event.shiftKey){event.preventDefault();this.palette.open('Open ');}
       else if(modifier&&['f','h'].includes(key)){event.preventDefault();this.openSearch(!event.shiftKey);}
+      else if(modifier&&event.shiftKey&&event.code==='Space'){event.preventDefault();this.languageCommand('signatureHelp');}
       else if(modifier&&event.code==='Space'){event.preventDefault();this.languageCommand('completion');}
       else if(event.key==='F12'||modifier&&key==='b'){event.preventDefault();this.languageCommand('definition');}
       else if(event.shiftKey&&event.key==='F6'){event.preventDefault();this.languageCommand('rename');}
@@ -168,19 +170,7 @@ export class IdeApplication {
       }
     }catch(error){if(error.name==='AbortError')return;if(serial===this.requestSerial&&revision===this.model.revision){this.buildRevision=-1;this.inspector.invalidate();this.error(error);}}
   }
-  async languageCommand(command){
-    const file=this.model.active;if(!file?.endsWith('.rs')){this.status('Open a Rust source file for semantic tooling.','error');return;}
-    if(!this.native.capabilities?.languageServer){this.status('Connect Native Cargo with installed rust-analyzer for semantic tooling.','error');this.dock.open('cargo');return;}
-    const revision=this.model.revision,position=this.editor.source.position(this.editor.textarea.selectionStart);
-    let newName;if(command==='rename'){newName=await DialogService.ask({title:'Rename Rust symbol',label:'New symbol name',confirm:'Preview edits'});if(!newName)return;}
-    if(revision!==this.model.revision)return;
-    this.dock.open('language');this.languageTools.message('Loading Rust semantic results…');
-    try{const parameters={file,position:{line:position.line-1,character:position.column-1},newName,options:this.options};
-      const result=await (this.repositories.session?this.native.repository('language',{id:this.repositories.session.id,version:this.repositories.session.version,files:this.model.files,method:'textDocument/'+command,...parameters}):this.native.language(this.model.files,'textDocument/'+command,parameters));
-      if(revision===this.model.revision)this.languageTools.render(result,revision);
-    }catch(error){if(error.name!=='AbortError'&&revision===this.model.revision)this.languageTools.message(error.message);}
-    finally{if(this.nativeCheckPending&&!this.repositories.needsReload){this.nativeCheckPending=false;this.schedule();}}
-  }
+  async languageCommand(command){return this.editorLanguage.command(command);}
   async nativeCommand(command,serial,revision){
     if(command==='debug'){this.error(Error('The browser debugger operates on Ferrite MIR. Native debugger integration is not implemented.'));return;}
     if(!this.native.capabilities){this.status('Connect the trusted native Cargo bridge to run this command.','error');this.dock.open('cargo');return;}

@@ -1,0 +1,166 @@
+diff --git a/index.html b/index.html
+--- a/index.html
++++ b/index.html
+@@ -14,2 +14,3 @@
+   <link rel="stylesheet" href="./styles/designer.css">
++  <link rel="stylesheet" href="./styles/samples.css">
+ </head>
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -7,3 +7,3 @@
+     "test": "node --test tests/*.test.js",
+-    "check": "node tools/check-syntax.mjs && node tools/bundle-workers.mjs --check && node tools/vendor-terminal.mjs --check && node tools/bundle-sdk.mjs --check",
++    "check": "node tools/check-syntax.mjs && node tools/bundle-workers.mjs --check && node tools/vendor-terminal.mjs --check && node tools/bundle-sdk.mjs --check && node tools/build-seven-guis.mjs --check",
+     "build:workers": "node tools/bundle-workers.mjs",
+@@ -33,3 +33,6 @@
+     "test:designer:browser": "python tools/designer-docking-acceptance.py",
+-    "test:editor-language": "python tools/editor-language-acceptance.py"
++    "test:editor-language": "python tools/editor-language-acceptance.py",
++    "build:7guis": "node tools/build-seven-guis.mjs",
++    "test:7guis": "node --test tests/seven-guis-*.test.js",
++    "test:7guis:browser": "python tools/seven-guis-acceptance.py"
+   },
+diff --git a/src/agent/core/CompilerOperation.js b/src/agent/core/CompilerOperation.js
+--- a/src/agent/core/CompilerOperation.js
++++ b/src/agent/core/CompilerOperation.js
+@@ -20,3 +20,3 @@
+       if (!['ui-compile', 'ui-export', 'ui-analyze', 'ui-render'].includes(command)) throw Error('Unknown UI compiler operation');
+-      const artifact = UICompiler.compile(source, {file, entry, files});
++      const artifact = UICompiler.compile(source, {file, entry, files, maxSteps: options.maxSteps ?? 250000});
+       if (command === 'ui-render') return {html: exportHydratedHTML(artifact, {backend, title, css, identifierPrefix: options.identifierPrefix ?? ''}), file, entry: artifact.entry, execution: 'server-rendered Rust; effects and refs suppressed'};
+diff --git a/src/compiler/OwnershipAnalyzer.js b/src/compiler/OwnershipAnalyzer.js
+--- a/src/compiler/OwnershipAnalyzer.js
++++ b/src/compiler/OwnershipAnalyzer.js
+@@ -132,2 +132,6 @@
+       return [];
++    }
++    // Rust comparison operators borrow both operands, including owned strings.
++    if (node.kind === 'binary' && ['==', '!=', '<', '>', '<=', '>='].includes(node.op)) {
++      this.value(node.left, false); this.value(node.right, false); return [];
+     }
+diff --git a/src/compiler/SemanticAnalyzer.js b/src/compiler/SemanticAnalyzer.js
+--- a/src/compiler/SemanticAnalyzer.js
++++ b/src/compiler/SemanticAnalyzer.js
+@@ -541,2 +541,6 @@
+     const name = callee.name;
++    if (name === 'String::new') {
++      if (node.args.length || callee.typeArguments?.length) throw new Diagnostic('E0061', 'String::new takes no arguments or type parameters', node.span);
++      node.builtin = 'String::new'; return 'String';
++    }
+     if (name === 'String::from') {
+diff --git a/src/runtime/Runtime.js b/src/runtime/Runtime.js
+--- a/src/runtime/Runtime.js
++++ b/src/runtime/Runtime.js
+@@ -239,2 +239,3 @@
+       case 'Vec::new': return [];
++      case 'String::new': return '';
+       case 'String::from': return String(args[0]);
+diff --git a/src/ui/IdeApplication.js b/src/ui/IdeApplication.js
+--- a/src/ui/IdeApplication.js
++++ b/src/ui/IdeApplication.js
+@@ -1 +1,4 @@
++import {SampleBrowser} from './views/SampleBrowser.js';
++import {SampleProjects} from './model/SampleProjects.js';
++import {UICommandController} from './controllers/UICommandController.js';
+ import {EditorLanguageController} from './controllers/EditorLanguageController.js';
+@@ -64,3 +67,3 @@
+     this.runLabel=Dom.element('span','','No program running');const runHeader=Dom.element('div','run-header');runHeader.append(Dom.icon('console'),this.runLabel,Dom.button('Clear',()=>{this.runOutput.textContent='';},{className:'subtle-button'}));this.panels.get('run').append(runHeader,this.runOutput);
+-    this.studio=new UIStudio(this);this.editorLanguage=new EditorLanguageController(this);
++    this.studio=new UIStudio(this);this.editorLanguage=new EditorLanguageController(this);this.samples=new SampleBrowser(this);this.uiCommands=new UICommandController(this);
+     this.agent=new AgentWorkbench(this);
+@@ -77,3 +80,3 @@
+     this.$('stop').append(Dom.icon('stop'));this.$('stop').onclick=()=>this.stop();this.$('layout-reset').append(Dom.icon('reset'));this.$('layout-reset').onclick=()=>this.dock.reset();
+-    for(const [title,icon,action] of [['Project','cargo',()=>this.projects.newProject()],['Folder','folder',()=>this.projects.openFolder()],['UI View','fit',()=>this.projects.newView()],['New','plus',()=>this.createFile()],['Rename','file',()=>this.renameFile()],['Delete','trash',()=>this.removeFile()],['Save','save',()=>{this.model.save();this.status('Workspace saved in this browser.','success');}],['Import','import',()=>this.$('import-input').click()],['Repository','folder',()=>this.dock.open('repositories')],['Export','export',()=>this.download('ferrite-project.ferrite.json',JSON.stringify(this.model.snapshot(),null,2))]]){
++    for(const [title,icon,action] of [['Samples','folder',()=>this.samples.open()],['Project','cargo',()=>this.projects.newProject()],['Folder','folder',()=>this.projects.openFolder()],['UI View','fit',()=>this.projects.newView()],['New','plus',()=>this.createFile()],['Rename','file',()=>this.renameFile()],['Delete','trash',()=>this.removeFile()],['Save','save',()=>{this.model.save();this.status('Workspace saved in this browser.','success');}],['Import','import',()=>this.$('import-input').click()],['Repository','folder',()=>this.dock.open('repositories')],['Export','export',()=>this.download('ferrite-project.ferrite.json',JSON.stringify(this.model.snapshot(),null,2))]]){
+       const button=Dom.button(title,action,{icon});button.id=`file-${title.toLowerCase().replaceAll(' ','-')}`;this.$('file-actions').append(button);
+@@ -115,2 +118,4 @@
+   commands(){return [
++    {label:'Browse Samples',icon:'folder',execute:()=>this.samples.open()},
++    ...SampleProjects.all.filter(item=>item.kind==='ui').map(sample=>({label:'Sample: '+sample.title,icon:'fit',execute:()=>this.samples.open(sample.id)})),
+     {label:'New Project',icon:'cargo',execute:()=>this.projects.newProject()},
+@@ -153,2 +158,4 @@
+   async compile(command='check'){
++    const uiEntry=this.backend!=='native'&&this.uiCommands?.entry();
++    if(uiEntry&&['check','run','debug','build','test'].includes(command)){clearTimeout(this.compileTimer);return this.uiCommands.run(command,uiEntry);}
+     clearTimeout(this.compileTimer);if(this.backend==='native'&&this.native.active){if(command==='check')this.nativeCheckPending=true;else this.status('Stop the current native operation before starting another.','');return;}const serial=++this.requestSerial,revision=this.model.revision;
+@@ -212,3 +219,3 @@
+   error(error){const diagnostic=error.toJSON?.()??{code:error.code??'ERROR',message:error.message??String(error),span:error.span??null,notes:error.notes??[]};this.status(`${diagnostic.code} · ${diagnostic.message}`,'error');this.problems.render([diagnostic]);this.dock.open('problems');this.runOutput.textContent=`${diagnostic.code}: ${diagnostic.message}\n${Dom.sourceLabel(diagnostic.span)}`;this.runOutput.classList.add('error');}
+-  stop(notify=true){this.nativeCheckPending=false;clearTimeout(this.compileTimer);this.requestSerial++;this.compiler.cancel();this.execution.stop(false);this.native.cancel().catch(()=>{});if(notify)this.status('Stopped','');}
++  stop(notify=true){this.uiCommands?.cancel();this.nativeCheckPending=false;clearTimeout(this.compileTimer);this.requestSerial++;this.compiler.cancel();this.execution.stop(false);this.native.cancel().catch(()=>{});if(notify)this.status('Stopped','');}
+   status(message,kind=''){const node=this.$('status');node.textContent=message;node.dataset.kind=kind;}
+diff --git a/src/ui/controllers/ProjectController.js b/src/ui/controllers/ProjectController.js
+--- a/src/ui/controllers/ProjectController.js
++++ b/src/ui/controllers/ProjectController.js
+@@ -91,3 +91,3 @@
+     const dialog=Dom.element('dialog','form-dialog project-dialog');dialog.setAttribute('aria-label','Projects');dialog.append(Dom.element('h2','','Projects'));
+-    const buttons=Dom.element('div','project-commands');for(const [label,action] of [['New Project…',()=>this.newProject()],['Open Folder…',()=>this.openFolder()],['Open Repository…',()=>this.app.dock.open('repositories')],['Import Project…',()=>this.app.$('import-input').click()]])buttons.append(Dom.button(label,()=>{dialog.close();action();},{icon:'folder'}));dialog.append(buttons,Dom.element('h3','','Recent projects'));
++    const buttons=Dom.element('div','project-commands');for(const [label,action] of [['Browse Samples…',()=>this.app.samples.open()],['New Project…',()=>this.newProject()],['Open Folder…',()=>this.openFolder()],['Open Repository…',()=>this.app.dock.open('repositories')],['Import Project…',()=>this.app.$('import-input').click()]])buttons.append(Dom.button(label,()=>{dialog.close();action();},{icon:'folder'}));dialog.append(buttons,Dom.element('h3','','Recent projects'));
+     const list=Dom.element('div','recent-projects');for(const project of this.store.list())list.append(Dom.button(project.name,()=>{dialog.close();this.run(()=>{this.app.editor.capture();this.app.stop(false);this.store.open(project.id);});},{icon:'cargo',title:project.name}));if(!list.children.length)list.append(Dom.element('p','muted','Projects appear here after creating or switching a project.'));
+diff --git a/src/ui/studio/DesignerView.js b/src/ui/studio/DesignerView.js
+--- a/src/ui/studio/DesignerView.js
++++ b/src/ui/studio/DesignerView.js
+@@ -79,3 +79,4 @@
+   s.states=Dom.element('div','studio-states');s.debugOutput=Dom.element('pre','studio-debug');debug.append(debugBar,s.states,s.debugOutput);
+-  const settings=Dom.element('div','studio-settings-panel');settings.append(s.field('Entry file',s.entryFiles),s.field('Entry function',s.entryInput),s.button('Export HTML',()=>s.download(),'export'),s.button('Export hydrated HTML',()=>s.download({hydrate:true}),'export'));
++  s.budgetInput=s.input('UI instruction budget','250000');s.budgetInput.type='number';s.budgetInput.min='1';s.budgetInput.max='2000000';s.budgetInput.step='1';s.budgetInput.onchange=()=>{s.saveProject();s.markStale();};
++  const settings=Dom.element('div','studio-settings-panel');settings.append(s.field('Entry file',s.entryFiles),s.field('Entry function',s.entryInput),s.field('Instruction budget per render / event',s.budgetInput),s.button('Export HTML',()=>s.download(),'export'),s.button('Export hydrated HTML',()=>s.download({hydrate:true}),'export'));
+   s.nativeInput=Dom.element('input');s.nativeInput.type='file';s.nativeInput.accept='.wasm,application/wasm';s.nativeInput.hidden=true;s.nativeInput.setAttribute('aria-label','Load trusted Cargo UI Wasm');
+diff --git a/src/ui/studio/StudioPreview.js b/src/ui/studio/StudioPreview.js
+--- a/src/ui/studio/StudioPreview.js
++++ b/src/ui/studio/StudioPreview.js
+@@ -17,3 +17,3 @@
+     this.status.textContent = 'Compiling typed Rust UI in a worker…'; this.status.dataset.kind = 'building';
+-    const {artifact, html} = await this.compiler.compile({...this.model.files}, 'ui-compile', {file, entry: this.entry, backend: this.backend, css: this.css.value, channel}, combined);
++    const {artifact, html} = await this.compiler.compile({...this.model.files}, 'ui-compile', {file, entry: this.entry, backend: this.backend, maxSteps: this.project?.settings.maxSteps ?? 250000, css: this.css.value, channel}, combined);
+     combined.throwIfAborted(); if (generation !== this.generation || source !== this.model.files[file]) throw new DOMException('Stale UI build', 'AbortError');
+@@ -51,2 +51,3 @@
+       this.snapshot = message.snapshot; this.renderState();
++      if (message.event === 'ready' && this.armOnReady) { this.armOnReady=false; this.debug('arm').catch(error=>this.error(error)); }
+       if (message.event === 'ready' && this.artifact) { this.status.dataset.kind = 'ready'; this.status.textContent = this.nativeAsset ? `Live native rustc Wasm · ${this.nativeAsset.name} · isolated origin · inspection/export only` : `Live ${this.backend} preview · ${this.artifact.nodes.length} source nodes · isolated origin`; }
+diff --git a/src/ui/studio/StudioProject.js b/src/ui/studio/StudioProject.js
+--- a/src/ui/studio/StudioProject.js
++++ b/src/ui/studio/StudioProject.js
+@@ -25,3 +25,3 @@
+     const settings = this.project.settings; this.entry = settings.entry; this.backend = settings.backend;
+-    this.entryInput.value = this.entry; this.backendSelect.value = this.backend; this.css.value = this.project.css;
++    this.budgetInput.value = String(settings.maxSteps ?? 250000); this.entryInput.value = this.entry; this.backendSelect.value = this.backend; this.css.value = this.project.css;
+     this.viewport.value = settings.viewport; this.frame.style.width = settings.viewport;
+@@ -32,3 +32,3 @@
+       const project = UIProject.load(this.model.files, this.entryFile, {css: this.css.value});
+-      const changes = project.changes({entry: this.entry, backend: this.backend, viewport: this.viewport.value}, this.css.value);
++      const changes = project.changes({entry: this.entry, backend: this.backend, viewport: this.viewport.value,...(project.settings.maxSteps !== undefined || Number(this.budgetInput.value) !== 250000 ? {maxSteps:Number(this.budgetInput.value)} : {})}, this.css.value);
+       this.savingProject = true; this.model.applyWorkspaceTransaction(changes); this.model.save();
+@@ -46,3 +46,3 @@
+     if (!this.savingProject && Object.hasOwn(this.model.files,this.entryFile)) {
+-      try { const project=UIProject.load(this.model.files,this.entryFile,{css:this.css.value}); this.project=project; this.css.value=project.css; this.entry=project.settings.entry; this.backend=project.settings.backend; this.entryInput.value=this.entry; this.backendSelect.value=this.backend; this.viewport.value=project.settings.viewport; this.frame.style.width=project.settings.viewport; }
++      try { const project=UIProject.load(this.model.files,this.entryFile,{css:this.css.value}); this.project=project; this.budgetInput.value=String(project.settings.maxSteps??250000); this.css.value=project.css; this.entry=project.settings.entry; this.backend=project.settings.backend; this.entryInput.value=this.entry; this.backendSelect.value=this.backend; this.viewport.value=project.settings.viewport; this.frame.style.width=project.settings.viewport; }
+       catch(error){this.error(error);}
+diff --git a/src/ui/studio/StudioTools.js b/src/ui/studio/StudioTools.js
+--- a/src/ui/studio/StudioTools.js
++++ b/src/ui/studio/StudioTools.js
+@@ -26,3 +26,3 @@
+       this.saveProject(); file = this.entryFile;
+-      ({html} = await this.compiler.compile({...this.model.files}, hydrate ? 'ui-render' : 'ui-export', {file, entry: this.entry, backend: this.backend, css: this.css.value}));
++      ({html} = await this.compiler.compile({...this.model.files}, hydrate ? 'ui-render' : 'ui-export', {file, entry: this.entry, backend: this.backend, maxSteps: this.project?.settings.maxSteps ?? 250000, css: this.css.value}));
+     }
+diff --git a/src/ui-framework/UIProject.js b/src/ui-framework/UIProject.js
+--- a/src/ui-framework/UIProject.js
++++ b/src/ui-framework/UIProject.js
+@@ -11,3 +11,3 @@
+     if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('Invalid UI project settings');
+-    const known = new Set(['version', 'entryFile', 'entry', 'backend', 'stylesheet', 'viewport', 'grid', 'snap']);
++    const known = new Set(['version', 'entryFile', 'entry', 'backend', 'stylesheet', 'viewport', 'grid', 'snap', 'maxSteps']);
+     if (Object.keys(value).some(key => !known.has(key))) throw Error('Unknown UI project setting');
+@@ -20,2 +20,3 @@
+     if (!Number.isFinite(value.grid) || value.grid < 1 || value.grid > 256 || typeof value.snap !== 'boolean') throw Error('Invalid canvas grid');
++    if (value.maxSteps !== undefined && (!Number.isSafeInteger(value.maxSteps) || value.maxSteps < 1 || value.maxSteps > 2_000_000)) throw Error('UI instruction budget must be between 1 and 2,000,000');
+     return Object.freeze({...value});
+diff --git a/src/ui-framework/ViewSyntax.js b/src/ui-framework/ViewSyntax.js
+--- a/src/ui-framework/ViewSyntax.js
++++ b/src/ui-framework/ViewSyntax.js
+@@ -157,3 +157,3 @@
+         const props = node.attributes.findIndex(a => a.name === 'props');
+-        synthetic(`ui::component(move || ${node.tag}(${props < 0 ? '' : `${temp}_a${props}`}))`, node);
++        synthetic(`ui::component(move || ${node.tag}(${props < 0 ? '' : `${temp}_a${props}.clone()`}))`, node);
+       } else {

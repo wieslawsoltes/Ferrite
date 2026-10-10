@@ -67,3 +67,11 @@ test('five hundred deterministic layout operations retain all registered panels 
     invariant(model);const saved=JSON.parse(JSON.stringify(model.snapshot()));assert.deepEqual(make(saved).snapshot(),saved);
   }
 });
+
+test('tab insertion and keyboard moves handle both directions without off-by-one reordering',()=>{
+  const model=make();
+  model.reorder('properties','styles',true);assert.deepEqual(model.group('properties').tabs,['styles','properties','debug','settings']);
+  model.reorder('properties','styles');assert.deepEqual(model.group('properties').tabs,['properties','styles','debug','settings']);
+  model.dock('properties','debug','center',2);assert.deepEqual(model.group('properties').tabs,['styles','properties','debug','settings']);
+  model.dock('settings','styles','center',0);assert.deepEqual(model.group('properties').tabs,['settings','styles','properties','debug']);invariant(model);
+});

@@ -88,6 +88,7 @@ export class PanelLayout {
     if (id === target) return false;
     let group = target === null ? null : this.group(target);
     if (zone !== 'center' && group && this.value.floating.some(box => box.node === group)) throw Error('Split a docked group, or tab into a floating window');
+    if (index !== null && group === this.group(id) && group.tabs.indexOf(id) < index) index--;
     this.remove(id);
     const fresh = {type: 'group', id: this.uid('group'), tabs: [id], active: id};
     group = target === null ? null : this.group(target);
@@ -105,11 +106,11 @@ export class PanelLayout {
     }
     this.open(id); return true;
   }
-  reorder(id, before) {
+  reorder(id, before, after = false) {
     this.require(id); this.require(before);
     const group = this.group(id);
     if (group !== this.group(before) || id === before) return false;
-    group.tabs = group.tabs.filter(tab => tab !== id); group.tabs.splice(group.tabs.indexOf(before), 0, id); group.active = id; return true;
+    group.tabs = group.tabs.filter(tab => tab !== id); group.tabs.splice(group.tabs.indexOf(before) + (after ? 1 : 0), 0, id); group.active = id; return true;
   }
   float(id, rectangle = {}) {
     this.require(id);

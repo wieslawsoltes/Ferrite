@@ -105,7 +105,7 @@ def run():
             target=panel('properties').bounding_box()
             drag(studio.get_by_role('tab',name='Toolbox',exact=True),target['x']+target['width']/2,target['y']+target['height']/2)
             assert any(n['type']=='group' and 'toolbox' in n['tabs'] and 'properties' in n['tabs'] for n in flatten(layout()['root']))
-            # Drag the canvas outside the workbench, then move its floating header.
+            # Drag the canvas outside the workbench, then redock its retained surface.
             drag(studio.get_by_role('tab',name='Canvas',exact=True),50,70)
             expect(panel('canvas')).to_have_attribute('data-floating','true')
             unchanged();button('Dock Canvas back').click()
@@ -151,6 +151,12 @@ def run():
             studio.get_by_role('treeitem').filter(has_text='<h1>').click()
             show('Properties');studio.get_by_label('Element text',exact=True).fill('Docked designer')
             button('Apply text').click();ready();expect(frame.locator('h1')).to_have_text('Docked designer')
+            expect(studio.get_by_label('Element text',exact=True)).to_have_value('Docked designer')
+            studio.get_by_label('Element text',exact=True).fill('Refined designer <ready>')
+            studio.get_by_label('Element text',exact=True).press('Enter');ready()
+            expect(frame.locator('h1')).to_have_text('Refined designer <ready>')
+            expect(frame.locator('h1 ready')).to_have_count(0)
+            expect(studio.get_by_label('Element text',exact=True)).to_have_value('Refined designer <ready>')
             show('Toolbox');studio.get_by_label('Toolbox insertion position',exact=True).select_option('after')
             studio.get_by_label('Search toolbox',exact=True).fill('paragraph');button('Text').click();ready()
             expect(frame.get_by_text('Text',exact=True)).to_be_visible()

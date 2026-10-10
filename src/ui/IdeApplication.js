@@ -1,3 +1,4 @@
+import {WorkbenchMenu} from './views/WorkbenchMenu.js';
 import {SampleBrowser} from './views/SampleBrowser.js';
 import {SampleProjects} from './model/SampleProjects.js';
 import {UICommandController} from './controllers/UICommandController.js';
@@ -68,10 +69,10 @@ export class IdeApplication {
     this.studio=new UIStudio(this);this.editorLanguage=new EditorLanguageController(this);this.samples=new SampleBrowser(this);this.uiCommands=new UICommandController(this);
     this.agent=new AgentWorkbench(this);
     const stdinForm=Dom.element('form','native-stdin'),stdin=Dom.element('input','text-field');stdin.placeholder='Native stdin (line input; not a PTY)';stdin.setAttribute('aria-label','Native standard input');const send=Dom.button('Send input',null);send.type='submit';stdinForm.append(stdin,send);stdinForm.onsubmit=async event=>{event.preventDefault();try{if(!this.repositories.session)throw Error('Open a native repository to send input');await this.native.sendInput(this.repositories.session.id,stdin.value+'\n');stdin.value='';}catch(error){this.status(error.message,'error');}};this.panels.get('run').append(stdinForm);stdinForm.append(Dom.button('Close stdin',async()=>{try{if(!this.repositories.session)throw Error('Open a native repository first');await this.native.sendInput(this.repositories.session.id,null);}catch(error){this.status(error.message,'error');}},{className:'subtle-button'}));
-    this.palette=new CommandPalette(()=>this.commands());this.toolbar(definitions);this.events();
+    this.palette=new CommandPalette(()=>this.commands());this.toolbar(definitions);this.workbenchMenu=new WorkbenchMenu(this);this.events();
     this.model.subscribe(event=>this.modelChanged(event));this.renderWorkspace();this.cargo.render();this.compile('check');
     // Read-only inspection hook used by browser acceptance tests and embedders.
-    Object.defineProperty(window,'ferrite',{value:Object.freeze({version:'0.8.0',getSnapshot:()=>this.model.snapshot(),getBuild:()=>this.build,getBuildRevision:()=>this.buildRevision,getRevision:()=>this.model.revision,getSelection:()=>this.selection.value,getUIState:()=>this.studio.state()}),configurable:true});
+    Object.defineProperty(window,'ferrite',{value:Object.freeze({version:'0.8.0',getSnapshot:()=>this.model.snapshot(),getBuild:()=>this.build,getBuildRevision:()=>this.buildRevision,getRevision:()=>this.model.revision,getSelection:()=>this.selection.value,getUIState:()=>this.studio.state(),getDockState:()=>this.dock.snapshot()}),configurable:true});
   }
   toolbar(definitions){
     for(const [command,title,icon] of [['check','Check','check'],['build','Build','build'],['run','Run','run'],['debug','Debug','debug'],['test','Test','test']]){
@@ -85,11 +86,12 @@ export class IdeApplication {
     for(const [id,key] of [['auto-check','auto'],['optimize','optimize']])this.$(id).onchange=()=>{this.settings[key]=this.$(id).checked;try{this.storage?.setItem('ferrite.settings.v3',JSON.stringify(this.settings));}catch{}if(key==='optimize')this.invalidate();if(this.settings.auto)this.schedule();};
     this.$('backend-select').onchange=()=>{this.backend=this.$('backend-select').value;if(this.backend==='native'&&!this.native.capabilities)this.cargo.connect();};
     this.$('search-everywhere').onclick=()=>this.palette.open();this.$('project-menu').onclick=()=>this.projects.showProjects();this.$('native-connect').onclick=()=>this.cargo.connect();
-    for(const id of ['project','structure','search','repositories','crates','cargo','problems','debugger','tests','run','terminal','compiler','profile','native-artifacts','language','agent','ui-studio']){const definition=definitions.find(d=>d.id===id);const button=Dom.button('',()=>id==='ui-studio'?this.studio.open():this.dock.toggle(id),{icon:definition.icon,className:'rail-button',title:`${definition.title} tool window`});button.dataset.tool=id;this.$(['compiler','profile','native-artifacts','language','agent','ui-studio'].includes(id)?'right-rail':'left-rail').append(button);}
+    this.dock.attachSidebars({left:this.$('left-rail'),right:this.$('right-rail'),open:id=>id==='ui-studio'?this.studio.open():this.dock.toggle(id)});
   }
   events(){
     document.addEventListener('keydown',event=>{
-      if(event.defaultPrevented||event.isComposing||event.target.closest('dialog'))return;
+      if(event.defaultPrevented||event.isComposing||event.target.closest('dialog,.context-menu'))return;
+      if(this.dock.keydown(event))return;
       const modifier=event.ctrlKey||event.metaKey,key=event.key.toLowerCase();
       if(modifier&&key==='w'){event.preventDefault();if(this.model.active)this.model.close(this.model.active);}
       else if(modifier&&event.shiftKey&&key==='t'){event.preventDefault();this.model.reopenClosed();}
@@ -99,7 +101,7 @@ export class IdeApplication {
       else if(modifier&&['f','h'].includes(key)){event.preventDefault();this.openSearch(!event.shiftKey);}
       else if(modifier&&event.shiftKey&&event.code==='Space'){event.preventDefault();this.languageCommand('signatureHelp');}
       else if(modifier&&event.code==='Space'){event.preventDefault();this.languageCommand('completion');}
-      else if(event.key==='F12'||modifier&&key==='b'){event.preventDefault();this.languageCommand('definition');}
+      else if(modifier&&key==='b'){event.preventDefault();this.languageCommand('definition');}
       else if(event.shiftKey&&event.key==='F6'){event.preventDefault();this.languageCommand('rename');}
       else if(event.altKey&&event.key==='F7'){event.preventDefault();this.languageCommand('references');}
       else if(modifier&&key==='q'){event.preventDefault();this.languageCommand('hover');}
@@ -116,6 +118,9 @@ export class IdeApplication {
     window.addEventListener('beforeunload',()=>{clearTimeout(this.saveTimer);this.model.save();});
   }
   commands(){return [
+    {label:'Show / Hide Workspace Actions',execute:()=>this.workbenchMenu.toggleActions()},
+    {label:'Hide / Restore All Tool Windows',execute:()=>this.dock.hideAll()},
+    {label:'Save Window Layout As',execute:()=>this.workbenchMenu.saveAs()},
     {label:'Browse Samples',icon:'folder',execute:()=>this.samples.open()},
     ...SampleProjects.all.filter(item=>item.kind==='ui').map(sample=>({label:'Sample: '+sample.title,icon:'fit',execute:()=>this.samples.open(sample.id)})),
     {label:'New Project',icon:'cargo',execute:()=>this.projects.newProject()},
@@ -219,7 +224,7 @@ export class IdeApplication {
       if(!this.runOutput.textContent)this.writeOutput(result.stdout+result.stderr);
       if(result.artifacts?.length){this.runOutput.textContent+='\nArtifacts:\n'+result.artifacts.map(a=>a.executable??a.filenames.join('\n')).join('\n')+'\n';}
       const changed=Object.entries(this.repositories.session?{}:(result.files??{})).filter(([path,text])=>typeof text==='string'&&text!==this.model.files[path]);
-      if(changed.length){clearTimeout(this.compileTimer);this.model.applyFiles(Object.fromEntries(changed));clearTimeout(this.compileTimer);this.editor.open(this.model.active);this.model.save();this.status(`Native cargo ${command} · exit ${result.exitCode} · ${changed.length} generated/updated files synchronized`,result.exitCode===0?'success':'error');}
+      if(changed.length){clearTimeout(this.compileTimer);this.model.applyFiles(Object.fromEntries(changed));clearTimeout(this.compileTimer);this.editor.open(this.model.active);this.model.save();this.status(`Native cargo ${command} · exit ${result.exitCode} · ${changed.length} generated/updated files synchronized`,result.exitCode?'error':'success');}
       if(result.buildSummary)this.profile.native(result);
       if(command==='inspect'){this.nativeArtifacts.update(result.compilerArtifacts);this.dock.open('native-artifacts');}
     }catch(error){if(error.name!=='AbortError'&&serial===this.requestSerial&&revision===this.model.revision)this.error(error);}

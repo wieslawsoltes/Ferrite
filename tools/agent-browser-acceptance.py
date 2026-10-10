@@ -9,6 +9,7 @@ import os
 import shlex
 import subprocess
 import threading
+import traceback
 import urllib.request
 import urllib.error
 from functools import partial
@@ -192,6 +193,9 @@ def run():
             expect(agent.locator('.agent-workspace-status')).to_contain_text('Synchronized')
             native_before=(Path(connection['root'])/'src/main.rs').read_text()
             page.keyboard.press('Control+Shift+P');page.get_by_role('textbox', name='Search Everywhere').fill('Example: ' + 'Geometry lab · traits & modules');page.get_by_role('textbox', name='Search Everywhere').press('Enter')
+            # Opening a sample reveals its Compiler result; select the agent again
+            # before interacting with its controls in the shared tool-window group.
+            if not agent.is_visible():page.locator('[data-tool="agent"]').click()
             expect(agent.locator('.agent-workspace-status')).to_contain_text('synchronization is off')
             page.wait_for_timeout(750)
             assert (Path(connection['root'])/'src/main.rs').read_text()==native_before
@@ -202,7 +206,7 @@ def run():
         except Exception:
             page.screenshot(path=str(OUTPUT/'failure.png'),full_page=True)
             (OUTPUT/'errors.json').write_text(json.dumps(errors,indent=2))
-            diagnostics=json.dumps({'network':network,'dialogs':page.locator('dialog .agent-error').all_text_contents(),'agentErrors':page.locator('.agent-workbench > .agent-error').all_text_contents()},indent=2)
+            diagnostics=json.dumps({'traceback':traceback.format_exc(),'network':network,'dialogs':page.locator('dialog .agent-error').all_text_contents(),'agentErrors':page.locator('.agent-workbench > .agent-error').all_text_contents()},indent=2)
             for secret in [connection['token'],'fixture-private-api-key']:diagnostics=diagnostics.replace(secret,'[REDACTED]')
             (OUTPUT/'diagnostics.json').write_text(diagnostics)
             raise

@@ -12,6 +12,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 from designer_browser_support import memory_document
+from workbench_browser_support import show_workspace_actions
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'artifacts/compiler-output'
@@ -69,6 +70,7 @@ def run():
                 page.get_by_role('toolbar', name='Document layout').get_by_role('button', name=name, exact=True).click()
 
             current()
+            show_workspace_actions(page)
             assert page.locator('#stage-select option').count() == 21
             check('ordinary startup populates the shared compiler inspector')
             page.locator('#auto-check').uncheck()
@@ -90,6 +92,7 @@ def run():
             check('UI sample preview publishes a complete build without requiring a Rust main')
             if not MEMORY:
                 page.reload()
+                show_workspace_actions(page)
                 current('rust-ui')
                 ready()
                 check('cold persisted UI-only workspace initializes compiler output on reload')

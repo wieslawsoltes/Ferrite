@@ -52,7 +52,7 @@ export const StudioProject = {
     if (!this.savingProject && !this.root.hidden && this.app.model.documentState(this.app.model.active).mode !== 'code') this.buildTimer=setTimeout(()=>this.build().catch(error=>this.error(error)),350);
   },
   markStale() {
-    this.generation++; this.active?.abort(); this.nativeAsset = null; this.artifact = null; this.snapshot = null; this.renderState();
+    this.generation++; this.active?.abort(); this.nativeAsset = null; this.artifact = null; this.inspection = null; this.snapshot = null; this.renderState();
     this.status.textContent = 'Source changed · Preview to compile. The previous preview is read-only to tooling.'; this.status.dataset.kind = 'stale';
   },
   error(error) {

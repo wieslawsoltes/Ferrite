@@ -74,6 +74,9 @@ export class SampleBrowser {
       app.stop(false);if(!add){app.options={};app.cargo.options={};app.editor.clearHistory();app.backend=this.selected.native?'native':'browser';app.$('backend-select').value=app.backend;}
       if(this.selected.kind==='ui')app.studio.open(result.entry);
       app.status(`${this.selected.title} ${add?'added to this project':'opened; previous project archived'}${result.saved?'':' · browser save failed; export a snapshot'}`,result.saved?'success':'error');this.dialog.close();
+      // stop() cancels the check queued by the install transaction. Explicit sample
+      // opens must still compile, even with automatic checks disabled.
+      if(this.selected.kind!=='ui'&&!this.selected.native)void app.compile('check');
     }catch(error){this.message(error.message,true);}
   }
   dispose(){this.cancelPreview();this.channel?.dispose();void this.compiler?.close();this.dialog?.remove();this.dialog=null;}

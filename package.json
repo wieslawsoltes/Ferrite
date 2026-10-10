@@ -9,6 +9,7 @@
     "build:workers": "node tools/bundle-workers.mjs",
     "test:docking:browser": "python tools/ide-docking-acceptance.py",
     "test:browser": "python tools/browser-acceptance.py",
+    "test:compiler-output": "python tools/compiler-output-acceptance.py",
     "test:native": "node tools/native-smoke.mjs && node tools/agent-native-smoke.mjs",
     "benchmark": "node tools/benchmark.mjs",
     "cargo:bridge": "node tools/cargo-bridge.mjs",

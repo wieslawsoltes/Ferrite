@@ -1,7 +1,7 @@
 import {SemanticQueryCache} from '../compiler/SemanticQueryCache.js';
 import {compile} from '../engine.js';
 import {Diagnostic} from '../compiler/Diagnostic.js';
-import {CallGraphBuilder} from '../compiler/CallGraphBuilder.js';
+import {compilerStages} from './CompilerStages.js';
 import {CargoWorkspace} from '../cargo/CargoWorkspace.js';
 import {ModuleResolver} from './ModuleResolver.js';
 import {FileParserCache} from './FileParserCache.js';
@@ -70,29 +70,8 @@ export class CompilerSession {
     }
     const elapsedMs = performance.now() - start;
     const units = moduleInfo.files.map(f => ({file: f.file, tokens: f.tokens, source: f.source}));
-    const stages = [
-      {name: 'Cargo', kind: 'cargo', data: plan},
-      {name: 'Modules', kind: 'modules', data: {files: units, edges: moduleInfo.edges}},
-      {name: 'Tokens', kind: 'tokens', data: compilation.tokens},
-      {name: 'AST', kind: 'tree', data: compilation.ast},
-      {name: 'Configuration', kind:'configuration',data:[...(moduleInfo.configuration??[]),...(compilation.configuration??[])]},
-      {name: 'Macro expansion', kind: 'expansions', data: compilation.expansions},
-      {name: 'Typed HIR', kind: 'tree', data: compilation.hir},
-      {name: 'HIR / Symbols', kind: 'symbols', data: compilation.sem.symbols},
-      {name: 'Types / Traits', kind: 'types', data: compilation.sem},
-      {name: 'Ownership', kind: 'ownership', data: compilation.ownership},
-      {name: 'Pattern coverage', kind: 'patterns', data: compilation.sem.patterns},
-      {name: 'Closure captures', kind:'closures',data:compilation.sem.closures??[]},
-      {name: 'Generic Instances', kind: 'instances', data: compilation.sem.instances},
-      {name: 'MIR / CFG', kind: 'cfg', data: compilation.mir},
-      {name: 'MIR verification', kind: 'verification', data: compilation.verification},
-      {name: 'Optimized MIR', kind: 'cfg', data: compilation.optimizedMir},
-      {name: 'Optimizations', kind: 'optimizations', data: compilation.optimizations},
-      {name: 'Call Graph', kind: 'callgraph', data: CallGraphBuilder.build(compilation.ast, compilation.sem.instances)},
-      {name: 'Incremental queries', kind: 'queries', data: hit ? {...compilation.queries, projectCacheHit: true} : compilation.queries},
-      {name: 'WebAssembly', kind:'wasm',data:compilation.wasm},
-      {name: 'JavaScript', kind: 'code', data: {code: compilation.js, mappings: compilation.generatedMap}}
-    ];
+    const stages = compilerStages(compilation, {plan, units, edges: moduleInfo.edges,
+      configuration: moduleInfo.configuration, cacheHit: !!hit});
     return {...compilation, tests, stages, plan, cacheHit: !!hit, cache: {hits: this.hits, misses: this.misses, entries: this.results.size, ...syntaxStats},
       timings: hit ? [] : compilation.timings, elapsedMs,
       unit: {source: files[plan.entry], modules: units.map(f => f.file), files: units, sourceMap: []}};

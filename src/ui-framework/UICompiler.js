@@ -1,3 +1,4 @@
+import {compilerStages} from '../project/CompilerStages.js';
 import {compile} from '../engine.js';
 import {Diagnostic} from '../compiler/Diagnostic.js';
 import {TypeSystem as T} from '../compiler/TypeSystem.js';
@@ -13,16 +14,19 @@ const scalar = type => T.numeric(type) || ['String', '&str', 'bool', 'char', '()
 
 /** Typed Rust -> verified MIR -> checked UI imports, with original-source spans. */
 export class UICompiler {
-  static compile(source, {file = 'src/ui.rs', entry = 'app', optimize = true, maxSteps = 250000, files = {}, entryProps = false, ...options} = {}) {
+  static compile(source, {file = 'src/ui.rs', entry = 'app', optimize = true, maxSteps = 250000, files = {}, entryProps = false, inspection = false, ...options} = {}) {
+    const started = performance.now();
     if (!Number.isSafeInteger(maxSteps) || maxSteps < 1 || maxSteps > 2_000_000) throw new Diagnostic('F_UI_BUDGET', 'UI instruction budget must be between 1 and 2,000,000');
     if (file === UI_ABI_FILE || typeof file !== 'string' || !/^[\w./ -]+\.rs$/.test(file)) throw new Diagnostic('F_UI_FILE', 'A normal .rs source filename is required');
     if (!/^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*$/.test(entry)) throw new Diagnostic('F_UI_ENTRY', 'Invalid UI entry name');
     const project = prepareUIProject(source, {file, files, configuration: options.configuration}), expansion = project.expansion;
+    const projectMs = performance.now() - started;
     if (typeof entryProps !== 'boolean') throw new Diagnostic('F_UI_ENTRY', 'entryProps must be boolean');
     const build = compile(expansion.source, {...options, entry, ...(entryProps ? {mode: 'library'} : {}), optimize, file, tokens: project.tokens, ast: project.ast});
     if (entryProps) build.entry = build.optimizedMir.find(fn => fn.instance === `${entry}<>`)?.instance;
     const entryFunction = build.optimizedMir.find(fn => fn.instance === build.entry);
     if (entryFunction?.returnType !== 'ui::Node' || entryFunction?.params?.length !== (entryProps ? 1 : 0)) throw new Diagnostic('F_UI_ENTRY', 'A UI entry must return ui::Node; entryProps permits exactly one owned argument', entryFunction?.span);
+    const linkStarted = performance.now();
     const shapes = new Map(build.sem.structures.map(shape => [shape.name, shape]));
     const enums = new Map(build.sem.enums.map(shape => [shape.name, shape]));
     const ownedSchemas = Object.create(null);
@@ -75,12 +79,32 @@ export class UICompiler {
       MirVerifier.verify(result); return result;
     };
     const mir = link(build.mir), optimizedMir = link(build.optimizedMir);
+    const linkMs = performance.now() - linkStarted, emitStarted = performance.now();
     const emitted = new JavaScriptEmitter(optimizedMir, {entry: null, library: true, runtime: {maxSteps}}).build();
+    const emitMs = performance.now() - emitStarted, wasmStarted = performance.now();
     const wasm = new WebAssemblyEmitter(optimizedMir, {entry: build.entry}).build();
-    return {format: 'ferrite-ui-v1', abi: UI_ABI_VERSION, file, source, entry: build.entry, optimize, maxSteps,
+    const wasmMs = performance.now() - wasmStarted, verifyStarted = performance.now();
+    const verification = MirVerifier.verify(optimizedMir);
+    const timings = [{name: 'Expand views / parse modules', ms: projectMs}, ...build.timings,
+      {name: 'Link UI ABI / verify', ms: linkMs}, {name: 'Emit linked UI JavaScript', ms: emitMs},
+      {name: 'Emit linked UI WebAssembly', ms: wasmMs}, {name: 'Verify linked UI MIR', ms: performance.now() - verifyStarted}];
+    const artifact = {format: 'ferrite-ui-v1', abi: UI_ABI_VERSION, file, source, entry: build.entry, optimize, maxSteps,
       files: project.files, modules: project.modules, ownedSchemas, entryPropsType, nodes: project.nodes, mappings: expansion.mappings, expandedSource: expansion.source, mir, optimizedMir,
       js: emitted.code, generatedMap: emitted.sourceMap, wasm: {bytes: Array.from(wasm.bytes), metadata: wasm.metadata},
-      diagnostics: build.diagnostics, timings: build.timings, closures: build.sem.closures, verification: MirVerifier.verify(optimizedMir)};
+      diagnostics: build.diagnostics, timings, closures: build.sem.closures, verification};
+    if (inspection) {
+      // Inspector MIR/code/Wasm must be the linked program executed by UISession,
+      // not the temporary Rust declaration stubs used during type checking.
+      const result = {...build, frontend: 'rust-ui', file, optimize, mir, optimizedMir,
+        js: artifact.js, generatedMap: artifact.generatedMap, wasm: artifact.wasm, verification,
+        timings, elapsedMs: performance.now() - started, tests: [], cacheHit: false,
+        cache: {parsedFiles: project.units.length, reusedFiles: 0},
+        unit: {source, modules: Object.keys(project.files), files: project.units, sourceMap: expansion.mappings}};
+      result.stages = compilerStages(result, {units: project.units, edges: project.modules,
+        configuration: project.configuration, extra: [{name: 'UI source nodes', kind: 'tree', data: project.nodes}]});
+      artifact.inspection = result;
+    }
+    return artifact;
   }
 }
 

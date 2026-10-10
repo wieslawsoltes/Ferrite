@@ -21,7 +21,8 @@ export function prepareUIProject(source, {file, files = {}, configuration} = {})
   const resolver = new ModuleResolver(inputs, cache), ast = resolver.resolve(file, {configuration});
   // ModuleResolver preserves declared module namespaces and the original file spans.
   ast.items.push(...Parser.parse(Lexer.tokenize(UI_DECLARATIONS, {file: UI_ABI_FILE})).items);
-  return {ast, tokens: resolver.records.get(file).tokens, expansion: expansions.get(file),
+  return {ast, tokens: [...resolver.records.values()].flatMap(record => record.tokens), expansion: expansions.get(file),
     files: Object.fromEntries([...resolver.records].map(([path, record]) => [path, record.source])),
-    modules: resolver.result.edges, nodes: [...expansions.values()].flatMap(expansion => expansion.nodes)};
+    units: [...resolver.records.values()].map(({file, source, tokens}) => ({file, source, tokens})),
+    configuration: resolver.result.configuration, modules: resolver.result.edges, nodes: [...expansions.values()].flatMap(expansion => expansion.nodes)};
 }

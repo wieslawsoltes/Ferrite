@@ -9,9 +9,10 @@ function fixture() {
   const source = 'fn app() { view! { <h1>Timer</h1> } }';
   const session = {
     root: {hidden: false}, generation: 0, entryFile: 'src/main.ui.rs', entry: 'app', backend: 'javascript',
-    model: {files: {'src/main.ui.rs': source}, revision: 1}, css: {value: ''},
+    model: {files: {'src/main.ui.rs': source}, revision: 1, workspaceEpoch: 0}, css: {value: ''},
     layoutMode: {value: 'off', dataset: {}, removeAttribute() {}}, frame: {style: {}}, pickButton: {setAttribute() {}},
-    status: {dataset: {}}, saveProject() {}, renderOutline() {},
+    status: {dataset: {}}, saveProject() {}, renderOutline() {}, publishInspection() {},
+    app: {settings: {optimize: true}, publishUIBuild() {}, failUIBuild() {}},
     preview: {reset: () => 'channel', load: html => mounted.push(html)},
     compiler: {compile(files, command, options, signal) {
       assert.equal(command, 'ui-compile');

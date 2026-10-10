@@ -18,13 +18,15 @@ export class CompilerOperation {
         return operation ? designer.apply(operation, revision) : designer.snapshot();
       }
       if (!['ui-compile', 'ui-export', 'ui-analyze', 'ui-render'].includes(command)) throw Error('Unknown UI compiler operation');
-      const artifact = UICompiler.compile(source, {file, entry, files, maxSteps: options.maxSteps ?? 250000});
-      if (command === 'ui-render') return {html: exportHydratedHTML(artifact, {backend, title, css, identifierPrefix: options.identifierPrefix ?? ''}), file, entry: artifact.entry, execution: 'server-rendered Rust; effects and refs suppressed'};
-      if (command === 'ui-export') return {html: exportHTML(artifact, {backend, title, css, channel}), file, entry: artifact.entry};
-      if (command === 'ui-analyze') return {file, entry: artifact.entry, nodes: artifact.nodes, diagnostics: artifact.diagnostics,
+      const {inspection: build, ...artifact} = UICompiler.compile(source, {file, entry, files,
+        optimize: options.optimize !== false, inspection: options.inspection === true, maxSteps: options.maxSteps ?? 250000});
+      const results = build ? {build} : {};
+      if (command === 'ui-render') return {...results, html: exportHydratedHTML(artifact, {backend, title, css, identifierPrefix: options.identifierPrefix ?? ''}), file, entry: artifact.entry, execution: 'server-rendered Rust; effects and refs suppressed'};
+      if (command === 'ui-export') return {...results, html: exportHTML(artifact, {backend, title, css, channel}), file, entry: artifact.entry};
+      if (command === 'ui-analyze') return {...results, file, entry: artifact.entry, nodes: artifact.nodes, diagnostics: artifact.diagnostics,
         verification: artifact.verification, timings: artifact.timings, backends: ['javascript', 'wasm', 'mir'],
         compatibility: 'Ferrite Rust subset and independent React-shaped runtime; not rustc or complete React compatibility'};
-      return {artifact, html: exportHTML(artifact, {backend, title, css, channel})};
+      return {...results, artifact, html: exportHTML(artifact, {backend, title, css, channel})};
     }
     const execute = command.startsWith('agent-'), mode = command.slice(6);
     if (execute && !['run', 'test'].includes(mode)) throw Error('Unknown compiler execution command');

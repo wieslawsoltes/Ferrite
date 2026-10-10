@@ -641,6 +641,12 @@ def run():
 
             def mobile():
                 page.set_viewport_size({'width': 390, 'height': 844})
+                # Explicit sample checks now reveal Compiler. Exercise a real
+                # closed -> open sidebar transition, independent of the last command.
+                compiler = page.locator('[data-tool-window=compiler]')
+                if compiler.is_visible():
+                    page.locator('[data-tool="compiler"]').click()
+                expect(compiler).to_be_hidden()
                 page.locator('[data-tool="compiler"]').click()
                 expect(page.locator('[data-tool-window=compiler]')).to_be_visible()
                 expect(page.locator('[data-tool-window=compiler]')).to_have_attribute('data-overlay','true')

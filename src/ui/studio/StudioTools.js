@@ -24,7 +24,13 @@ export const StudioTools = {
       file = this.nativeAsset.name; backend = 'native-wasm'; html = exportNativeHTML(this.nativeAsset.bytes, {title: file, css: this.css.value});
     } else {
       this.saveProject(); file = this.entryFile;
-      ({html} = await this.compiler.compile({...this.model.files}, hydrate ? 'ui-render' : 'ui-export', {file, entry: this.entry, backend: this.backend, maxSteps: this.project?.settings.maxSteps ?? 250000, css: this.css.value}));
+      const revision = this.model.revision, epoch = this.model.workspaceEpoch, optimize = this.app.settings.optimize;
+      let result;
+      try { result = await this.compiler.compile({...this.model.files}, hydrate ? 'ui-render' : 'ui-export', {file, entry: this.entry, backend: this.backend, optimize, inspection: true, maxSteps: this.project?.settings.maxSteps ?? 250000, css: this.css.value}); }
+      catch (error) { if (!this.disposed) this.app.failUIBuild(error, file, revision, epoch, optimize); throw error; }
+      if (this.disposed || revision !== this.model.revision || epoch !== this.model.workspaceEpoch) throw new DOMException('Stale UI export', 'AbortError');
+      html = result.html;
+      if (this.app.publishUIBuild(result.build, file, revision, epoch)) this.app.uiBuildOutput('build', result.build, 'Build succeeded. Standalone Rust UI HTML exported.');
     }
     const url = URL.createObjectURL(new Blob([html], {type: 'text/html;charset=utf-8'})); const link = document.createElement('a');
     link.href = url; link.download = file.split('/').pop().replace(/\.(?:rs|wasm)$/, '.html'); document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);

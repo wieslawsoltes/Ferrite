@@ -168,6 +168,9 @@ def run():
             studio.get_by_role('button', name='Pick element', exact=True).click(); frame.locator('button').click()
             expect(studio.get_by_label('UI source file', exact=True)).to_have_value('src/card.rs')
             assert page.evaluate('window.ferrite.getUIState().entryFile') == 'src/app.rs'
+            # Revealing a component opens its source in Split. Return to Design
+            # before canvas gestures when compiler/output tools are also visible.
+            page.locator('.document-mode[data-mode=design]').click()
             studio.get_by_role('button', name='Pick element', exact=True).click()
             expect(studio.get_by_role('button', name='Pick element', exact=True)).to_have_attribute('aria-pressed', 'false')
             studio.get_by_label('Canvas editing', exact=True).select_option('move')

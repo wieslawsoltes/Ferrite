@@ -1,0 +1,74 @@
+[
+  {
+    "id": "counter",
+    "title": "Counter",
+    "description": "A minimal signal, a read-only value and one event. Every activation increments exactly once.",
+    "tags": [
+      "State",
+      "Events"
+    ],
+    "maxSteps": 250000
+  },
+  {
+    "id": "temperature",
+    "title": "Temperature Converter",
+    "description": "Bidirectional numeric editing that preserves the last valid opposite value during incomplete input.",
+    "tags": [
+      "Binding",
+      "Validation"
+    ],
+    "maxSteps": 250000
+  },
+  {
+    "id": "flight",
+    "title": "Flight Booker",
+    "description": "One-way and return booking with real calendar-date validation, ordering constraints and confirmation.",
+    "tags": [
+      "Forms",
+      "Validation"
+    ],
+    "maxSteps": 250000
+  },
+  {
+    "id": "timer",
+    "title": "Timer",
+    "description": "Elapsed-time progress, live duration changes, restart and lifecycle-owned timer cleanup.",
+    "tags": [
+      "Time",
+      "Lifecycle"
+    ],
+    "maxSteps": 250000
+  },
+  {
+    "id": "crud",
+    "title": "CRUD",
+    "description": "Create, read, update and delete with immediate prefix filtering and stable record identity.",
+    "tags": [
+      "Lists",
+      "Identity"
+    ],
+    "maxSteps": 250000
+  },
+  {
+    "id": "circles",
+    "title": "Circle Drawer",
+    "description": "SVG hit testing, context-menu diameter editing and transactional undo/redo for whole gestures.",
+    "tags": [
+      "SVG",
+      "Undo / redo"
+    ],
+    "maxSteps": 1000000
+  },
+  {
+    "id": "cells",
+    "title": "Cells",
+    "description": "A 2,600-cell reusable grid with a Rust formula parser, reverse dependency graph and incremental recalculation.",
+    "tags": [
+      "Grid",
+      "Parser",
+      "Dependencies",
+      "spreadsheet"
+    ],
+    "maxSteps": 2000000
+  }
+]

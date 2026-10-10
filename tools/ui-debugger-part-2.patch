@@ -1,0 +1,193 @@
+diff --git a/src/ui/IdeApplication.js b/src/ui/IdeApplication.js
+index 57dd266..9fde9f3 100644
+--- a/src/ui/IdeApplication.js
++++ b/src/ui/IdeApplication.js
+@@ -61 +61 @@ export class IdeApplication {
+-    this.debugger=new DebuggerView(this.panels.get('debugger'),this.selection,command=>this.execution.command(command,this.model.breakpointList));
++    this.debugger=new DebuggerView(this.panels.get('debugger'),this.selection,command=>this.debugCommand(command),{onSelect:span=>this.studio?.current && this.debugger.debug ? this.studio.current.revealDebugSpan(span) : this.selection.select(span,'debugger')});
+@@ -111,3 +111,3 @@ export class IdeApplication {
+-      else if(event.key==='F5'){event.preventDefault();if(this.execution.worker)this.execution.command('continue',this.model.breakpointList);else this.compile('debug');}
+-      else if(event.key==='F10'){event.preventDefault();this.execution.command('step-line');}
+-      else if(event.key==='F11'){event.preventDefault();this.execution.command('step');}
++      else if(event.key==='F5'){event.preventDefault();event.shiftKey?this.stop():this.debugCommand('continue');}
++      else if(event.key==='F10'){event.preventDefault();this.debugCommand(event.shiftKey?'back-line':'step-over');}
++      else if(event.key==='F11'){event.preventDefault();this.debugCommand(event.shiftKey?'step-out':'step-line');}
+@@ -136,0 +137 @@ export class IdeApplication {
++    ...[['Continue debugging','continue'],['Pause debugging','pause'],['Step over','step-over'],['Step into source line','step-line'],['Step out','step-out'],['Step instruction','step'],['Reverse source line','back-line'],['Stop debugging','stop']].map(([label,command])=>({label,icon:'debug',execute:()=>this.debugCommand(command)})),
+@@ -156 +157 @@ export class IdeApplication {
+-    else if(event.kind==='open'){this.projectView.selected=this.model.active;this.renderWorkspace();}else if(event.kind==='saved'){this.tabs.render();this.projectView.render();}
++    else if(event.kind==='open'){if(this.studio.current)this.studio.current.renderState();else if(!this.execution.worker)this.debugger.render(null);this.projectView.selected=this.model.active;this.renderWorkspace();}else if(event.kind==='saved'){this.tabs.render();this.projectView.render();}
+@@ -184,0 +186,8 @@ export class IdeApplication {
++  async debugCommand(command) {
++    try {
++      if (this.backend !== 'native' && await this.uiCommands.debug(command)) return;
++      if (command === 'stop') this.stop();
++      else if (this.execution.worker) this.execution.command(command, this.model.breakpointList);
++      else if (command === 'continue' || command === 'arm') await this.compile('debug');
++    } catch (error) { if (error.name !== 'AbortError') this.error(error); }
++  }
+@@ -225 +234 @@ export class IdeApplication {
+-  stop(notify=true){this.uiCommands?.cancel();this.nativeCheckPending=false;clearTimeout(this.compileTimer);this.requestSerial++;this.compiler.cancel();this.execution.stop(false);this.native.cancel().catch(()=>{});if(notify)this.status('Stopped','');}
++  stop(notify=true){this.studio?.current?.stopDebugging();this.uiCommands?.cancel();this.nativeCheckPending=false;clearTimeout(this.compileTimer);this.requestSerial++;this.compiler.cancel();this.execution.stop(false);this.native.cancel().catch(()=>{});if(notify)this.status('Stopped','');}
+diff --git a/src/ui/controllers/UICommandController.js b/src/ui/controllers/UICommandController.js
+index 7d8b45a..f03c626 100644
+--- a/src/ui/controllers/UICommandController.js
++++ b/src/ui/controllers/UICommandController.js
+@@ -18,0 +19,8 @@ export class UICommandController {
++  async debug(command) {
++    const file = this.entry(); if (!file) return false;
++    const session = this.app.studio.sessions.get(file);
++    if (command === 'stop') { this.cancel(); session?.stopDebugging(); return true; }
++    if (command === 'continue' && (!session?.artifact || !session.preview.ready || !session.snapshot?.debugger?.armed)) await this.run('debug', file);
++    else if (session) await session.debug(command);
++    return true;
++  }
+@@ -33,0 +42,2 @@ export class UICommandController {
++        // A stale CLI completion cannot take over the UI debugger or source selection.
++        app.execution?.stop(false); app.compiler?.cancel(); app.requestSerial = (app.requestSerial ?? 0) + 1;
+@@ -36 +46,10 @@ export class UICommandController {
+-        session.armOnReady=command==='debug';session.startQueued=true;try{app.studio.showSession(session);await session.build({signal:controller.signal});}finally{session.startQueued=false;}
++        session.startQueued=true;
++        try {
++          app.studio.showSession(session);
++          const reusable = command === 'debug' && session.artifact && session.preview.ready && session.compiledGeneration === session.generation && !session.nativeAsset && session.compiledBackend === options.backend;
++          if (!reusable) await session.build({signal:controller.signal});
++          await session.preview.waitUntilReady({signal:controller.signal});
++          controller.signal.throwIfAborted();
++          if (!live() || this.entry() !== file) return;
++          if (command === 'debug') await session.debug(session.snapshot?.debugger?.armed ? 'continue' : 'arm', controller.signal);
++        } finally { session.startQueued=false; }
+@@ -38,2 +57,2 @@ export class UICommandController {
+-          if(command==='debug')session.dock.open('debug');
+-          app.status('Rust UI preview loading','success');
++          if(command==='debug') { session.dock.open('debug'); app.dock.open('debugger'); }
++          app.status(command === 'debug' ? 'Rust UI debugger attached · interact with the preview to hit breakpoints' : 'Rust UI preview ready','success');
+diff --git a/src/ui/studio/DesignerView.js b/src/ui/studio/DesignerView.js
+index 4faf4a6..3026f87 100644
+--- a/src/ui/studio/DesignerView.js
++++ b/src/ui/studio/DesignerView.js
+@@ -0,0 +1 @@
++import {DebuggerView} from '../views/DebuggerView.js';
+@@ -78,2 +79,2 @@ export function createDesignerView(s) {
+-  for(const [label,command,icon] of [['Arm events','arm','debug'],['Instruction','step','step'],['Source line','step-line','line'],['Back instruction','back','step'],['Back line','back-line','line'],['Restart event','restart','debug'],['Continue','continue','run'],['Disarm','stop','stop']])debugBar.append(s.button(label,()=>s.debug(command),icon));
+-  s.states=Dom.element('div','studio-states');s.debugOutput=Dom.element('pre','studio-debug');debug.append(debugBar,s.states,s.debugOutput);
++  s.states=Dom.element('div','studio-states');s.debugOutput=Dom.element('div','studio-debug-inspector');debug.append(debugBar,s.debugOutput,s.states);
++  s.debugView=new DebuggerView(s.debugOutput,s.app.selection,command=>s.debug(command).catch(error=>s.error(error)),{ui:true,onSelect:span=>s.revealDebugSpan(span)});
+diff --git a/src/ui/studio/PreviewChannel.js b/src/ui/studio/PreviewChannel.js
+index d957543..6eb35b5 100644
+--- a/src/ui/studio/PreviewChannel.js
++++ b/src/ui/studio/PreviewChannel.js
+@@ -29 +29,5 @@ export class PreviewChannel {
+-      if (message.event === 'ready') this.ready = true;
++      if (message.event === 'ready') {
++        this.ready = true;
++        for (const [id, task] of this.pending) if (id.startsWith('ready:') && task.channel === this.channel) { this.pending.delete(id); clearTimeout(task.timer); task.signal?.removeEventListener('abort', task.abort); task.resolve(); }
++      }
++      if (message.event === 'error') this.rejectPending(Error(message.error?.message ?? 'UI preview failed to load'));
+@@ -33,0 +38,12 @@ export class PreviewChannel {
++  waitUntilReady({signal} = {}) {
++    if (signal?.aborted) return Promise.reject(signal.reason);
++    if (this.ready) return Promise.resolve();
++    if (this.disposed) return Promise.reject(Error('Preview channel is disposed'));
++    const channel = this.channel;
++    return new Promise((resolve, reject) => {
++      const id = `ready:${++this.sequence}`, task = {resolve, reject, signal, channel};
++      const cancel = error => { this.pending.delete(id); clearTimeout(task.timer); signal?.removeEventListener('abort', task.abort); reject(error); };
++      task.abort = () => cancel(signal.reason); task.timer = setTimeout(() => cancel(Error('UI preview readiness timed out')), this.timeoutMs);
++      signal?.addEventListener('abort', task.abort, {once: true}); this.pending.set(id, task);
++    });
++  }
+diff --git a/src/ui/studio/StudioPreview.js b/src/ui/studio/StudioPreview.js
+index 96f0332..4355f52 100644
+--- a/src/ui/studio/StudioPreview.js
++++ b/src/ui/studio/StudioPreview.js
+@@ -14,0 +15 @@ export const StudioPreview = {
++    this.stopDebugging?.();
+@@ -16 +17 @@ export const StudioPreview = {
+-    this.layoutMode.value = 'off'; this.layoutMode.dataset.activeMode = 'off'; this.frame.style.pointerEvents = ''; this.layoutMode.removeAttribute('aria-busy'); this.picking = false; this.pickButton.setAttribute('aria-pressed', 'false'); this.artifact = null;
++    this.layoutMode.value = 'off'; this.layoutMode.dataset.activeMode = 'off'; this.frame.style.pointerEvents = ''; this.layoutMode.removeAttribute('aria-busy'); this.picking = false; this.pickButton.setAttribute('aria-pressed', 'false'); this.artifact = null; this.snapshot = null; this.renderState();
+@@ -21 +22 @@ export const StudioPreview = {
+-    this.artifact = artifact; this.compiledSource = source; this.compiledFile = file; this.compiledGeneration = generation;
++    this.artifact = artifact; this.compiledSource = source; this.compiledFile = file; this.compiledGeneration = generation; this.compiledBackend = this.backend;
+@@ -46,0 +48,4 @@ export const StudioPreview = {
++    if (message.event === 'debug-command') {
++      if (!this.root.hidden && this.app.studio?.current === this && ['continue','stop','step-over','step-out','step-line','back-line'].includes(message.command)) this.app.debugCommand(message.command);
++      return;
++    }
+@@ -52 +56,0 @@ export const StudioPreview = {
+-      if (message.event === 'ready' && this.armOnReady) { this.armOnReady=false; this.debug('arm').catch(error=>this.error(error)); }
+@@ -57 +61,4 @@ export const StudioPreview = {
+-      if (!this.root.hidden && this.dock?.visible !== false && span?.file === this.file) this.app.selection.select(span, 'ui-studio', this.model.revision);
++      if (['debug-paused','debug-error'].includes(message.event) && span && !this.root.hidden) {
++        if (this.revealDebugSpan) this.revealDebugSpan(span);
++        else if (this.dock?.visible !== false && span.file === this.file) this.app.selection.select(span, 'ui-studio', this.model.revision);
++      }
+diff --git a/src/ui/studio/StudioProject.js b/src/ui/studio/StudioProject.js
+index d758e94..e2424ba 100644
+--- a/src/ui/studio/StudioProject.js
++++ b/src/ui/studio/StudioProject.js
+@@ -38,0 +39 @@ export const StudioProject = {
++    if (event.kind === 'breakpoint') { this.syncBreakpoints(); return; }
+@@ -54,0 +56,2 @@ export const StudioProject = {
++    this.stopDebugging?.(); if (this.preview?.channel) this.preview.reset();
++    if (this.frame) this.frame.style.pointerEvents = 'none';
+diff --git a/src/ui/studio/StudioTools.js b/src/ui/studio/StudioTools.js
+index 5578b87..081f0d7 100644
+--- a/src/ui/studio/StudioTools.js
++++ b/src/ui/studio/StudioTools.js
+@@ -6,2 +6,39 @@ export const StudioTools = {
+-    this.assertLive(); this.assertSourcePreview(); const result = await this.preview.request(`debug.${command}`, command === 'arm' ? {breakpoints: this.model.breakpointList} : {}, {signal});
+-    if (this.snapshot) this.snapshot.debugger = result; this.renderState(); return result;
++    this.assertLive(); this.assertSourcePreview();
++    if (this.debugPending && !['stop','pause'].includes(command)) return this.debugPending;
++    this.debugRequest?.abort(); this.debugRequest = new AbortController();
++    const combined = AbortSignal.any([this.debugRequest.signal, signal].filter(Boolean));
++    const generation = this.generation, channel = this.preview.channel;
++    const current = () => !combined.aborted && !this.disposed && generation === this.generation && channel === this.preview.channel;
++    const operation = (async () => {
++      if (command === 'arm') await this.interact();
++      combined.throwIfAborted();
++      if (!current()) throw new DOMException('Stale debugger command', 'AbortError');
++      if (!['arm','stop','pause'].includes(command)) await this.preview.request('debug.breakpoints', {breakpoints: this.model.breakpointList}, {signal: combined});
++      const result = await this.preview.request(`debug.${command}`, command === 'arm' ? {breakpoints: this.model.breakpointList, pauseOnEntry: this.model.breakpointList.length === 0} : {}, {signal: combined});
++      if (current()) { if (this.snapshot) this.snapshot.debugger = result; this.renderState(); if (command === 'arm') this.syncBreakpoints?.(); }
++      return result;
++    })();
++    this.debugPending = operation;
++    try { return await operation; } finally { if (this.debugPending === operation) this.debugPending = null; }
++  },
++  syncBreakpoints() {
++    if (!this.artifact || !this.preview.ready || !this.snapshot?.debugger?.armed) return;
++    const generation = this.generation;
++    this.preview.request('debug.breakpoints', {breakpoints: this.model.breakpointList}).then(result => {
++      if (!this.disposed && generation === this.generation && this.snapshot?.debugger) { this.snapshot.debugger.breakpoints = result.breakpoints; this.snapshot.debugger.breakpointBindings = result.breakpointBindings; this.renderState(); }
++    }).catch(error => { if (generation === this.generation) this.error(error); });
++  },
++  stopDebugging() {
++    this.debugRequest?.abort();
++    if (this.preview.ready && !this.nativeAsset) {
++      const generation = this.generation;
++      this.preview.request('debug.stop').then(result => { if (!this.disposed && generation === this.generation && this.snapshot) { this.snapshot.debugger = result; this.renderState(); } }).catch(() => {});
++    }
++  },
++  revealDebugSpan(span) {
++    if (!span || this.disposed || this.root.hidden || this.app.studio?.current && this.app.studio.current !== this) return;
++    if (this.app.studio && Object.hasOwn(this.model.files, span.file)) {
++      this.app.studio.revealSource(this, () => { this.file = span.file; this.model.open(span.file); this.model.setDocumentState(span.file, {mode: 'split'}); });
++      this.refreshFiles(); this.refreshSource({preserve: true, invalidate: false});
++    }
++    this.app.selection.select(span, 'ui-studio', this.model.revision);
+@@ -14 +51 @@ export const StudioTools = {
+-        this.assertLive(); const next = state.type === 'bool' ? (() => { if (!['true', 'false'].includes(value.value)) throw Error('Boolean state must be true or false'); return value.value === 'true'; })() : !['i64', 'String'].includes(state.type) ? JSON.parse(value.value) : value.value;
++        this.assertLive(); if (this.snapshot?.debugger?.state) throw Error('Continue or stop the paused event before editing state'); const next = state.type === 'bool' ? (() => { if (!['true', 'false'].includes(value.value)) throw Error('Boolean state must be true or false'); return value.value === 'true'; })() : !['i64', 'String'].includes(state.type) ? JSON.parse(value.value) : value.value;
+@@ -18 +55,2 @@ export const StudioTools = {
+-    this.debugOutput.textContent = JSON.stringify({calls: this.snapshot?.calls, handles: this.snapshot?.handles, debugger: this.snapshot?.debugger}, null, 2)?.slice(0, 100000) ?? 'Preview an app to inspect its state.';
++    this.debugView?.renderUI(this.snapshot?.debugger, {live: !!this.artifact && this.preview?.ready && !this.nativeAsset});
++    if (this.app.studio?.current === this) this.app.debugger?.renderUI(this.snapshot?.debugger, {live: !!this.artifact && this.preview?.ready && !this.nativeAsset});
+diff --git a/src/ui/studio/UIStudioSession.js b/src/ui/studio/UIStudioSession.js
+index 3988739..9927fe8 100644
+--- a/src/ui/studio/UIStudioSession.js
++++ b/src/ui/studio/UIStudioSession.js
+@@ -38 +38 @@ export class UIStudioSession {
+-  dispose() { this.disposed=true; this.dock?.dispose(); clearTimeout(this.buildTimer); this.active?.abort(); this.unsubscribe(); this.unselect(); this.preview.dispose(); void this.compiler.close(); }
++  dispose() { this.debugRequest?.abort(); this.debugView?.dispose(); this.disposed=true; this.dock?.dispose(); clearTimeout(this.buildTimer); this.active?.abort(); this.unsubscribe(); this.unselect(); this.preview.dispose(); void this.compiler.close(); }

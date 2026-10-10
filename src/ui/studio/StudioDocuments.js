@@ -20,10 +20,11 @@ export const StudioDocuments = {
   release(path,session) { session.dispose();session.root.remove();this.sessions.delete(path);for(const [source,owner] of this.sourceOwners)if(owner===path)this.sourceOwners.delete(source);if(this.current===session)this.current=null; },
   disposeSessions() { for(const [path,session] of this.sessions)this.release(path,session); },
   ensurePreview(session) {
-    if(session.artifact||session.startQueued||session.disposed)return;session.startQueued=true;
+    if(session.artifact){session.publishInspection();return;}
+    if(session.startQueued||session.disposed)return;session.startQueued=true;
     queueMicrotask(async()=>{try{if(!session.disposed&&!session.root.hidden)await session.build();}catch(error){session.error(error);}finally{session.startQueued=false;}});
   },
-  focusDocument() { this.app.dock.collapse?.('right');this.app.dock.collapse?.('bottom'); },
+  focusDocument() { /* Opening a document must not hide the user's compiler or output tools. */ },
   open(path) {
     path??=this.isView(this.model.active)?this.model.active:Object.keys(this.model.files).find(file=>this.isView(file));
     if(!path){this.app.dock.open('ui-studio');return;}

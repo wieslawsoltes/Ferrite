@@ -7,11 +7,11 @@ import {StudioTools} from '../src/ui/studio/StudioTools.js';
 const file = 'src/app.ui.rs';
 function fixture(t) {
   const calls = [], errors = [], model = {active:file, files:{[file]:'fn app()->ui::Node { view! { <div/> } }'}, revision:1, workspaceEpoch:1};
-  const session = {generation:1, compiledGeneration:1, compiledBackend:'javascript', artifact:{}, snapshot:{debugger:{armed:false}}, backendSelect:{}, dock:{open:kind=>calls.push(['dock',kind])},
+  const session = {generation:1, compiledGeneration:1, compiledBackend:'javascript', compiledOptimize:true, artifact:{}, snapshot:{debugger:{armed:false}}, backendSelect:{}, dock:{open:kind=>calls.push(['dock',kind])},
     preview:{ready:true, waitUntilReady:async()=>{}}, build:async()=>calls.push(['build']),
     debug:async(command,signal)=>{signal?.throwIfAborted();calls.push(['debug',command]);session.snapshot.debugger.armed=command!=='stop';},stopDebugging:()=>calls.push(['stop'])};
   const studio = {sourceOwners:new Map(),sessions:new Map([[file,session]]),isView:path=>path?.endsWith('.ui.rs'),session:()=>session,showSession:()=>calls.push(['show'])};
-  const app = {model,studio,backend:'javascript',dock:{open:kind=>calls.push(['main-dock',kind])},status:()=>{},error:error=>errors.push(error)};
+  const app = {model,studio,backend:'javascript',settings:{optimize:true},isCurrentUI:(path,revision,epoch)=>path===model.active&&revision===model.revision&&epoch===model.workspaceEpoch,failUIBuild:error=>errors.push(error),dock:{open:kind=>calls.push(['main-dock',kind])},status:()=>{},error:error=>errors.push(error)};
   const controller=new UICommandController(app);t.after(()=>controller.dispose());return {controller,session,app,model,calls,errors};
 }
 test('Debug attaches to an existing preview without recompiling or losing state',async t=>{
@@ -19,8 +19,8 @@ test('Debug attaches to an existing preview without recompiling or losing state'
   await f.controller.debug('continue');assert.deepEqual(f.calls.filter(c=>c[0]==='debug'),[['debug','arm'],['debug','continue']]);
 });
 test('Debug rebuilds stale or changed-backend previews before waiting for readiness',async t=>{
-  for(const stale of ['artifact','backend','generation']){
-    const f=fixture(t);if(stale==='artifact')f.session.artifact=null;else if(stale==='backend')f.app.backend='wasm';else f.session.generation++;
+  for(const stale of ['artifact','backend','generation','optimization']){
+    const f=fixture(t);if(stale==='artifact')f.session.artifact=null;else if(stale==='backend')f.app.backend='wasm';else if(stale==='optimization')f.app.settings.optimize=false;else f.session.generation++;
     await f.controller.run('debug',file);assert.equal(f.calls.filter(c=>c[0]==='build').length,1);assert.ok(f.calls.find(c=>c[1]==='arm'));assert.deepEqual(f.errors,[]);
   }
 });
@@ -67,4 +67,20 @@ test('UI debugger Stop cancels an in-flight launch and normal UI launches detach
   const f=fixture(t);let ready;f.app.execution={stop:()=>f.calls.push(['detach-cli'])};f.app.compiler={cancel:()=>f.calls.push(['cancel-cli-build'])};
   f.session.preview.waitUntilReady=()=>new Promise(resolve=>ready=resolve);const pending=f.controller.run('debug',file);
   await f.controller.debug('stop');ready();await pending;assert.ok(f.calls.find(c=>c[0]==='detach-cli'));assert.ok(f.calls.find(c=>c[0]==='cancel-cli-build'));assert.ok(f.calls.find(c=>c[0]==='stop'));assert.ok(!f.calls.some(c=>c[0]==='debug'));
+});
+
+// The compiler-output and debugger controllers share publication, not runtime ownership.
+test('attaching keeps compiler inspection and reveals debugger after publishing build output',async t=>{
+  const f=fixture(t);f.session.inspection={file};f.app.buildRevision=f.model.revision;
+  f.app.uiBuildOutput=(command,build)=>f.calls.push(['output',command,build]);
+  await f.controller.run('debug',file);
+  assert.ok(!f.calls.some(call=>call[0]==='build'));
+  const output=f.calls.findIndex(call=>call[0]==='output');
+  const debuggerDock=f.calls.findIndex(call=>call[0]==='main-dock'&&call[1]==='debugger');
+  assert.ok(output>=0&&debuggerDock>output);assert.deepEqual(f.calls.filter(call=>call[0]==='dock').map(call=>call[1]),['debug','canvas']);assert.deepEqual(f.errors,[]);
+});
+test('switching documents restores its debugger after compiler-result invalidation',()=>{
+  const calls=[],app={studio:{current:{renderState:()=>calls.push('debugger')}},model:{active:file},projectView:{},renderWorkspace:()=>calls.push('workspace'),uiCommands:{entry:()=>file},build:{file:'src/other.ui.rs'},invalidate:()=>calls.push('invalidate'),schedule:()=>calls.push('schedule')};
+  IdeApplication.prototype.modelChanged.call(app,{kind:'open'});
+  assert.deepEqual(calls,['workspace','invalidate','schedule','debugger']);
 });

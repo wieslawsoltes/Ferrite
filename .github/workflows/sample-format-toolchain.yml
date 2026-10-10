@@ -1,0 +1,27 @@
+name: Sample formatting toolchain checkpoint
+on:
+  push:
+    branches: [style/readable-samples]
+    paths: [.github/workflows/sample-format-toolchain.yml]
+permissions:
+  contents: read
+jobs:
+  formatter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Prepare pinned sample formatter
+        run: |
+          rustup toolchain install 1.90.0 --profile minimal --component rustfmt
+          mkdir -p formatter/bin formatter/lib
+          executable="$(rustup which --toolchain 1.90.0 rustfmt)"
+          cp "$executable" formatter/bin/rustfmt
+          ldd "$executable" | tee formatter/dependencies.txt
+          ldd "$executable" | awk '/=> \/.*rustup/ {print $3}' | while read -r lib; do cp -L "$lib" formatter/lib/; done
+          rustup run 1.90.0 rustfmt --version > formatter/version.txt
+          tar -czf formatter.tar.gz formatter
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sample-formatter-toolchain
+          path: formatter.tar.gz
+          retention-days: 1

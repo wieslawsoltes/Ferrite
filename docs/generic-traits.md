@@ -135,3 +135,12 @@ method, but not a body that materializes that result without a Sized proof.
 The trait-hardening fixtures also retain qualified-path binder-freshening
 regressions from the earlier implementation without changing caller-private
 definition-site substitutions or generic closure result inference.
+
+## Receiver reborrows
+
+User method calls reborrow existing reference receivers. Compiler-inserted mutable
+receivers reserve a loan before arguments and activate it at invocation, allowing
+shared reads during reservation but rejecting conflicting writes and live aliases.
+Borrow instructions validate and capture the storage location before evaluating
+arguments. See [Receiver reborrows](receiver-reborrows.md) for supported origins,
+evaluation ordering and the conservative reference-result boundary.

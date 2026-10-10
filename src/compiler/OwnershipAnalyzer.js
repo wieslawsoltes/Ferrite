@@ -6,7 +6,7 @@ export class OwnershipAnalyzer {
   constructor(instance) {
     this.instance = instance;
     this.lastUse = new Map(); this.moved = new Set(); this.loans = []; this.references = new Map(); this.events = [];
-    this.controls = [];
+    this.controls = []; this.callFrame = null;
     this.scan(instance.fn.body);
   }
   static analyze(semantic) {
@@ -27,15 +27,38 @@ export class OwnershipAnalyzer {
   expire(node) { this.loans = this.loans.filter(loan => loan.until >= node.span.start); }
   roots(node) {
     if (node.kind === 'variable' && node.binding) return [node.binding.slot];
-    if (node.kind === 'field' || node.kind === 'index') return this.roots(node.object);
-    if (node.kind === 'unary' && node.op === '*') return this.references.get(node.value.binding?.slot) ?? [];
+    if (node.kind === 'field' || node.kind === 'index') return node.autoDeref ? this.referenceRoots(node.object) : this.roots(node.object);
+    if (node.kind === 'unary' && node.op === '*') return this.referenceRoots(node.value);
     return [];
+  }
+  referenceRoots(node) {
+    return this.references.get(node.binding?.slot) ??
+      (T.reference(node.type) && node.binding?.parameter ? [node.binding.slot] : []);
+  }
+  conflicts(loan, mode) {
+    if (mode === 'read') return loan.mutable && !loan.reserved;
+    if (mode === 'reserve mutably') return loan.mutable;
+    return true;
+  }
+  referenceAccess(node, mode = 'read') {
+    this.expire(node);
+    for (const root of this.referenceRoots(node)) {
+      const conflict = this.loans.find(loan => loan.root === root && loan.borrower !== node.binding?.slot &&
+        this.conflicts(loan, mode));
+      if (conflict) throw new Diagnostic('E0502', `Cannot ${mode} through a reference while its referent is borrowed`, node.span,
+        [{message:'Conflicting loan starts here', span:conflict.span}]);
+    }
+  }
+  referenceBase(node) {
+    if (node.kind === 'unary' && node.op === '*') return node.value.binding?.slot ?? null;
+    if (node.kind === 'field' || node.kind === 'index') return node.autoDeref ? node.object.binding?.slot ?? null : this.referenceBase(node.object);
+    return null;
   }
   access(node, mode = 'read', via = null) {
     this.expire(node);
     for (const root of this.roots(node)) {
       if (this.moved.has(root)) throw new Diagnostic('E0382', `Use of moved value '${this.instance.locals[root]?.name}'`, node.span);
-      const conflict = this.loans.find(loan => loan.root === root && loan.borrower !== via && (mode !== 'read' || loan.mutable));
+      const conflict = this.loans.find(loan => loan.root === root && (via == null || loan.borrower !== via) && this.conflicts(loan, mode));
       if (conflict) throw new Diagnostic(mode === 'read' ? 'E0503' : 'E0502', `Cannot ${mode} '${this.instance.locals[root]?.name}' while it is borrowed`, node.span,
         [{message: 'Loan starts here', span: conflict.span}]);
       if (mode === 'move') { this.moved.add(root); this.event('move', node, root); }
@@ -64,7 +87,8 @@ export class OwnershipAnalyzer {
     if (node.kind === 'variable') {
       if (node.constant || node.variant) return [];
       this.access(node, consume && !node.copy ? 'move' : 'read');
-      const roots = this.references.get(node.binding?.slot) ?? (T.reference(node.type) && node.binding?.parameter ? [node.binding.slot] : []);
+      const roots = this.referenceRoots(node);
+      if (T.reference(node.type)) this.referenceAccess(node, consume && !node.copy ? 'move' : 'read');
       if (destination != null && roots.length) {
         this.references.set(destination, roots);
         for (const loan of this.loans) if (loan.borrower === node.binding.slot)
@@ -73,14 +97,31 @@ export class OwnershipAnalyzer {
       return roots;
     }
     if (node.kind === 'unary' && node.op === '&') {
+      if (node.implicitReceiverReborrow) {
+        const pointer = node.value.value;
+        this.value(pointer, false);
+        const roots = this.referenceRoots(pointer);
+        if (!roots.length || !this.callFrame) throw new Diagnostic('F_REBORROW_REFERENCE',
+          'Method receiver references must have a tracked local or parameter origin', node.span);
+        this.referenceAccess(pointer, node.mutable ? 'reserve mutably' : 'read');
+        for (const root of roots) {
+          this.loans.push({root, mutable:node.mutable, reserved:node.mutable, via:pointer.binding?.slot, borrower:null, callFrame:this.callFrame,
+            until:this.callFrame.end, span:node.span});
+          this.event(node.mutable ? 'reserve mutable reborrow' : 'shared reborrow', node, root);
+        }
+        return roots;
+      }
       const roots = this.roots(node.value);
-      this.access(node.value, node.mutable ? 'borrow mutably' : 'read');
+      const reserved = !!node.implicitReceiverBorrow && node.mutable;
+      const mode = reserved ? 'reserve mutably' : node.mutable ? 'borrow mutably' : 'read';
+      this.access(node.value, mode);
       for (const root of roots) {
-        const conflict = this.loans.find(loan => loan.root === root && (node.mutable || loan.mutable));
+        const conflict = this.loans.find(loan => loan.root === root && this.conflicts(loan, mode));
         if (conflict) throw new Diagnostic('E0499', 'Conflicting borrows of the same local', node.span);
-        this.loans.push({root, mutable: node.mutable, borrower: destination,
-          until: destination == null ? node.span.end : this.lastUse.get(destination) ?? node.span.end, span: node.span});
-        this.event(node.mutable ? 'mutable loan' : 'shared loan', node, root);
+        this.loans.push({root, mutable: node.mutable, reserved, borrower: destination,
+          callFrame:destination == null ? this.callFrame : null,
+          until: destination == null ? this.callFrame?.end ?? node.span.end : this.lastUse.get(destination) ?? node.span.end, span: node.span});
+        this.event(reserved ? 'reserve mutable loan' : node.mutable ? 'mutable loan' : 'shared loan', node, root);
       }
       if (destination != null) this.references.set(destination, roots);
       return roots;
@@ -123,7 +164,22 @@ export class OwnershipAnalyzer {
       this.moved = merged; return [...new Set(roots)];
     }
     if (['loopExpr', 'labelBlock', 'while', 'whileLet', 'for'].includes(node.kind)) return this.controlValue(node);
-    if (node.kind === 'intrinsic' || node.kind === 'call') {
+    if (node.kind === 'intrinsic' || node.kind === 'call') return this.callValue(node);
+    if (node.kind === 'structLiteral') { node.fields.forEach(f => this.value(f.value)); return []; }
+    if (node.items) { node.items.forEach(item => this.value(item)); return []; }
+    if (node.left) this.value(node.left);
+    if (node.right) this.value(node.right);
+    if (node.value) return this.value(node.value, consume, destination);
+    return [];
+  }
+  callValue(node) {
+    // Receiver reborrows cover argument evaluation and this call, not the next
+    // statement. Nested calls release only their own loans, never the outer
+    // receiver's loan. Only compiler-inserted method receivers reserve then
+    // activate; explicit source &mut borrows are active immediately.
+    const previous = this.callFrame, frame = {end:node.span.end};
+    this.callFrame = frame;
+    try {
       if(node.calleeValue)this.value(node.calleeValue,false);
       if(node.temporaryCallee)this.value(node.temporaryCallee.value,true,node.temporaryCallee.binding.slot);
       const name = node.builtin ?? node.name;
@@ -131,18 +187,32 @@ export class OwnershipAnalyzer {
         const consumes = name === 'method::unwrap';
         const mutates = ['method::push', 'method::pop', 'method::push_str'].includes(name);
         this.value(node.receiver, consumes);
-        if (mutates && !node.receiverDeref) this.access(node.receiver, 'mutate');
+        if (mutates) {
+          if (node.receiverDeref) this.referenceAccess(node.receiver, 'mutate');
+          else this.access(node.receiver, 'mutate');
+        }
       }
       const borrows = ['println', 'print', 'format', 'assert_eq', 'clone', 'method::clone'].includes(name);
-      for (const arg of node.args ?? []) this.value(arg, !borrows);
+      for (const arg of node.args ?? []) {
+        const roots = this.value(arg, !borrows);
+        if (T.reference(arg.type)) for (const loan of this.loans)
+          if (roots.includes(loan.root) && loan.borrower === (arg.binding?.slot ?? null))
+            loan.until = Math.max(loan.until, frame.end);
+      }
+      this.expire({span:{start:frame.end}});
+      for (const loan of this.loans) if (loan.callFrame === frame && loan.reserved) {
+        const conflict = this.loans.find(other => other !== loan && other.root === loan.root &&
+          (loan.via == null || other.borrower !== loan.via));
+        if (conflict) throw new Diagnostic('E0502', 'Cannot activate a mutable method receiver while its referent is borrowed', node.span,
+          [{message:'Conflicting loan starts here', span:conflict.span}]);
+        loan.reserved = false;
+        this.event('activate mutable receiver', node, loan.root);
+      }
       return [];
+    } finally {
+      this.loans = this.loans.filter(loan => loan.callFrame !== frame);
+      this.callFrame = previous;
     }
-    if (node.kind === 'structLiteral') { node.fields.forEach(f => this.value(f.value)); return []; }
-    if (node.items) { node.items.forEach(item => this.value(item)); return []; }
-    if (node.left) this.value(node.left);
-    if (node.right) this.value(node.right);
-    if (node.value) return this.value(node.value, consume, destination);
-    return [];
   }
   block(block) {
     for (const node of block.body) {
@@ -192,7 +262,7 @@ export class OwnershipAnalyzer {
     evaluatePlace(node.target);
     const roots = this.roots(node.target), previouslyMoved = new Set(this.moved);
     if (node.op === '=' && destination != null) this.moved.delete(destination);
-    this.access(node.target, 'mutate', node.target.kind === 'unary' ? node.target.value.binding?.slot : null);
+    this.access(node.target, 'mutate', this.referenceBase(node.target));
     this.moved = previouslyMoved;
     roots.forEach(root => { this.moved.delete(root); this.event('assign', node, root); });
   }

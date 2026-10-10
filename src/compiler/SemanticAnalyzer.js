@@ -615,13 +615,29 @@ export class SemanticAnalyzer {
       this.place(first, ctx, formal.startsWith('&mut '));
       firstType = (formal.startsWith('&mut ') ? '&mut ' : '&') + original;
       first = {kind:'unary', op:'&', mutable:formal.startsWith('&mut '), value:first, type:firstType,
-        copy:this.hasTrait(firstType,'Copy'), span:receiver.span, loc:receiver.loc};
+        copy:this.hasTrait(firstType,'Copy'), implicitReceiverBorrow:true, span:receiver.span, loc:receiver.loc};
+      node.receiverBorrow = true;
+    }
+    if (T.reference(formal) && T.reference(original)) {
+      if (formal.startsWith('&mut ') && !original.startsWith('&mut '))
+        throw new Diagnostic('E0596', 'Cannot borrow a shared method receiver as mutable', receiver.span);
+      // A method call borrows through an existing reference; it does not move
+      // the &mut handle. Reborrow with the *formal* mutability so &self bodies
+      // cannot acquire mutation authority from an &mut caller.
+      const dereference = {kind:'unary', op:'*', value:receiver, type:base,
+        copy:this.hasTrait(base,'Copy'), span:receiver.span, loc:receiver.loc};
+      this.place(dereference, ctx, formal.startsWith('&mut '));
+      firstType = (formal.startsWith('&mut ') ? '&mut ' : '&') + base;
+      first = {kind:'unary', op:'&', mutable:formal.startsWith('&mut '), value:dereference,
+        implicitReceiverReborrow:true, type:firstType, copy:this.hasTrait(firstType,'Copy'),
+        span:receiver.span, loc:receiver.loc};
+      node.receiverReborrow = true;
     }
     node.args = [first, ...node.args];
     delete node.builtin; delete node.receiver;
     const result = this.invoke(node, ctx, fn, explicit, expected, new Map([[0, firstType]]));
     ctx.methodScope.callResult(node, fn, T.reference(original) ? T.target(ctx.methodScope.of(receiver)) : ctx.methodScope.of(receiver));
-    if ((fn.implGenericCount || node.temporaryCallee) && new AssigneeAnalyzer(this, ctx).carriesReference(result))
+    if ((fn.implGenericCount || node.temporaryCallee || node.receiverReborrow || node.receiverBorrow) && new AssigneeAnalyzer(this, ctx).carriesReference(result))
       throw new Diagnostic('F_IMPL_REFERENCE', 'Reference-carrying generic method results require interprocedural loan tracking', node.span);
     return result;
   }

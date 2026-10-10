@@ -35,7 +35,7 @@ export class WebAssemblyRuntime {
         return this.instance.exports[target](...args);
       };
       case 'literal':return ()=>r.literal(spec.value,spec.type);
-      case 'borrow':return (frame,...indices)=>this.reference(spec.place,frame,indices);
+      case 'borrow':return (frame,...indices)=>r.borrow(this.reference(spec.place,frame,indices));
       case 'read':return (frame,...indices)=>r.read(this.reference(spec.place,frame,indices),spec.copy);
       case 'write':return (frame,value,...indices)=>r.write(this.reference(spec.place,frame,indices),value);
       case 'binary':return (left,right)=>r.binary(spec.operator,left,right,spec.type);

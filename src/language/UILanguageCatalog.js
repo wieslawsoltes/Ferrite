@@ -60,8 +60,8 @@ export class UILanguageCatalog {
     const ui = significant.at(-1)?.value === '::' && significant.at(-2)?.name === 'ui';
     return {kind: ui ? 'ui' : 'rust', start, end, prefix};
   }
-  static completion(document, offset, candidates = []) {
-    const context = this.context(document, offset), {kind, prefix = ''} = context;
+  static completion(document, offset, candidates = [], uiEnabled = true) {
+    const context = this.context(document, offset), {prefix = ''} = context, kind = context.kind === 'ui' && !uiEnabled ? 'rust' : context.kind;
     if (kind === 'none') return {isIncomplete:false, items:[]};
     const item = (label, detail, completionKind = 10) => ({label, detail, kind:completionKind}); let entries;
     if (kind === 'tag') {
@@ -96,9 +96,9 @@ export class UILanguageCatalog {
     }
     return value ? {value, span:document.span(token)} : null;
   }
-  static signatureHelp(document, offset, candidates = []) {
+  static signatureHelp(document, offset, candidates = [], uiEnabled = true) {
     const call = RustSignatures.callAt(document, offset); if (!call) return null;
-    const signature = this.signature(call.name) ?? candidates.find(item => item.qualifiedName === call.name || item.name === call.name);
+    const signature = (uiEnabled ? this.signature(call.name) : null) ?? candidates.find(item => item.qualifiedName === call.name || item.name === call.name);
     if (!signature) return null;
     return {signatures:[{label:signature.label, parameters:signature.parameters, documentation:{kind:'plaintext',value:docs[call.name.split('::').at(-1)] ?? 'Rust function signature from source.'}}], activeSignature:0, activeParameter:Math.min(call.activeParameter, Math.max(0, signature.parameters.length - 1))};
   }

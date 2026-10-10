@@ -16,7 +16,7 @@ export class CompletionEdits {
     const fallback = token ? {start:point(token.start),end:point(token.end)} : {start:position,end:position};
     const defaults = Array.isArray(raw) ? {} : raw?.itemDefaults ?? {};
     return (Array.isArray(raw) ? raw : raw?.items ?? []).slice(0,300).flatMap(item => {
-      if (!item || typeof item.label !== 'string' || (item.insertTextFormat ?? defaults.insertTextFormat) === 2) return [];
+      if (!item || typeof item.label !== 'string' || (item.insertTextFormat ?? defaults.insertTextFormat) === 2 || item.additionalTextEdits != null && !Array.isArray(item.additionalTextEdits)) return [];
       const defaultRange = defaults.editRange?.replace ?? defaults.editRange;
       const range = item.textEdit?.replace ?? item.textEdit?.range ?? defaultRange ?? fallback;
       let newText = item.textEdit?.newText ?? (defaultRange ? item.textEditText : undefined) ?? item.insertText ?? item.label;

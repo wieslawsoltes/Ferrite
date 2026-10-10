@@ -29,7 +29,8 @@
     "test:ui:rendering": "python tools/ui-rendering-acceptance.py",
     "test:ui:react": "node tools/build-react-reference.mjs && python tools/ui-react-acceptance.py",
     "build:ui:native": "node tools/native-ui.mjs",
-    "test:ui:native": "python tools/ui-native-acceptance.py"
+    "test:ui:native": "python tools/ui-native-acceptance.py",
+    "test:editor-language": "python tools/editor-language-acceptance.py"
   },
   "engines": {
     "node": ">=22"

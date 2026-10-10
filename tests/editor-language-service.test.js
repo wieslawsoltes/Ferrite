@@ -114,3 +114,17 @@ test('semantic token methods support incomplete UI without compiling or losing U
   const source='fn app() { view! { <button on:cl',s=service(source);
   const result=await s.request('semanticTokens/full');assert.ok(result.data.length);assert.equal(result.data.length%5,0);assert.equal(s.counts.ui,0);assert.equal(s.counts.rust,0);
 });
+
+test('an ordinary module named ui does not switch the Rust backend to the UI compiler',async()=>{
+  const source='mod ui; fn main() { let answer = ui::answer(); println!("{}", answer); }';
+  const s=service('',{'Cargo.toml':'[package]\nname="test"\nversion="0.1.0"\n','src/main.rs':source,'src/ui.rs':'pub fn answer() -> i32 { 42 }'});
+  const result=await s.request('hover',source.indexOf('answer'),'','src/main.rs');
+  assert.match(result.contents.value,/answer: i32/);assert.equal(s.counts.rust,1);assert.equal(s.counts.ui,0);
+});
+
+test('ordinary Rust ui paths never fabricate UI ABI documentation, signatures or completion',async()=>{
+  const source='mod ui; fn main() { let answer = ui::get(42); println!("{}", answer); }',s=service('',{'Cargo.toml':'[package]\nname="test"\nversion="0.1.0"\n','src/main.rs':source,'src/ui.rs':'pub fn get(input: i32) -> i32 { input }'});
+  const hover=await s.request('hover',source.indexOf('get')+1,{},'src/main.rs');assert.ok(!hover.contents.value.includes('UI ABI'));
+  const signature=await s.request('signatureHelp',source.indexOf('get(')+4,{},'src/main.rs');assert.match(signature.signatures[0].label,/input: i32/);assert.ok(!signature.signatures[0].label.includes('State'));
+  const completion=await s.request('completion',source.indexOf('get')+1,{},'src/main.rs');assert.ok(!completion.items.some(item=>item.label==='get'&&item.detail.includes('State')));assert.equal(s.counts.ui,0);
+});

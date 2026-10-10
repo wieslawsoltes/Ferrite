@@ -127,7 +127,7 @@ export class BrowserRuntime {
   close() { this.revoke(); return this.closing ??= (async () => {
     try { await this.harness?.close(); }
     finally {
-      await Promise.allSettled([this.compiler?.close(), this.workspace?.queue, this.userShell?.queue]);
+      await Promise.allSettled([this.language?.close(), this.compiler?.close(), this.workspace?.queue, this.userShell?.queue]);
       try { await this.store?.close(); } finally { await this.lease?.release(); }
     }
   })(); }

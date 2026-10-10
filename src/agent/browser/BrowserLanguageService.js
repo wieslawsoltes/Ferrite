@@ -34,7 +34,7 @@ export class BrowserLanguageService {
   }
   async analyze(snapshot, path, options, signal) {
     const {files} = snapshot, document = path ? this.document(path, files[path]) : null;
-    const entry = options.uiEntryFile ?? (document && (path.endsWith('.ui.rs') || document.macros.length || document.tokens.some((t,i) => t.name === 'ui' && document.tokens[i + 1]?.value === '::')) ? path : null);
+    const entry = options.uiEntryFile ?? (document && (path.endsWith('.ui.rs') || document.macros.length) ? path : null);
     const settings = JSON.stringify({...options, uiEntryFile:entry}), cached = this.cache;
     if (cached && cached.revision === snapshot.revision && cached.settings === settings && Object.keys(cached.files).length === Object.keys(files).length && Object.keys(files).every(file => cached.files[file] === files[file])) return cached;
     let build, error;
@@ -57,13 +57,14 @@ export class BrowserLanguageService {
     if (path !== undefined) path = this.workspace.normalize(path);
     if (method !== 'workspace/symbol' && (!Object.hasOwn(snapshot.files,path) || !path.endsWith('.rs'))) throw Error('Select an existing browser Rust source file');
     const {files} = snapshot, document = path ? this.document(path,files[path]) : null;
+    const uiEnabled = !!(options.uiEntryFile || path?.endsWith('.ui.rs') || document?.macros.length);
     const location = span => BrowserLanguageService.location(files,span), range = span => BrowserLanguageService.range(files,span);
     const positioned = new Set(['textDocument/completion','textDocument/hover','textDocument/definition','textDocument/references','textDocument/documentHighlight','textDocument/signatureHelp','textDocument/prepareRename','textDocument/rename']);
     const offset = positioned.has(method) ? BrowserLanguageService.offset(files[path],params.position) : null;
     // Catalog and lexical services remain instant, including inside broken view source.
-    if (method === 'textDocument/completion' && !['rust','tag'].includes(UILanguageCatalog.context(document,offset).kind)) return UILanguageCatalog.completion(document,offset);
-    if (method === 'textDocument/hover') { const hover = UILanguageCatalog.hover(document,offset); if (hover) return {contents:{kind:'plaintext',value:hover.value},range:range(hover.span)}; }
-    if (method === 'textDocument/signatureHelp') { const signature = UILanguageCatalog.signatureHelp(document,offset); if (signature) return signature; }
+    if (method === 'textDocument/completion' && uiEnabled && !['rust','tag'].includes(UILanguageCatalog.context(document,offset).kind)) return UILanguageCatalog.completion(document,offset);
+    if (method === 'textDocument/hover' && uiEnabled) { const hover = UILanguageCatalog.hover(document,offset); if (hover) return {contents:{kind:'plaintext',value:hover.value},range:range(hover.span)}; }
+    if (method === 'textDocument/signatureHelp' && uiEnabled) { const signature = UILanguageCatalog.signatureHelp(document,offset); if (signature) return signature; }
     if (method === 'textDocument/semanticTokens/full' || method === 'textDocument/semanticTokens/range') return {...document.semanticTokens({range:params.range}), resultId:String(snapshot.revision)};
     const analysis = await this.analyze(snapshot,path,options,signal), {build,index,diagnostics,backend} = analysis;
     this.current(snapshot,signal);
@@ -74,8 +75,8 @@ export class BrowserLanguageService {
       if (method === 'rust-analyzer/viewMir' && !build.optimizedMir) throw new AgentError('BROWSER_LANGUAGE_METHOD', 'UI language analysis does not emit MIR. Use UI compilation or the native backend.');
       return {backend,diagnostics,...(method.endsWith('syntaxTree') ? {ast:build.ast} : method.endsWith('viewHir') ? {hir:build.hir} : {mir:build.optimizedMir})};
     }
-    if (method === 'textDocument/completion') return UILanguageCatalog.completion(document,offset,analysis.error ? RustLanguageIndex.syntaxCandidates(document,offset) : index.candidates(path,offset));
-    if (method === 'textDocument/signatureHelp') return UILanguageCatalog.signatureHelp(document,offset,index.signatures.filter(s => s.selection.file === path || s.qualifiedName?.includes('::')));
+    if (method === 'textDocument/completion') return UILanguageCatalog.completion(document,offset,analysis.error ? RustLanguageIndex.syntaxCandidates(document,offset) : index.candidates(path,offset),uiEnabled);
+    if (method === 'textDocument/signatureHelp') return UILanguageCatalog.signatureHelp(document,offset,index.signatures.filter(s => s.selection.file === path || s.qualifiedName?.includes('::')),uiEnabled);
     if (method === 'workspace/symbol') return index.symbols.filter(item => item.name.toLowerCase().includes(String(params.query ?? '').toLowerCase())).slice(0,1000).map(item => ({name:item.name,kind:item.kind === 'fn' ? 12 : 5,location:location(item.selection)}));
     if (method === 'textDocument/documentSymbol') return index.symbols.filter(filter).map(item => ({name:item.name,kind:item.kind === 'fn' ? 12 : 5,range:range(item.span),selectionRange:range(item.selection)}));
     if (method === 'textDocument/foldingRange') return index.symbols.filter(filter).filter(item => range(item.span).end.line > range(item.span).start.line).map(item => ({startLine:range(item.span).start.line,endLine:range(item.span).end.line,kind:'region'}));

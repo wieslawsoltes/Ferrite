@@ -59,6 +59,7 @@ class TimerFixture:
         self.turn = 0
         self.requests = []
         self.expected = {}
+        self.analysis_offsets = []
 
     def response(self, request):
         headers = request.headers
@@ -114,10 +115,17 @@ pub fn adjust_duration(mut timer: Timer, amount: f64) -> Timer {
             output = [tool('ui_analyze', {'path': 'src/main.ui.rs'})]
         elif self.turn == 5:
             analysis = result('ui_analyze')
+            assert analysis['truncated'], 'Large analysis must use the bounded artifact path'
+            self.analysis_offsets = list(range(0, analysis['characters'], 10000))
+            output = [tool('artifact_read', {'id': analysis['artifact'], 'offset': offset, 'length': 10000}, 'toolu_analysis_' + str(offset)) for offset in self.analysis_offsets]
+        elif self.turn == 6:
+            pages = [result('analysis_' + str(offset)) for offset in self.analysis_offsets]
+            assert [page['offset'] for page in pages] == self.analysis_offsets
+            analysis = json.loads(''.join(page['text'] for page in pages))
             assert not [d for d in analysis['diagnostics'] if d['severity'] == 'error'], analysis
             output = [tool('ui_preview', {'path': 'src/main.ui.rs', 'backend': 'javascript'})]
         else:
-            assert self.turn == 6
+            assert self.turn == 7
             result('ui_preview')
             output = [{'type': 'text', 'text': 'Implemented up/down duration buttons with 0–30 second bounds. Compiled and mounted the real Timer preview.'}]
         return 'text/event-stream', sse(output)
@@ -168,6 +176,9 @@ def run():
             page.get_by_role('button', name='Validate API key', exact=True).click()
             expect(page.locator('dialog.agent-dialog')).to_have_count(0)
             page.locator('#agent-model').fill('fixture')
+            page.locator('[data-agent-tab="context"]').click()
+            page.get_by_role('spinbutton', name='Context budget (estimated tokens)', exact=True).fill('65536')
+            page.locator('[data-agent-tab="chat"]').click()
             page.locator('#agent-prompt').fill('Implement up/down timer time button and logic.')
             page.locator('#agent-run').click()
             approval = page.locator('.agent-approval').first
@@ -207,9 +218,9 @@ def run():
             assert KEY not in page.evaluate('JSON.stringify({local:{...localStorage},session:{...sessionStorage}})')
             assert not errors, errors
             assert not any('/v1/' in url and '127.0.0.1' in url for url in requests), requests
-            evidence = {'passed': True, 'turns': fixture.turn, 'scenario': 'Timer discovery, parallel reads, approved atomic two-file edit, real compiler worker, approved preview, increment/decrement and bounds', 'providerRequests': fixture.requests, 'paidProviderAccountsTested': False, 'agentBridgeStarted': False, 'errors': errors}
+            evidence = {'passed': True, 'turns': fixture.turn, 'scenario': 'Timer discovery, parallel reads, approved atomic two-file edit, real compiler worker, paged analysis artifacts, approved preview, increment/decrement and bounds', 'providerRequests': fixture.requests, 'paidProviderAccountsTested': False, 'agentBridgeStarted': False, 'errors': errors}
             (OUT / 'results.json').write_text(json.dumps(evidence, indent=2))
-            print('PASS Anthropic Timer coding: six Messages turns, two-file approval, real compiler/preview, button events and bounds, credential isolation', flush=True)
+            print('PASS Anthropic Timer coding: seven Messages turns, paged analysis, two-file approval, real compiler/preview, button events and bounds, credential isolation', flush=True)
         except Exception:
             page.screenshot(path=str(OUT / 'failure.png'))
             (OUT / 'failure.json').write_text(json.dumps({'traceback': traceback.format_exc(), 'errors': errors, 'turns': fixture.turn, 'body': page.locator('body').inner_text()[-14000:]}, indent=2).replace(KEY, '[REDACTED]'))

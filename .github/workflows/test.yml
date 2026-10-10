@@ -77,6 +77,10 @@ jobs:
         run: |
           set -o pipefail
           npm run test:ui:browser 2>&1 | tee artifacts/ui-browser.log
+      - name: Exercise UI project debugging, source breakpoints and cross-frame keyboard controls
+        run: |
+          set -o pipefail
+          npm run test:ui:debugger 2>&1 | tee artifacts/ui-debugger.log
       - name: Exercise all seven GUIs, sample browsing and offline JS/MIR/Wasm exports
         run: |
           set -o pipefail

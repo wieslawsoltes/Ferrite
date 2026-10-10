@@ -10,17 +10,24 @@ export const StudioPreview = {
       this.interact().catch(error => this.error(error));
   },
   async build({signal} = {}) {
+    signal?.throwIfAborted();
     clearTimeout(this.buildTimer); this.nativeAsset = null; this.saveProject(); const source = this.model.files[this.entryFile]; if (typeof source !== 'string') throw Error('Open or create a UI view file');
     this.active?.abort(); this.active = new AbortController(); const combined = AbortSignal.any([this.active.signal, signal].filter(Boolean));
     const generation = ++this.generation, file = this.entryFile, channel = this.preview.reset();
-    this.layoutMode.value = 'off'; this.layoutMode.dataset.activeMode = 'off'; this.frame.style.pointerEvents = ''; this.layoutMode.removeAttribute('aria-busy'); this.picking = false; this.pickButton.setAttribute('aria-pressed', 'false'); this.artifact = null;
-    this.status.textContent = 'Compiling typed Rust UI in a worker…'; this.status.dataset.kind = 'building';
-    const {artifact, html} = await this.compiler.compile({...this.model.files}, 'ui-compile', {file, entry: this.entry, backend: this.backend, maxSteps: this.project?.settings.maxSteps ?? 250000, css: this.css.value, channel}, combined);
-    combined.throwIfAborted(); if (generation !== this.generation || source !== this.model.files[file]) throw new DOMException('Stale UI build', 'AbortError');
-    this.dependencies = {...artifact.files}; this.observedFiles = {...this.model.files};
-    this.artifact = artifact; this.compiledSource = source; this.compiledFile = file; this.compiledGeneration = generation;
-    this.snapshot = null; this.preview.load(html, channel); this.status.textContent = 'Loading isolated preview…'; this.renderOutline();
-    return {file, entry: artifact.entry, backend: this.backend, nodes: artifact.nodes.length, revision: this.model.revision};
+    this.buildingGeneration = generation;
+    try {
+      this.layoutMode.value = 'off'; this.layoutMode.dataset.activeMode = 'off'; this.frame.style.pointerEvents = ''; this.layoutMode.removeAttribute('aria-busy'); this.picking = false; this.pickButton.setAttribute('aria-pressed', 'false'); this.artifact = null;
+      this.status.textContent = 'Compiling typed Rust UI in a worker…'; this.status.dataset.kind = 'building';
+      const {artifact, html} = await this.compiler.compile({...this.model.files}, 'ui-compile', {file, entry: this.entry, backend: this.backend, maxSteps: this.project?.settings.maxSteps ?? 250000, css: this.css.value, channel}, combined);
+      combined.throwIfAborted(); if (generation !== this.generation || source !== this.model.files[file]) throw new DOMException('Stale UI build', 'AbortError');
+      this.dependencies = {...artifact.files}; this.observedFiles = {...this.model.files};
+      this.artifact = artifact; this.compiledSource = source; this.compiledFile = file; this.compiledGeneration = generation;
+      this.snapshot = null; this.preview.load(html, channel); this.status.textContent = 'Loading isolated preview…'; this.renderOutline();
+      return {file, entry: artifact.entry, backend: this.backend, nodes: artifact.nodes.length, revision: this.model.revision};
+    } finally {
+      // A cancelled predecessor must not clear a replacement build's scheduling ownership.
+      if (this.buildingGeneration === generation) this.buildingGeneration = null;
+    }
   },
   buildNative(bytes, {name = 'native-app.wasm', signal} = {}) {
     signal?.throwIfAborted();

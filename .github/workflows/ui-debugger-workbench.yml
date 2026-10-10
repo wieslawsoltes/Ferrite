@@ -1,0 +1,39 @@
+name: UI debugger workbench
+on:
+  push:
+    branches: [fix/ui-project-debugger]
+    paths: [.github/workflows/ui-debugger-workbench.yml, tools/ui-debugger-patch.py]
+permissions:
+  contents: write
+jobs:
+  workbench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/ui-project-debugger
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply reviewed debugger patch
+        if: hashFiles('tools/ui-debugger-patch.py') != ''
+        run: |
+          python tools/ui-debugger-patch.py
+          npm run bundle:workers
+          npm run bundle:sdk
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests tools docs package.json .github
+          git diff --cached --quiet || git commit -m 'fix: integrate UI debugger implementation and regenerate bundles'
+          git push origin HEAD:fix/ui-project-debugger
+      - name: Archive public source for local debugging
+        run: git archive --format=tar HEAD > /tmp/ferrite-source.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ferrite-source
+          path: /tmp/ferrite-source.tar
+          retention-days: 1
+      - name: Validate
+        run: |
+          npm run check
+          npm test

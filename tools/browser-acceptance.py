@@ -15,6 +15,7 @@ import time
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from workbench_browser_support import show_workspace_actions
 from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,7 +56,7 @@ def memory_document(page):
       return urls['src/ui/main.js'];
     }''', definitions)
     html = (ROOT / 'index.html').read_text()
-    for stylesheet in ['styles/ide.css', 'src/vendor/xterm/xterm.css', 'styles/agent.css', 'styles/workspace.css']:
+    for stylesheet in re.findall(r'<link rel="stylesheet" href="\./([^"]+)">', html):
         html = html.replace('<link rel="stylesheet" href="./' + stylesheet + '">', '<style>' + (ROOT / stylesheet).read_text() + '</style>')
     page.set_content(html.replace('./src/ui/main.js', entry), wait_until='load')
 
@@ -98,6 +99,10 @@ def run():
             page.get_by_role('textbox', name='Search Everywhere').fill('Show ' + name + ' tool window')
             page.get_by_role('textbox', name='Search Everywhere').press('Enter')
 
+        def stage(name):
+            if not page.locator('#stage-select').is_visible(): show_tool('Compiler')
+            page.locator('#stage-select').select_option(label=name)
+
         def run_program(expected):
             page.locator('#run').click()
             expect(page.locator('#status')).to_have_text('Process finished successfully')
@@ -109,20 +114,22 @@ def run():
             else:
                 page.goto(base, wait_until='networkidle')
             case('startup and typed compiler integration', status_success)
+            show_workspace_actions(page)
             case('default multi-file trait sample executes', lambda: run_program('rectangle area = 42\ntriangle area = 20\n'))
             page.screenshot(path=str(OUTPUT / 'ide.png'))
 
             def stages():
+                show_tool('Compiler')
                 names = page.locator('#stage-select option').all_text_contents()
                 assert len(names) == 21 and 'Pattern coverage' in names, names
                 for name in names:
-                    page.locator('#stage-select').select_option(label=name)
+                    stage(name)
                     expect(page.locator('#inspector-content')).not_to_be_empty()
                 assert page.locator('#inspector-content .generated-line').count() > 100
             case('all 21 compiler stage adapters render', stages)
 
             def source_navigation():
-                page.locator('#stage-select').select_option(label='Tokens')
+                stage('Tokens')
                 target = page.locator('.token-chip[data-source-file="src/geometry.rs"]').filter(has_text='trait').first
                 start, end = int(target.get_attribute('data-source-start')), int(target.get_attribute('data-source-end'))
                 target.click()
@@ -136,13 +143,13 @@ def run():
             case('token ↔ source selection across multiple files', source_navigation)
 
             def graph_navigation():
-                page.locator('#stage-select').select_option(label='MIR / CFG')
+                stage('MIR / CFG')
                 page.locator('#instance-select').select_option('geometry::Rect::area<>')
                 line = page.locator('.ir-line.source-link').first
                 start, end = int(line.get_attribute('data-source-start')), int(line.get_attribute('data-source-end'))
                 line.click()
                 assert page.locator('#source').evaluate('e=>[e.selectionStart,e.selectionEnd]') == [start, end]
-                page.locator('#stage-select').select_option(label='Call Graph')
+                stage('Call Graph')
                 assert page.locator('.graph-edge').count() >= 4
             case('MIR instruction selection and resolved call-graph edges', graph_navigation)
 
@@ -184,15 +191,17 @@ def run():
 
             def docking():
                 show_tool('Compiler')
-                source = page.locator('[data-dock="right"] button[data-panel="compiler"]')
-                destination = page.locator('[data-dock="bottom"] .tool-tabs')
+                source = page.locator('[data-tool-window="compiler"] button[data-panel="compiler"]')
+                destination = page.locator('[data-tool-slot="bottom-left"]')
                 transfer = page.evaluate_handle('new DataTransfer()')
                 source.dispatch_event('dragstart', {'dataTransfer': transfer})
                 destination.dispatch_event('dragover', {'dataTransfer': transfer})
                 destination.dispatch_event('drop', {'dataTransfer': transfer})
-                expect(page.locator('[data-dock="bottom"] button[data-panel="compiler"]')).to_be_visible()
-                tab = page.locator('[data-dock="bottom"] button[data-panel="compiler"]')
-                tab.dblclick()
+                expect(page.locator('[data-tool-window="compiler"][data-position="bottom-left"] button[data-panel="compiler"]')).to_be_visible()
+                tab = page.locator('[data-tool-window="compiler"][data-position="bottom-left"] button[data-panel="compiler"]')
+                page.get_by_role('button',name='Compiler tool window options',exact=True).click()
+                page.get_by_role('menuitem',name='View Mode',exact=True).click()
+                page.get_by_role('menuitem',name='Float',exact=True).click()
                 expect(page.locator('.floating-tool')).to_be_visible()
                 page.locator('.floating-tool').get_by_role('button', name='Dock', exact=True).click()
                 expect(page.locator('.floating-tool')).to_have_count(0)
@@ -209,7 +218,7 @@ def run():
                 select_sample('Nominal values · tuple/unit structs & assignments')
                 run_program('port=443 swap=2/1 event=9\n')
                 show_tool('Compiler')
-                page.locator('#stage-select').select_option(label='Typed HIR')
+                stage('Typed HIR')
                 expect(page.locator('#inspector-content')).not_to_be_empty()
             case('nominal constructors and staged assignment execute from the catalog', nominal_constructors)
 
@@ -225,7 +234,7 @@ def run():
                 expect(page.locator('#status')).to_have_text('Process finished successfully')
                 show_tool('Run')
                 expect(page.locator('#terminal')).to_have_text('fib(10) = 55\n')
-                page.locator('#stage-select').select_option(label='MIR / CFG')
+                stage('MIR / CFG')
                 page.locator('#instance-select').select_option('fib<>')
                 assert page.locator('.graph-edge').count() >= 4
                 page.get_by_role('button', name='Fit', exact=True).click()
@@ -255,6 +264,7 @@ def run():
                 if not MEMORY:
                     page.reload(wait_until='networkidle')
                     status_success()
+                    show_workspace_actions(page)
                     expect(page.locator('#source')).to_contain_text('')  # textarea value checked below
                     assert 'while let' in page.locator('#source').input_value()
                 with page.expect_download() as download:
@@ -285,7 +295,7 @@ def run():
                 page.locator('#backend-select').select_option('wasm')
                 run_program('scaled 42\nstate 2 3\nowned payload\n')
                 expect(page.locator('.run-header')).to_contain_text('WebAssembly-lowered')
-                page.locator('#stage-select').select_option(label='WebAssembly')
+                stage('WebAssembly')
                 expect(page.locator('#inspector-content')).to_contain_text('00 61 73 6d 01 00 00 00')
                 page.locator('.wasm-instructions .source-link').first.click()
                 start, end = page.locator('#source').evaluate('e=>[e.selectionStart,e.selectionEnd]')
@@ -296,7 +306,7 @@ def run():
             def closure_capture_view():
                 select_sample('Closures · capture modes & call traits')
                 run_program('scaled 42\nstate 2 3\nowned payload\n')
-                page.locator('#stage-select').select_option(label='Closure captures')
+                stage('Closure captures')
                 for text in ['FnMut', 'FnOnce', 'shared borrow', 'mutable borrow', 'move']:
                     expect(page.locator('#inspector-content')).to_contain_text(text)
                 page.locator('#inspector-content .source-link').first.click()
@@ -312,9 +322,10 @@ def run():
                 page.locator('input[data-feature="fast"]').check()
                 page.wait_for_function('window.ferrite.getBuild()?.plan.features["Cargo.toml"].enabled.includes("fast")')
                 run_program('accelerated true\n')
-                page.locator('#stage-select').select_option(label='Configuration')
+                stage('Configuration')
                 expect(page.locator('#inspector-content')).to_contain_text('feature = "fast"')
                 assert page.locator('#inspector-content .source-link').count() > 0
+                show_tool('Cargo')
                 page.locator('input[data-feature="fast"]').uncheck()
                 page.wait_for_function('window.ferrite.getBuild() && !window.ferrite.getBuild().plan.features["Cargo.toml"].enabled.includes("fast")')
                 run_program('baseline false\n')
@@ -324,7 +335,7 @@ def run():
             def pattern_proofs():
                 select_sample('Pattern matrix · destructuring & coverage')
                 run_program('left 7\nright 11\nmiddle 5\n')
-                page.locator('#stage-select').select_option(label='Pattern coverage')
+                stage('Pattern coverage')
                 expect(page.locator('#inspector-content')).to_contain_text('proof states')
                 expect(page.locator('#inspector-content')).to_contain_text('exhaustive')
                 page.locator('#inspector-content .source-link').first.click()
@@ -337,7 +348,7 @@ def run():
             def aliases():
                 select_sample('Type aliases · where clauses & structural inference')
                 run_program('first = 7\npayload = 9\n')
-                page.locator('#stage-select').select_option(label='Types / Traits')
+                stage('Types / Traits')
                 expect(page.locator('#inspector-content')).to_contain_text('Transparent type alias')
                 expect(page.locator('#inspector-content')).to_contain_text('types::Pair')
                 page.locator('#inspector-content .source-link').first.click()
@@ -555,7 +566,7 @@ def run():
                     language_source = 'fn doubled(value:i32)->i32 {value*2}\nfn main(){println!("{}", doubled(21));}\n'
                     page.locator('#source').fill(language_source)
                     page.locator('#source').evaluate('(e)=>{const p=e.value.lastIndexOf("doubled")+2;e.focus();e.setSelectionRange(p,p)}')
-                    page.locator('#source').press('F12')
+                    page.locator('#source').press('Control+b')
                     expect(page.locator('.language-location').first).to_be_visible(timeout=65000)
                     page.locator('.language-location').first.click()
                     assert 'doubled' in page.locator('#source').evaluate('e=>e.value.slice(e.selectionStart,e.selectionEnd)')
@@ -631,11 +642,12 @@ def run():
             def mobile():
                 page.set_viewport_size({'width': 390, 'height': 844})
                 page.locator('[data-tool="compiler"]').click()
-                expect(page.locator('.floating-tool')).to_be_visible()
-                box = page.locator('.floating-tool').bounding_box()
+                expect(page.locator('[data-tool-window=compiler]')).to_be_visible()
+                expect(page.locator('[data-tool-window=compiler]')).to_have_attribute('data-overlay','true')
+                box = page.locator('[data-tool-window=compiler]').bounding_box()
                 assert box['x'] >= 0 and box['width'] <= 390
                 page.screenshot(path=str(OUTPUT / 'mobile.png'))
-            case('small-screen compiler tool can open as a floating window', mobile)
+            case('small-screen compiler tool opens as an overlay without changing its docking mode', mobile)
             assert not errors, errors
             (OUTPUT / 'results.json').write_text(json.dumps({'mode': 'in-memory' if MEMORY else 'http', 'cases': results, 'browserErrors': errors}, indent=2))
             print(f'PASS {len(results)} browser acceptance cases ({"in-memory" if MEMORY else "HTTP"})', flush=True)

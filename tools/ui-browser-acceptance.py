@@ -7,6 +7,7 @@ import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from workbench_browser_support import show_workspace_actions
 from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,7 +41,7 @@ def run():
                 memory_document(page)
             else:
                 page.goto(base)
-            page.wait_for_function('!!window.ferrite')
+            page.wait_for_function('!!window.ferrite');show_workspace_actions(page)
             def new_view(path, template):
                 page.locator('#file-ui-view').click()
                 page.get_by_label('View file path', exact=True).fill(path)

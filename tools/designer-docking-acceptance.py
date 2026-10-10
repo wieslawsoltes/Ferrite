@@ -7,6 +7,7 @@ import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from workbench_browser_support import show_workspace_actions
 from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,7 +30,7 @@ def run():
             page.on('pageerror', lambda e: errors.append(str(e)))
             if MEMORY: memory_document(page)
             else: page.goto(f'http://127.0.0.1:{server.server_port}/')
-            page.wait_for_function('!!window.ferrite')
+            page.wait_for_function('!!window.ferrite');show_workspace_actions(page)
             studio = page.locator('.ui-studio')
             frame = page.frame_locator('.ui-studio .studio-preview')
             def ready(): expect(studio.locator('.studio-status')).to_have_attribute('data-kind','ready')
@@ -125,7 +126,7 @@ def run():
             # Dock into the top edge with the accessible menu so the layout is clearly non-default.
             menu('Properties');button('Dock Properties top').click();saved=layout()
             if not MEMORY:
-                page.reload();page.wait_for_function('!!window.ferrite');ready()
+                page.reload();page.wait_for_function('!!window.ferrite');show_workspace_actions(page);ready()
                 assert layout()==saved
                 check('real HTTP-origin reload restores the exact designer layout')
             page.screenshot(path=str(OUT/'desktop-docking.png'))

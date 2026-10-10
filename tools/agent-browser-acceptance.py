@@ -14,6 +14,7 @@ import urllib.error
 from functools import partial
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from workbench_browser_support import resize_tool_window
 from playwright.sync_api import sync_playwright, expect
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('ferrite_browser',ROOT/'tools/browser-acceptance.py')
@@ -114,9 +115,14 @@ def run():
             page.screenshot(path=str(OUTPUT/'agent-terminal.png'),full_page=True)
             print('PASS browser utility pipeline and real interactive native PTY')
             # A real ncurses application: both human interaction and the MCP screen
-            # oracle must agree. Increasing the dock is equivalent to a splitter resize.
-            page.locator('.dock-layout').evaluate("node => node.style.setProperty('--bottom-size', '500px')")
+            # oracle must agree. Resize through the actual keyboard separator control.
+            resize_tool_window(page, 'bottom', 500)
             terminal_id=page.locator('#agent-terminal-tabs').input_value()
+            for _ in range(100):
+                page.wait_for_timeout(50)
+                size=api('/v1/terminals/'+terminal_id+'/screen')
+                if size['rows']>=12 and size['cols']>=40:break
+            assert size['rows']>=12 and size['cols']>=40, size
             ime.focus();ime.press_sequentially('python3 -I -u '+shlex.quote(str(ROOT/'tests/fixtures/terminal-curses.py')),delay=1);ime.press('Enter')
             rendered=page.locator('.terminal-screen .xterm-rows')
             expect(rendered).to_contain_text('Ferrite ncurses interoperability',timeout=20000)
@@ -133,7 +139,7 @@ def run():
             expect(rendered).to_contain_text('MOUSE 7,8')
             previous_size=(screen['cols'],screen['rows'])
             page.set_viewport_size({'width':1580,'height':1100})
-            page.locator('.dock-layout').evaluate("node => node.style.setProperty('--bottom-size', '560px')")
+            resize_tool_window(page, 'bottom', 560)
             for _ in range(100):
                 page.wait_for_timeout(50)
                 screen=api('/v1/terminals/'+terminal_id+'/screen')

@@ -59,6 +59,8 @@ jobs:
         run: |
           npm run test:native
           npm run test:repositories
+      - name: Exercise retained tool windows, RustRover docking gestures and layout persistence
+        run: npm run test:docking:browser
       - name: Exercise the HTTP IDE and authenticated Cargo bridge in Chromium
         env:
           FERRITE_NATIVE_TEST: '1'
@@ -66,7 +68,9 @@ jobs:
       - name: Exercise compiler output for samples, UI builds, cold reload and retained views
         run: npm run test:compiler-output
       - name: Exercise agent login, MCP, native PTY and ncurses keyboard/mouse/resize/reconnect in Chromium
-        run: npm run test:agent:browser
+        run: |
+          set -o pipefail
+          npm run test:agent:browser 2>&1 | tee artifacts/native-agent.log
       - name: Exercise bridge-free browser agents, persistence, review and terminal harness
         run: |
           set -o pipefail

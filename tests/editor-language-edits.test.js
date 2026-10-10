@@ -70,3 +70,15 @@ test('browser agent runtime disposes its separate UI analysis worker exactly onc
   t.after(()=>runtime.close());runtime.language.uiCompiler={close:async()=>{closed++;}};
   await runtime.close();await runtime.close();assert.equal(closed,1);
 });
+
+
+test('signature documentation belongs to the selected provider, not a coincidental function name',async()=>{
+  const {UILanguageCatalog}=await import('../src/language/UILanguageCatalog.js');
+  for(const [name,enabled] of [['ui::use_state',false],['update',true]]){
+    const source=`fn main() { ${name}(`,document=new RustDocument(source,file);
+    const result=UILanguageCatalog.signatureHelp(document,source.length,[{name,qualifiedName:name,label:`fn ${name}(value: i32) -> i32`,parameters:[{label:'value: i32'}]}],enabled);
+    assert.equal(result.signatures[0].documentation.value,'Rust function signature from source.');
+  }
+  const source='fn app() { ui::use_state(',result=UILanguageCatalog.signatureHelp(new RustDocument(source,file),source.length);
+  assert.match(result.signatures[0].documentation.value,/stable i64 state handle/);
+});

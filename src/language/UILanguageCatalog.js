@@ -98,8 +98,9 @@ export class UILanguageCatalog {
   }
   static signatureHelp(document, offset, candidates = [], uiEnabled = true) {
     const call = RustSignatures.callAt(document, offset); if (!call) return null;
-    const signature = (uiEnabled ? this.signature(call.name) : null) ?? candidates.find(item => item.qualifiedName === call.name || item.name === call.name);
+    const builtin = uiEnabled ? this.signature(call.name) : null;
+    const signature = builtin ?? candidates.find(item => item.qualifiedName === call.name || item.name === call.name);
     if (!signature) return null;
-    return {signatures:[{label:signature.label, parameters:signature.parameters, documentation:{kind:'plaintext',value:docs[call.name.split('::').at(-1)] ?? 'Rust function signature from source.'}}], activeSignature:0, activeParameter:Math.min(call.activeParameter, Math.max(0, signature.parameters.length - 1))};
+    return {signatures:[{label:signature.label, parameters:signature.parameters, documentation:{kind:'plaintext',value:builtin ? docs[call.name.split('::').at(-1)] ?? 'Compiler-owned Ferrite UI ABI function.' : 'Rust function signature from source.'}}], activeSignature:0, activeParameter:Math.min(call.activeParameter, Math.max(0, signature.parameters.length - 1))};
   }
 }

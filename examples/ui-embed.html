@@ -3,7 +3,46 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Embedded Ferrite · Rust scripts</title>
-<style>body{max-width:720px;margin:60px auto;padding:20px;font:16px system-ui;color:#25324a;background:#edf2f8}main{padding:32px;border-radius:16px;background:white}button{padding:12px 20px;border:1px solid #a9b9cd;border-radius:8px;cursor:pointer;background:#f2f6ff;color:inherit}output{display:block;font-size:44px;margin:20px 0}pre{white-space:pre-wrap;font-size:13px}h1{letter-spacing:-1px}</style>
+<style>
+body {
+    max-width: 720px;
+    margin: 60px auto;
+    padding: 20px;
+    font: 16px system-ui;
+    color: #25324a;
+    background: #edf2f8;
+}
+
+main {
+    padding: 32px;
+    border-radius: 16px;
+    background: white;
+}
+
+button {
+    padding: 12px 20px;
+    border: 1px solid #a9b9cd;
+    border-radius: 8px;
+    cursor: pointer;
+    background: #f2f6ff;
+    color: inherit;
+}
+
+output {
+    display: block;
+    font-size: 44px;
+    margin: 20px 0;
+}
+
+pre {
+    white-space: pre-wrap;
+    font-size: 13px;
+}
+
+h1 {
+    letter-spacing: -1px;
+}
+</style>
 </head>
 <body>
 <main><h1>Rust, embedded in your application.</h1><p>One JavaScript library. A typed UI. No local bridge.</p><div id="counter"></div><pre id="log"></pre></main>
@@ -11,13 +50,21 @@
 <script type="text/rust" data-target="counter" data-backend="javascript">
 fn app() -> ui::Node {
     let count = ui::use_state(0);
-    view! { <section><output>{ui::get(count)}</output><button on:click={move || ui::update(count, |n| n + 1)}>Increment Rust state</button></section> }
+    view! {
+        <section>
+            <output>{ui::get(count)}</output>
+            <button on:click={move || ui::update(count, |n| n + 1)}>Increment Rust state</button>
+        </section>
+    }
 }
 </script>
 <script>
 // Script execution is explicit; importing the library does not run page scripts.
 Ferrite.runScripts({onError: error => { document.getElementById('log').textContent = error.message; }});
-const result = Ferrite.runRust('fn main() -> i64 { 6 * 7 }');
+const result = Ferrite.runRust(`fn main() -> i64 {
+    6 * 7
+}
+`);
 document.getElementById('log').textContent = 'Embedded compiler result: ' + result.value;
 </script>
 </body>

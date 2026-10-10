@@ -1,0 +1,381 @@
+diff --git a/src/compiler/DataMethods.js b/src/compiler/DataMethods.js
+new file mode 100644
+index 0000000..efa3a2b
+--- /dev/null
++++ b/src/compiler/DataMethods.js
+@@ -0,0 +1,38 @@
++import {TypeSystem as T} from './TypeSystem.js';
++import {Diagnostic} from './Diagnostic.js';
++
++/** Checked, bounded owned-data operations shared by every execution backend. */
++export function inferDataMethod(analyzer, node, ctx, original, base, expected) {
++  const receiver=node.callee.object, method=node.callee.field;
++  const string=['String','&str'].includes(base), vector=T.application(base), floating=['f32','f64'].includes(base);
++  const methods=new Set(['parse','into_bytes','as_str','trim','starts_with','contains','to_lowercase','to_ascii_uppercase','is_empty','is_finite','abs','floor','round','remove']);
++  if(!methods.has(method) && !(method==='push'&&base==='String'))return null;
++  const fail=message=>{throw new Diagnostic('E0599',message,node.span);};
++  const args=node.callee.typeArguments??[];
++  if(method!=='parse'&&args.length)throw new Diagnostic('E0107',`${method} has no type parameters`,node.span);
++  const count=['starts_with','contains','remove','push'].includes(method)?1:0;
++  if(node.args.length!==count)throw new Diagnostic('E0061',`${method} expects ${count} argument(s)`,node.span);
++  node.receiver=receiver;node.receiverDeref=base!==original;node.builtin=`method::${method}`;
++  if(method==='parse'&&string){
++    const hint=T.application(expected??'');
++    if(args.length>1)throw new Diagnostic('E0107','parse expects one type argument',node.span);
++    const target=args.length?analyzer.normalize(args[0],ctx,node):hint.name==='Result'?hint.args[0]:null;
++    if(!target)throw new Diagnostic('E0282','Specify the numeric parse target, for example parse::<f64>()',node.span);
++    if(!T.numeric(target))fail(`Numeric parsing does not implement FromStr for ${target}`);
++    node.format={type:target};return `Result<${target},std::num::${T.integer(target)?'ParseIntError':'ParseFloatError'}>`;
++  }
++  if(method==='into_bytes'&&base==='String'){if(T.reference(original))throw new Diagnostic('E0507','Cannot move a String out of a borrowed receiver',receiver.span);return 'Vec<u8>';}
++  if(method==='as_str'&&base==='String'||method==='trim'&&string)return '&str';
++  if(['to_lowercase','to_ascii_uppercase'].includes(method)&&string)return 'String';
++  if(['starts_with','contains'].includes(method)&&string){T.unify('&str',analyzer.infer(node.args[0],ctx,'&str'),new Map(),node);return 'bool';}
++  if(method==='is_empty'&&(string||vector.name==='Vec'))return 'bool';
++  if(method==='is_finite'&&floating)return 'bool';
++  if(['abs','floor','round'].includes(method)&&floating)return base;
++  if(method==='remove'&&vector.name==='Vec'||method==='push'&&base==='String'){
++    if(T.reference(original)&&!original.startsWith('&mut '))throw new Diagnostic('E0596','Cannot mutate through a shared reference',receiver.span);
++    if(!original.startsWith('&mut '))analyzer.place(receiver,ctx,true);
++    T.unify(method==='remove'?'usize':'char',analyzer.infer(node.args[0],ctx,method==='remove'?'usize':'char'),new Map(),node);
++    return method==='remove'?vector.args[0]:'()';
++  }
++  fail(`No supported method '${method}' for ${base}`);
++}
+diff --git a/src/compiler/MirLowerer.js b/src/compiler/MirLowerer.js
+index 2812510..65e7e80 100644
+--- a/src/compiler/MirLowerer.js
++++ b/src/compiler/MirLowerer.js
+@@ -136,7 +136,7 @@ export class MirLowerer {
+         let callee=node.calleeValue?this.expr(node.calleeValue):null;
+         if(node.indirect){let type=node.calleeValue.type;while(T.reference(type)){type=T.target(type);callee=this.emit('read',{place:{slot:callee,path:[{kind:'deref'}]},copy:true},node.calleeValue,type);}}
+         if(node.temporaryCallee){const temporary=node.temporaryCallee;this.emit('write',{place:{slot:temporary.binding.slot,path:[]},value:this.expr(temporary.value)},node);}
+-        const mutates = ['method::push', 'method::pop', 'method::push_str'].includes(node.builtin);
++        const mutates = ['method::push', 'method::pop', 'method::push_str', 'method::remove'].includes(node.builtin);
+         const receiverPlace = mutates ? this.place(node.receiver) : null;
+         const receiver = node.receiver && !mutates ? this.expr(node.receiver, true) : null;
+         const args = node.args.map(arg => this.expr(arg, ['println', 'print', 'format', 'clone', 'assert_eq'].includes(node.builtin)));
+diff --git a/src/compiler/OwnershipAnalyzer.js b/src/compiler/OwnershipAnalyzer.js
+index 2a5efb5..2012cc1 100644
+--- a/src/compiler/OwnershipAnalyzer.js
++++ b/src/compiler/OwnershipAnalyzer.js
+@@ -152,14 +152,14 @@ export class OwnershipAnalyzer {
+       this.value(node.kind === 'ifLet' ? node.value : node.condition);
+       const before = new Set(this.moved), yesRoots = this.block(node.then), yes = new Set(this.moved);
+       this.moved = new Set(before); const noRoots = this.value(node.otherwise);
+-      this.moved = new Set([...yes, ...this.moved]); return [...new Set([...yesRoots, ...noRoots])];
++      this.moved = new Set([...(node.then.type === '!' ? [] : yes), ...(node.otherwise?.type === '!' ? [] : this.moved)]); return [...new Set([...yesRoots, ...noRoots])];
+     }
+     if (node.kind === 'match') {
+       this.value(node.value);
+       const before = new Set(this.moved), merged = new Set(before), roots = [];
+       for (const arm of node.arms) {
+         this.moved = new Set(before); this.value(arm.guard); roots.push(...this.value(arm.body));
+-        this.moved.forEach(slot => merged.add(slot));
++        if(arm.body.type !== '!')this.moved.forEach(slot => merged.add(slot));
+       }
+       this.moved = merged; return [...new Set(roots)];
+     }
+@@ -184,8 +184,8 @@ export class OwnershipAnalyzer {
+       if(node.temporaryCallee)this.value(node.temporaryCallee.value,true,node.temporaryCallee.binding.slot);
+       const name = node.builtin ?? node.name;
+       if (node.receiver) {
+-        const consumes = name === 'method::unwrap';
+-        const mutates = ['method::push', 'method::pop', 'method::push_str'].includes(name);
++        const consumes = ['method::unwrap','method::into_bytes'].includes(name);
++        const mutates = ['method::push', 'method::pop', 'method::push_str', 'method::remove'].includes(name);
+         this.value(node.receiver, consumes);
+         if (mutates) {
+           if (node.receiverDeref) this.referenceAccess(node.receiver, 'mutate');
+diff --git a/src/compiler/SemanticAnalyzer.js b/src/compiler/SemanticAnalyzer.js
+index 42b42f1..079dc1c 100644
+--- a/src/compiler/SemanticAnalyzer.js
++++ b/src/compiler/SemanticAnalyzer.js
+@@ -1,3 +1,4 @@
++import {inferDataMethod} from './DataMethods.js';
+ import {TraitMethodScope} from './TraitMethodScope.js';
+ import {ImplementationResolver} from './ImplementationResolver.js';
+ import {FunctionValueAnalyzer} from './FunctionValueAnalyzer.js';
+@@ -52,11 +53,17 @@ export class SemanticAnalyzer {
+     this.closures.finish();this.functionValues.finish();
+     this.discriminants.annotate(this.instances.values());
+     return {traitResolution:this.implementations.traits.snapshot(),implementations: this.implementations.snapshot(), discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
+-      symbols: this.index.symbols, structures: [...this.index.structs.values()].filter(shape => !shape.builtin),
+-      enums: [...this.index.enums.values()], warnings: this.warnings, entry: this.entryKey,
++      symbols: this.index.symbols, structures: this.canonicalShapes(this.index.structs).filter(shape => !shape.builtin),
++      enums: this.canonicalShapes(this.index.enums), warnings: this.warnings, entry: this.entryKey,
+       capabilities: {ownership: 'conservative whole-local analysis', traits: 'generic declared-trait impls and built-in bounds'}};
+   }
+   annotate(node, type) { node.type = type; return type; }
++  canonicalShapes(shapes) {
++    return [...shapes.values()].map(shape=>{
++      const normalize=type=>this.index.type(type,shape.module??'',null,new Set((shape.generics??[]).map(p=>p.name)),shape);
++      return {...shape,...(shape.fields?{fields:shape.fields.map(field=>({...field,type:normalize(field.type)}))}:{}),...(shape.variants?{variants:shape.variants.map(variant=>({...variant,fields:variant.fields.map(normalize)}))}:{})};
++    });
++  }
+   normalize(type, ctx, node = null) { return this.formal(ctx.instance.fn, type, ctx.instance.substitution ?? new Map(Object.entries(ctx.instance.typeArguments)), node ?? ctx.instance.fn); }
+   hasBound(type,bound) {
+     const declared=this.implementations?.traits.has(type,bound);
+@@ -89,11 +96,12 @@ export class SemanticAnalyzer {
+     if (name === 'Vec') return bound !== 'Copy' && ['Clone', 'Debug', 'PartialEq', 'Eq'].includes(bound) && this.hasTrait(args[0], bound, depth + 1);
+     if (['Option', 'Result'].includes(name)) return ['Copy', 'Clone', 'Debug', 'PartialEq', 'Eq'].includes(bound) && args.every(t => t !== '_' && this.hasTrait(t, bound, depth + 1));
+     const shape = this.index.structs.get(name) ?? this.index.enums.get(name);
++    if (shape?.builtin === 'parse-error') return ['Clone','Debug','PartialEq','Eq'].includes(bound);
+     if (shape?.builtin === 'phantom') return ['Copy', 'Clone', 'Debug', 'PartialEq', 'Eq', 'Default'].includes(bound);
+     if (shape?.attributes?.some(a => a.name === 'derive' && a.args.includes(bound))) {
+       const substitution = new Map(shape.generics.map((g, i) => [g.name, args[i]]));
+       const fields = shape.fields?.map(f => f.type) ?? shape.variants.flatMap(v => v.fields);
+-      return fields.every(t => this.hasTrait(T.substitute(t, substitution), bound, depth + 1));
++      return fields.every(t => this.hasTrait(T.substitute(this.index.type(t, shape.module, null, new Set(substitution.keys()), shape), substitution), bound, depth + 1));
+     }
+     return false;
+   }
+@@ -338,7 +346,7 @@ export class SemanticAnalyzer {
+         const left = this.infer(node.left, ctx, logical ? 'bool' : expected && (T.numeric(expected) || bitwise && expected === 'bool') ? expected : null);
+         // Shift RHS has its own integer type; unlike arithmetic, u64 << u8 is legal.
+         const right = this.infer(node.right, ctx, shift ? null : left);
+-        if (!shift) T.unify(left, right, new Map(), node);
++        if (!shift && !(['==','!='].includes(node.op) && ['String','&str'].includes(left) && ['String','&str'].includes(right))) T.unify(left, right, new Map(), node);
+         if (logical) { T.unify('bool', left, new Map(), node); type = 'bool'; }
+         else if (['==', '!=', '<', '>', '<=', '>='].includes(node.op)) {
+           if (!T.numeric(left) && !['bool', 'char', '&str', 'String'].includes(left) && !(T.function(left)&&['==','!='].includes(node.op)))
+@@ -583,6 +591,7 @@ export class SemanticAnalyzer {
+     const original = this.infer(receiver, ctx), base = T.reference(original) && original !== '&str' ? T.target(original) : original;
+     const app = T.application(base), array = /^\[(.+);\d+\]$/.exec(base);
+     const resolved = this.implementations.lookup(base, method, ctx.instance.fn.module, node,ctx.instance.fn,ctx.methodScope.traits(ctx.methodScope.of(receiver)));
++    if(!resolved){const dataType=inferDataMethod(this,node,ctx,original,base,expected);if(dataType)return dataType;}
+     const builtins = ['len', 'clone', 'push', 'pop', 'push_str', 'to_string', 'unwrap', 'is_some', 'is_none', 'is_ok', 'is_err'];
+     if (!resolved && builtins.includes(method)) {
+       node.receiver = receiver; node.receiverDeref = base !== original; node.builtin = `method::${method}`;
+diff --git a/src/compiler/SymbolIndex.js b/src/compiler/SymbolIndex.js
+index edd410f..0274229 100644
+--- a/src/compiler/SymbolIndex.js
++++ b/src/compiler/SymbolIndex.js
+@@ -15,6 +15,7 @@ export class SymbolIndex {
+     this.structs.set('std::marker::PhantomData', {kind: 'struct', name: 'std::marker::PhantomData',
+       generics: [{name: 'T', bounds: []}], fields: [], form: 'unit', predicates: [], attributes: [],
+       visibility: 'pub', module: 'std::marker', builtin: 'phantom', span: {file: 'ferrite:stdlib', start: 0, end: 0, line: 1, column: 1}});
++    for(const name of ['ParseIntError','ParseFloatError'])this.structs.set('std::num::'+name,{kind:'struct',name:'std::num::'+name,generics:[],fields:[],form:'record',predicates:[],attributes:[],visibility:'pub',module:'std::num',builtin:'parse-error',span:{file:'ferrite:stdlib',start:0,end:0,line:1,column:1}});
+     this.enums.set('Option', {kind: 'enum', name: 'Option', generics: [{name: 'T', bounds: []}],
+       variants: [{name: 'Some', fields: ['T']}, {name: 'None', fields: []}], attributes: []});
+     this.enums.set('Result', {kind: 'enum', name: 'Result', generics: [{name: 'T', bounds: []}, {name: 'E', bounds: []}],
+diff --git a/src/compiler/closures/CaptureWalker.js b/src/compiler/closures/CaptureWalker.js
+index 69020f1..47135ae 100644
+--- a/src/compiler/closures/CaptureWalker.js
++++ b/src/compiler/closures/CaptureWalker.js
+@@ -40,7 +40,7 @@ export class CaptureWalker {
+       let callee = node.callee;
+       if (callee?.kind === 'field') {
+         const method = callee.field;
+-        callee = {...callee, object: walk(callee.object, names, ['push', 'pop', 'push_str'].includes(method) ? 'mutate' : method === 'unwrap' ? 'consume' : 'read')};
++        callee = {...callee, object: walk(callee.object, names, ['push', 'pop', 'push_str', 'remove'].includes(method) ? 'mutate' : ['unwrap','into_bytes'].includes(method) ? 'consume' : 'read')};
+       } else if (callee) callee = walk(callee, names, 'read');
+       return {...node, ...(callee ? {callee} : {}), args: node.args.map(arg => walk(arg, names, borrows ? 'read' : 'consume'))};
+     }
+diff --git a/src/runtime/Runtime.js b/src/runtime/Runtime.js
+index 81f616b..83cbadc 100644
+--- a/src/runtime/Runtime.js
++++ b/src/runtime/Runtime.js
+@@ -212,6 +212,18 @@ export class Runtime {
+   format(args, format) {
+     return format.parts.map(part => part.text ?? (part.debug ? this.debug(args[part.argument + 1]) : String(args[part.argument + 1]))).join('');
+   }
++  parseNumber(text,type) {
++    if(typeof text!=='string'||text.length>1000000||!this.integer(type)&&!['f32','f64'].includes(type))this.fail('Invalid numeric parser descriptor','R_PARSE');
++    const ok=value=>({tag:'Result::Ok',values:[value]}),error=()=>({tag:'Result::Err',values:[{}]});
++    if(this.integer(type)){
++      if(text.length>1000||!(type[0]==='u'?/^\+?[0-9]+$/:/^[+-]?[0-9]+$/).test(text))return error();
++      const value=BigInt(text),{min,max}=this.bounds(type);return value<min||value>max?error():ok(value);
++    }
++    // Unlike Number/parseFloat, Rust never accepts empty, whitespace, hex, or a prefix.
++    if(!/^[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?|inf(?:inity)?|nan)$/i.test(text))return error();
++    const value=/^[+-]?nan$/i.test(text)?NaN:/^[+-]?inf(?:inity)?$/i.test(text)?(text[0]==='-'?-Infinity:Infinity):Number(text);
++    return ok(type==='f32'?Math.fround(value):value);
++  }
+   builtin(name, args, {format = null, receiver = null, receiverReference = false, receiverDeref = false} = {}) {
+     let value = receiverReference ? this.read(receiver) : receiver;
+     if (receiverDeref) value = this.deref(value);
+@@ -235,7 +247,23 @@ export class Runtime {
+         for (const char of value) { const code = char.codePointAt(0); bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4; }
+         return BigInt(bytes);
+       }
+-      case 'method::push': if (value.length >= 100000) this.fail('Vector length limit exceeded'); value.push(args[0]); return null;
++      case 'method::push':
++        if(typeof value==='string') {if(value.length+args[0].length>1000000)this.fail('String length limit exceeded');if(receiverDeref)this.write(this.read(receiver),value+args[0]);else this.write(receiver,value+args[0]);return null;}
++        if (value.length >= 100000) this.fail('Vector length limit exceeded'); value.push(args[0]); return null;
++      case 'method::remove': {const i=Number(args[0]);if(!Number.isSafeInteger(i)||i<0||i>=value.length)this.fail('Vector removal index out of bounds','R_INDEX');return value.splice(i,1)[0];}
++      case 'method::into_bytes': {if(value.length>1000000)this.fail('String length limit exceeded');return Array.from(new TextEncoder().encode(value),byte=>BigInt(byte));}
++      case 'method::as_str': return value;
++      case 'method::trim': return value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu,'');
++      case 'method::starts_with': return value.startsWith(args[0]);
++      case 'method::contains': return value.includes(args[0]);
++      case 'method::to_lowercase': return value.toLowerCase();
++      case 'method::to_ascii_uppercase': return value.replace(/[a-z]/g,char=>char.toUpperCase());
++      case 'method::is_empty': return value.length===0;
++      case 'method::is_finite': return Number.isFinite(value);
++      case 'method::abs': return Math.abs(value);
++      case 'method::floor': return Math.floor(value);
++      case 'method::round': return value<0?-Math.round(-value):Math.round(value);
++      case 'method::parse': return this.parseNumber(value,format?.type);
+       case 'method::pop': return value.length ? {tag: 'Option::Some', values: [value.pop()]} : {tag: 'Option::None', values: []};
+       case 'method::push_str': {
+         if (receiverDeref) this.write(this.read(receiver), value + args[0]); else this.write(receiver, value + args[0]);
+diff --git a/src/ui-framework/RustAbi.js b/src/ui-framework/RustAbi.js
+index cc197de..b731f3a 100644
+--- a/src/ui-framework/RustAbi.js
++++ b/src/ui-framework/RustAbi.js
+@@ -1,7 +1,7 @@
+ /** Compiler-owned declarations for the checked Ferrite UI host ABI, not a Rust stdlib. */
+ export const UI_ABI_VERSION = 1;
+ export const UI_ABI_FILE = 'ferrite:ui-abi';
+-export const UI_INTRINSICS = Object.freeze(['element', 'fragment', 'text', 'value', 'child', 'attr', 'key', 'source', 'component', 'on_click', 'on', 'use_state', 'get', 'set', 'update', 'use_string', 'get_string', 'set_string', 'use_bool', 'get_bool', 'set_bool', 'use_ref', 'node_ref', 'focus', 'ref_value', 'effect', 'memo', 'prevent_default', 'stop_propagation', 'state', 'read', 'write', 'modify', 'memo_value', 'memo_with', 'effect_with', 'on_event', 'emit', 'external']);
++export const UI_INTRINSICS = Object.freeze(['element', 'fragment', 'text', 'value', 'child', 'attr', 'key', 'source', 'component', 'on_click', 'on', 'use_state', 'get', 'set', 'update', 'use_string', 'get_string', 'set_string', 'use_bool', 'get_bool', 'set_bool', 'use_ref', 'node_ref', 'focus', 'ref_value', 'effect', 'memo', 'prevent_default', 'stop_propagation', 'state', 'read', 'write', 'modify', 'memo_value', 'memo_with', 'effect_with', 'on_event', 'emit', 'external', 'interval', 'state_with']);
+ // Trap bodies make an unlinked artifact fail. Only declarations from UI_ABI_FILE
+ // may be linked; a similarly-named user function cannot become a host intrinsic.
+ export const UI_DECLARATIONS = `
+@@ -14,10 +14,12 @@ mod ui {
+     pub event_type: String, pub value: String, pub key: String, pub code: String,
+     pub checked: bool, pub repeat: bool, pub alt_key: bool, pub ctrl_key: bool,
+     pub meta_key: bool, pub shift_key: bool, pub button: i32, pub buttons: u32,
+-    pub client_x: f64, pub client_y: f64, pub pointer_id: i32, pub pressure: f64,
++    pub offset_x: f64, pub offset_y: f64, pub client_x: f64, pub client_y: f64, pub pointer_id: i32, pub pressure: f64,
+     pub delta_x: f64, pub delta_y: f64, pub delta_z: f64,
+     pub input_type: String, pub data: String, pub time_stamp: f64
+   }
++  pub fn interval<F: Fn(f64) -> ()>(milliseconds: u32, callback: F) { panic!("UI ABI must be linked") }
++  pub fn state_with<T: Clone, F: Fn() -> T>(factory: F) -> Signal<T> { panic!("UI ABI must be linked") }
+   pub fn state<T: Clone>(initial: T) -> Signal<T> { panic!("UI ABI must be linked") }
+   pub fn read<T: Clone>(state: Signal<T>) -> T { panic!("UI ABI must be linked") }
+   pub fn write<T: Clone>(state: Signal<T>, value: T) { panic!("UI ABI must be linked") }
+diff --git a/src/ui-framework/UICompiler.js b/src/ui-framework/UICompiler.js
+index 82eb55a..36bd008 100644
+--- a/src/ui-framework/UICompiler.js
++++ b/src/ui-framework/UICompiler.js
+@@ -7,8 +7,8 @@ import {WebAssemblyEmitter} from '../compiler/wasm/WebAssemblyEmitter.js';
+ import {prepareUIProject} from './UIProjectCompiler.js';
+ import {UI_ABI_VERSION, UI_ABI_FILE, UI_INTRINSICS} from './RustAbi.js';
+ 
+-const callbackArguments = {component: [0], on_click: [1], on: [2], effect: [0, 1], memo: [0], update: [1], modify: [1], memo_value: [0], memo_with: [0], effect_with: [0, 1], on_event: [2]};
+-const retainedCallbacks = new Set(['component', 'on_click', 'on', 'effect', 'effect_with', 'on_event']);
++const callbackArguments = {component: [0], on_click: [1], on: [2], effect: [0, 1], memo: [0], update: [1], modify: [1], memo_value: [0], memo_with: [0], effect_with: [0, 1], on_event: [2], interval: [1], state_with: [0]};
++const retainedCallbacks = new Set(['component', 'on_click', 'on', 'effect', 'effect_with', 'on_event', 'interval']);
+ const scalar = type => T.numeric(type) || ['String', '&str', 'bool', 'char', '()'].includes(type);
+ 
+ /** Typed Rust -> verified MIR -> checked UI imports, with original-source spans. */
+@@ -65,7 +65,7 @@ export class UICompiler {
+           }
+           callbacks[index] = {instance: closure.instance, type: closure.type, params: closure.params, span: closure.span};
+         }
+-        const stateType = ['read', 'write', 'modify'].includes(name) ? T.application(types[0]).args[0] : name === 'state' ? types[0] : null;
++        const stateType = ['read', 'write', 'modify'].includes(name) ? T.application(types[0]).args[0] : name === 'state' ? types[0] : name === 'state_with' ? T.application(target.returnType).args[0] : null;
+         const valueType = name === 'emit' ? types[1] : ['memo_value', 'memo_with'].includes(name) ? target.returnType : null;
+         const dependencyType = name === 'memo_with' ? types[1] : name === 'effect_with' ? types[2] : null;
+         for (const type of [stateType, valueType, dependencyType]) if (type) schema(type);
+diff --git a/src/ui-framework/UISession.js b/src/ui-framework/UISession.js
+index 1848b1e..e27e416 100644
+--- a/src/ui-framework/UISession.js
++++ b/src/ui-framework/UISession.js
+@@ -184,6 +184,22 @@ export class UISession {
+         const descriptor = spec.callbacks[2], environment = args[2];
+         return create(u.cloneElement(node(args[0]), {[eventName]: event => this.event(descriptor, environment, [spec.name === 'on_event' ? this.snapshotEvent(event) : String(event.target?.value ?? event.key ?? '')], event, bindings)}));
+       }
++      case 'interval': {
++        const milliseconds=Number(args[0]);
++        if(!Number.isInteger(milliseconds)||milliseconds<0||milliseconds>2147483647)throw Error('Invalid UI interval');
++        const latest=u.useRef(null);latest.current={descriptor:spec.callbacks[1],environment:args[1],bindings};
++        u.useEffect(()=>{
++          if(!milliseconds)return;
++          let previous=performance.now(),timer=setInterval(()=>{
++            const now=performance.now(),delta=Math.max(0,now-previous);previous=now;
++            if(this.disposed||this.debugger.armed)return;
++            try{const current=latest.current;this.closure(current.descriptor,current.environment,[delta],{label:'timer',bindings:current.bindings});}
++            catch(error){clearInterval(timer);this.emit('error',{message:error.message,code:error.code,span:error.span});this.onError?.(error);}
++          },milliseconds);
++          return ()=>clearInterval(timer);
++        },[milliseconds]);return null;
++      }
++      case 'state_with': return {...newState(spec.stateType, () => this.values.clone(spec.stateType, callback(0))), marker: {}};
+       case 'state': return {...newState(spec.stateType, this.values.clone(spec.stateType, args[0])), marker: {}};
+       case 'read': return this.values.clone(spec.stateType, state(args[0], spec.stateType).value);
+       case 'write': state(args[0], spec.stateType).set(this.values.clone(spec.stateType, args[1])); return null;
+@@ -241,7 +257,12 @@ export class UISession {
+     const text = value => { const result = String(value ?? ''); if (result.length > 1000000) throw Error('DOM event value budget exceeded'); return result; };
+     const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
+     const integer = (value, unsigned = false) => BigInt(unsigned ? number(value) >>> 0 : number(value) | 0);
+-    return {event_type: text(event.type), value: text(event.target?.value), key: text(event.key), code: text(event.code),
++    const target=event.currentTarget,rect=target?.getBoundingClientRect?.();
++    let offsetX=rect?number(event.clientX)-rect.left:number(event.offsetX),offsetY=rect?number(event.clientY)-rect.top:number(event.offsetY);
++    if(target?.getScreenCTM&&typeof DOMPoint==='function'){
++      try{const p=new DOMPoint(number(event.clientX),number(event.clientY)).matrixTransform(target.getScreenCTM().inverse());offsetX=p.x;offsetY=p.y;}catch{/* Detached or singular SVG: fall back to CSS coordinates. */}
++    }else if(rect){if(rect.width&&target.offsetWidth)offsetX*=target.offsetWidth/rect.width;if(rect.height&&target.offsetHeight)offsetY*=target.offsetHeight/rect.height;}
++    return {offset_x:offsetX,offset_y:offsetY,event_type: text(event.type), value: text(event.target?.value), key: text(event.key), code: text(event.code),
+       checked: !!event.target?.checked, repeat: !!event.repeat, alt_key: !!event.altKey, ctrl_key: !!event.ctrlKey,
+       meta_key: !!event.metaKey, shift_key: !!event.shiftKey, button: integer(event.button), buttons: integer(event.buttons, true),
+       client_x: number(event.clientX), client_y: number(event.clientY), pointer_id: integer(event.pointerId), pressure: number(event.pressure),
+diff --git a/tests/seven-guis-runtime.test.js b/tests/seven-guis-runtime.test.js
+new file mode 100644
+index 0000000..643e30b
+--- /dev/null
++++ b/tests/seven-guis-runtime.test.js
+@@ -0,0 +1,61 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import {compile} from '../src/engine.js';
++import {Runtime} from '../src/runtime/Runtime.js';
++import {MirVirtualMachine} from '../src/runtime/MirVirtualMachine.js';
++import {JavaScriptEmitter} from '../src/compiler/JavaScriptEmitter.js';
++import {WebAssemblyEmitter} from '../src/compiler/wasm/WebAssemblyEmitter.js';
++import {WebAssemblyRuntime} from '../src/runtime/WebAssemblyRuntime.js';
++import {UICompiler} from '../src/ui-framework/UICompiler.js';
++import {UISession} from '../src/ui-framework/UISession.js';
++import {createUIRuntime} from '../src/ui-framework/Runtime.js';
++import {createDocument,elements} from './fixtures/ui-dom.js';
++
++const source=`fn main() -> i64 {
++    assert_eq!("+42".parse::<i64>().unwrap(),42_i64);
++    assert!("18446744073709551616".parse::<u64>().is_err());
++    assert_eq!("18446744073709551615".parse::<u64>().unwrap(),18446744073709551615_u64);
++    assert!("-1".parse::<u8>().is_err()); assert!(" 1".parse::<f64>().is_err());
++    assert!("1e".parse::<f64>().is_err()); assert!("0xff".parse::<f64>().is_err());
++    assert_eq!("-1.25e2".parse::<f64>().unwrap(),-125.0);
++    assert!(!"NaN".parse::<f64>().unwrap().is_finite());
++    assert_eq!("  2.5  ".trim().parse::<f64>().unwrap(),2.5);
++    let text=String::from("Zażółć 🦀"); assert_eq!(text.clone().into_bytes().len(),15_usize);
++    assert!(text.starts_with("Za")); assert!(text.contains("🦀"));
++    assert_eq!("aBc".to_ascii_uppercase(),String::from("ABC"));
++    let mut numbers=vec![3_i64,7_i64,9_i64]; assert_eq!(numbers.remove(1),7_i64);
++    assert_eq!(numbers.len(),2_usize); assert_eq!(numbers[1],9_i64);
++    let mut name=String::from("Ru");name.push('s');name.push_str("t");assert!(name=="Rust");
++    42
++}`;
++for(const backend of ['javascript','mir','wasm'])test(`${backend}: checked numeric parsing and owned text/vector methods`,()=>{
++  const build=compile(source);
++  if(backend==='javascript'){const program=new Function(new JavaScriptEmitter(build.optimizedMir,{library:true}).build().code)();assert.equal(program.functions[build.entry](),42n);}
++  else if(backend==='wasm'){const binary=new WebAssemblyEmitter(build.optimizedMir,{entry:build.entry}).build();assert.equal(new WebAssemblyRuntime(binary).run().value,42n);}
++  else{const vm=new MirVirtualMachine(build.optimizedMir,{entry:build.entry});vm.run();assert.equal(vm.result,42n);}
++});
++test('invalid parser metadata and out-of-bounds removal trap rather than mutating data',()=>{
++  const runtime=new Runtime();assert.throws(()=>runtime.parseNumber('1','opaque'),/descriptor/);
++  const data=[1n];assert.throws(()=>runtime.builtin('method::remove',[2n],{receiver:data}),/bounds/);assert.deepEqual(data,[1n]);
++  assert.throws(()=>compile('fn main(){let s=String::from("x");let r=&s;r.into_bytes();}'),/borrowed receiver/);
++  assert.throws(()=>compile('fn main(){let v=vec![1];v.remove(0);}'),/mutable/);
++  assert.throws(()=>compile('fn main(){"x".parse::<String>();}'),/FromStr/);
++});
++test('derived nominal fields resolve in their declaration module and returning branches do not poison continuing moves',()=>{
++  const code=`mod domain {#[derive(Clone)] pub struct Row {pub value:String} #[derive(Clone)] pub struct Model {pub rows:Vec<Row>} pub fn change(m:Model,done:bool)->Model {if done{return m;} m.clone()}}
++  fn app()->ui::Node {let s=ui::state(domain::Model{rows:vec![domain::Row{value:String::from("ok")}]});let m=domain::change(ui::read(s),false);view!{<p>{m.rows[0].value.clone()}</p>}}`;
++  const artifact=UICompiler.compile(code);const root=createDocument().createElement('main');const session=new UISession(artifact).mount(root);
++  assert.equal(root.textContent,'ok');session.dispose();
++});
++for(const backend of ['javascript','mir','wasm'])test(`${backend}: lazy state and managed timer registration survive rerender and dispose`,()=>{
++  const previousSet=globalThis.setInterval,previousClear=globalThis.clearInterval;let tick,created=0,cleared=0;
++  globalThis.setInterval=callback=>{tick=callback;created++;return 17;};globalThis.clearInterval=id=>{assert.equal(id,17);cleared++;};
++  const ui=createUIRuntime(),container=createDocument().createElement('main');let session;
++  try{
++    const artifact=UICompiler.compile(`fn app()->ui::Node {let state:ui::Signal<i64>=ui::state_with(||7_i64);let copy=state.clone();ui::interval(25,move |_delta:f64|ui::modify(copy,|n|n+1));view!{<output>{ui::read(state)}</output>}}`);
++    session=new UISession(artifact,{backend,runtime:ui}).mount(container);session.root.flushEffects();assert.equal(created,1);
++    tick();ui.flushSync();session.root.flushEffects();assert.equal(elements(container,'output')[0].textContent,'8');assert.equal(created,1);
++    session.armDebugger();tick();ui.flushSync();assert.equal(elements(container,'output')[0].textContent,'8');session.debug('stop');
++    session.dispose();assert.equal(cleared,1);tick();assert.equal(session.handles.size,0);
++  }finally{session?.dispose();globalThis.setInterval=previousSet;globalThis.clearInterval=previousClear;}
++});

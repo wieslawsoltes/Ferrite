@@ -1,0 +1,37 @@
+name: UI debugger integration
+on:
+  push:
+    branches: [fix/ui-project-debugger]
+    paths: [.github/workflows/ui-debugger-integration.yml, tools/ui-debugger-integrate.py]
+permissions:
+  contents: write
+concurrency:
+  group: ui-debugger-integration
+  cancel-in-progress: false
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/ui-project-debugger
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply and verify the locally tested merge resolution
+        if: hashFiles('tools/ui-debugger-integrate.py') != ''
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          python tools/ui-debugger-integrate.py
+      - name: Retain exact merged source
+        run: |
+          mkdir -p artifacts/source
+          git archive --format=zip HEAD -o artifacts/source/checkout.zip
+          git rev-parse HEAD > artifacts/source/commit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ferrite-integrated-source
+          path: artifacts/source/
+          retention-days: 1

@@ -1,4 +1,5 @@
 import {supertraitCases, supertraitCompileFailCases} from './supertraits.js';
+import {traitHardeningCases,traitHardeningCompileFailCases} from './trait-hardening.js';
 import {genericTraitCases,genericTraitCompileFailCases} from './generic-traits.js';
 import {uiGenericCases, uiGenericCompileFailCases} from './ui-generic-integration.js';
 import {genericImplCases, genericImplCompileFailCases} from './generic-impls.js';
@@ -134,3 +135,5 @@ export const languageCases = [
 );
 
 languageCases.push(...genericTraitCases.map(([name,source,output])=>({name,source,output,kind:'run'})),...genericTraitCompileFailCases.map(([name,source])=>({name,source,kind:'compile-fail'})));
+
+languageCases.push(...traitHardeningCases.map(([name,source,output])=>({name,source,output,kind:'run'})),...traitHardeningCompileFailCases.map(([name,source])=>({name,source,kind:'compile-fail'})));

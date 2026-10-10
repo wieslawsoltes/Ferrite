@@ -79,6 +79,10 @@ export class ImplObligations {
     }
     return false;
   }
+  requireSized(type,node=this.declaration) {
+    if(!this.prove(type,'core::marker::Sized'))throw new Diagnostic('E0277',
+      `The size of ${type} is not known in this declaration; add a Sized bound`,node.span??this.declaration.span);
+  }
   validate(raw,node=this.declaration) {
     const type=this.normalize(raw,node);
     if(this.checked.has(type))return;
@@ -86,14 +90,16 @@ export class ImplObligations {
     if(++this.visits>65536)throw new Diagnostic('F_IMPL_BOUND_LIMIT','Implementation obligation budget exceeded',node.span);
     if(T.reference(type))return this.validate(T.target(type),node);
     const fn=T.function(type);if(fn){[...fn.params,fn.result].forEach(t=>this.validate(t,node));return;}
-    const tuple=T.tuple(type);if(tuple){tuple.forEach(t=>this.validate(t,node));return;}
-    const array=T.array(type);if(array)return this.validate(array.element,node);
+    const tuple=T.tuple(type);if(tuple){
+      tuple.slice(0,-1).forEach(t=>this.requireSized(t,node));
+      tuple.forEach(t=>this.validate(t,node));return;
+    }
+    const array=T.array(type);if(array){this.requireSized(array.element,node);return this.validate(array.element,node);}
     const {name,args}=T.application(type),shape=this.index.structs.get(name)??this.index.enums.get(name);
     if(this.parameters.has(name)&&args.length)throw new Diagnostic('E0109',`Type parameter ${name} does not accept type arguments`,node.span);
     args.forEach(t=>this.validate(t,node));
+    if(shape||name==='Vec')args.forEach(t=>this.requireSized(t,node));
     if(!shape)return;
-    for(const argument of args)if(!this.prove(argument,'core::marker::Sized'))
-      throw new Diagnostic('E0277',`Type argument ${argument} must be Sized`,node.span??this.declaration.span);
     const substitution=new Map(shape.generics.map((g,i)=>[g.name,args[i]]));
     const required=[];
     for(const generic of shape.generics)for(const bound of generic.bounds)required.push([substitution.get(generic.name),bound]);

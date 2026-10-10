@@ -121,3 +121,17 @@ those traits report `F_TRAIT_EXTERNAL`; this does not disable existing builtin
 bounds or derives. Generic reference-carrying method results retain
 `F_IMPL_REFERENCE`. User macros, async lowering, native layout/codegen and full
 standard-library parity remain separate from the browser compiler.
+
+### Intrinsic identities and aggregate well-formedness
+
+Declaration obligations canonicalize builtin Copy, Clone, Sized and related
+traits independently from user traits of the same name. Intrinsic Copy and Clone
+entail Sized; a user trait named Clone does not. Array element types (including
+zero-length arrays), non-tail tuple members, and supported nominal/Vec type
+arguments must be Sized even in unused required-method signatures. The default
+method checker still permits an unbounded direct Self result in a required
+method, but not a body that materializes that result without a Sized proof.
+
+The trait-hardening fixtures also retain qualified-path binder-freshening
+regressions from the earlier implementation without changing caller-private
+definition-site substitutions or generic closure result inference.

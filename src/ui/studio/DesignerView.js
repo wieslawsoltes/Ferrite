@@ -1,3 +1,4 @@
+import {DebuggerView} from '../views/DebuggerView.js';
 import {Dom} from '../views/Dom.js';
 import {PanelDock} from '../docking/PanelDock.js';
 import {designerLayout} from './DesignerLayout.js';
@@ -75,8 +76,8 @@ export function createDesignerView(s) {
   const styles=Dom.element('div','studio-style-panel');styles.append(Dom.element('p','studio-hint','Stylesheet for this view. Edit CSS here; Preview applies it to the running app.'),s.css);
   const debug=Dom.element('div','studio-debug-panel'),debugBar=Dom.element('div','studio-toolbar');
   debugBar.append(s.button('Inspect',()=>s.inspect(),'tree'));
-  for(const [label,command,icon] of [['Arm events','arm','debug'],['Instruction','step','step'],['Source line','step-line','line'],['Back instruction','back','step'],['Back line','back-line','line'],['Restart event','restart','debug'],['Continue','continue','run'],['Disarm','stop','stop']])debugBar.append(s.button(label,()=>s.debug(command),icon));
-  s.states=Dom.element('div','studio-states');s.debugOutput=Dom.element('pre','studio-debug');debug.append(debugBar,s.states,s.debugOutput);
+  s.states=Dom.element('div','studio-states');s.debugOutput=Dom.element('div','studio-debug-inspector');debug.append(debugBar,s.debugOutput,s.states);
+  s.debugView=new DebuggerView(s.debugOutput,s.app.selection,command=>s.debug(command).catch(error=>s.error(error)),{ui:true,onSelect:span=>s.revealDebugSpan(span)});
   s.budgetInput=s.input('UI instruction budget','250000');s.budgetInput.type='number';s.budgetInput.min='1';s.budgetInput.max='2000000';s.budgetInput.step='1';s.budgetInput.onchange=()=>{s.saveProject();s.markStale();};
   const settings=Dom.element('div','studio-settings-panel');settings.append(s.field('Entry file',s.entryFiles),s.field('Entry function',s.entryInput),s.field('Instruction budget per render / event',s.budgetInput),s.button('Export HTML',()=>s.download(),'export'),s.button('Export hydrated HTML',()=>s.download({hydrate:true}),'export'));
   s.nativeInput=Dom.element('input');s.nativeInput.type='file';s.nativeInput.accept='.wasm,application/wasm';s.nativeInput.hidden=true;s.nativeInput.setAttribute('aria-label','Load trusted Cargo UI Wasm');

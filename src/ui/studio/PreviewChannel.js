@@ -26,10 +26,26 @@ export class PreviewChannel {
       this.pending.delete(message.reply); clearTimeout(task.timer); task.signal?.removeEventListener('abort', task.abort);
       if (message.error) task.reject(Object.assign(Error(String(message.error.message).slice(0, 4000)), {code: message.error.code})); else task.resolve(message.result);
     } else if (typeof message.event === 'string') {
-      if (message.event === 'ready') this.ready = true;
+      if (message.event === 'ready') {
+        this.ready = true;
+        for (const [id, task] of this.pending) if (id.startsWith('ready:') && task.channel === this.channel) { this.pending.delete(id); clearTimeout(task.timer); task.signal?.removeEventListener('abort', task.abort); task.resolve(); }
+      }
+      if (message.event === 'error') this.rejectPending(Error(message.error?.message ?? 'UI preview failed to load'));
       if (message.event === 'error') this.onEvent({event: 'error', error: message.error});
       else this.onEvent(message);
     }
+  }
+  waitUntilReady({signal} = {}) {
+    if (signal?.aborted) return Promise.reject(signal.reason);
+    if (this.ready) return Promise.resolve();
+    if (this.disposed) return Promise.reject(Error('Preview channel is disposed'));
+    const channel = this.channel;
+    return new Promise((resolve, reject) => {
+      const id = `ready:${++this.sequence}`, task = {resolve, reject, signal, channel};
+      const cancel = error => { this.pending.delete(id); clearTimeout(task.timer); signal?.removeEventListener('abort', task.abort); reject(error); };
+      task.abort = () => cancel(signal.reason); task.timer = setTimeout(() => cancel(Error('UI preview readiness timed out')), this.timeoutMs);
+      signal?.addEventListener('abort', task.abort, {once: true}); this.pending.set(id, task);
+    });
   }
   request(command, values = {}, {signal} = {}) {
     if (this.disposed || !this.ready) return Promise.reject(Error('Compile and load the UI preview first'));

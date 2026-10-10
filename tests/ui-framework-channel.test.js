@@ -42,3 +42,16 @@ test('preview abort, timeout, errors and disposal release pending handlers', asy
   const disposed = f.channel.request('inspect'); const rejection = assert.rejects(disposed, {name: 'AbortError'}); f.channel.dispose(); await rejection;
   assert.equal(f.channel.pending.size, 0); assert.equal(f.channel.ready, false); f.channel.dispose();
 });
+
+test('readiness waiters resolve once, handle already-ready previews and release listeners', async () => {
+  const f=fixture();const first=f.channel.waitUntilReady(), second=f.channel.waitUntilReady();
+  f.receive({event:'ready'});await Promise.all([first,second]);await f.channel.waitUntilReady();assert.equal(f.channel.pending.size,0);f.channel.dispose();
+});
+test('readiness cannot arm a replaced, failed, stopped or timed-out preview', async () => {
+  for(const action of ['replace','error','stop','timeout']) {
+    const f=fixture({timeoutMs:10}), abort=new AbortController();
+    const pending=f.channel.waitUntilReady({signal:abort.signal}), rejected=assert.rejects(pending);
+    if(action==='replace')f.channel.reset();else if(action==='error')f.receive({event:'error',error:{message:'Mount failed'}});else if(action==='stop')abort.abort();
+    await rejected;assert.equal(f.channel.pending.size,0);f.channel.dispose();
+  }
+});

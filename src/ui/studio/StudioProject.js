@@ -36,6 +36,7 @@ export const StudioProject = {
     } catch (error) { this.error(error); } finally { this.savingProject = false; }
   },
   changed(event) {
+    if (event.kind === 'breakpoint') { this.syncBreakpoints(); return; }
     if (!['edit','files','replace'].includes(event.kind) || this.disposed) return;
     this.refreshFiles();
     const relevant = new Set([this.file,this.entryFile,UIProject.manifestPath(this.entryFile),this.project?.settings.stylesheet,...Object.keys(this.dependencies ?? {})]);
@@ -52,6 +53,8 @@ export const StudioProject = {
     if (!this.savingProject && !this.root.hidden && this.app.model.documentState(this.app.model.active).mode !== 'code') this.buildTimer=setTimeout(()=>this.build().catch(error=>this.error(error)),350);
   },
   markStale() {
+    this.stopDebugging?.(); if (this.preview?.channel) this.preview.reset();
+    if (this.frame) this.frame.style.pointerEvents = 'none';
     this.generation++; this.active?.abort(); this.nativeAsset = null; this.artifact = null; this.inspection = null; this.snapshot = null; this.renderState();
     this.status.textContent = 'Source changed · Preview to compile. The previous preview is read-only to tooling.'; this.status.dataset.kind = 'stale';
   },

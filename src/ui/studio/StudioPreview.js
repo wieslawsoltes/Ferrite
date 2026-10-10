@@ -13,10 +13,11 @@ export const StudioPreview = {
     signal?.throwIfAborted();
     clearTimeout(this.buildTimer); this.nativeAsset = null; this.saveProject(); const source = this.model.files[this.entryFile]; if (typeof source !== 'string') throw Error('Open or create a UI view file');
     this.active?.abort(); this.active = new AbortController(); const combined = AbortSignal.any([this.active.signal, signal].filter(Boolean));
+    this.stopDebugging?.();
     const generation = ++this.generation, file = this.entryFile, channel = this.preview.reset();
     this.buildingGeneration = generation;
     try {
-      this.layoutMode.value = 'off'; this.layoutMode.dataset.activeMode = 'off'; this.frame.style.pointerEvents = ''; this.layoutMode.removeAttribute('aria-busy'); this.picking = false; this.pickButton.setAttribute('aria-pressed', 'false'); this.artifact = null;
+      this.layoutMode.value = 'off'; this.layoutMode.dataset.activeMode = 'off'; this.frame.style.pointerEvents = ''; this.layoutMode.removeAttribute('aria-busy'); this.picking = false; this.pickButton.setAttribute('aria-pressed', 'false'); this.artifact = null; this.inspection = null; this.snapshot = null; this.renderState();
       this.status.textContent = 'Compiling typed Rust UI in a worker…'; this.status.dataset.kind = 'building';
       const revision = this.model.revision, epoch = this.model.workspaceEpoch, files = {...this.model.files}, optimize = this.app.settings.optimize;
       let result;
@@ -30,7 +31,7 @@ export const StudioPreview = {
       const {artifact, html, build} = result;
       combined.throwIfAborted(); if (generation !== this.generation || epoch !== this.model.workspaceEpoch || Object.keys(artifact.files).some(path => files[path] !== this.model.files[path])) throw new DOMException('Stale UI build', 'AbortError');
       this.dependencies = {...artifact.files}; this.observedFiles = {...this.model.files};
-      this.artifact = artifact; this.inspection = build; this.inspectionEpoch = epoch; this.app.publishUIBuild(build, file, revision, epoch); this.compiledSource = source; this.compiledFile = file; this.compiledGeneration = generation;
+      this.artifact = artifact; this.inspection = build; this.inspectionEpoch = epoch; this.app.publishUIBuild(build, file, revision, epoch); this.compiledSource = source; this.compiledFile = file; this.compiledGeneration = generation; this.compiledBackend = this.backend; this.compiledOptimize = optimize;
       this.snapshot = null; this.preview.load(html, channel); this.status.textContent = 'Loading isolated preview…'; this.renderOutline();
       return {file, entry: artifact.entry, backend: this.backend, nodes: artifact.nodes.length, revision: this.model.revision};
     } finally {
@@ -66,18 +67,24 @@ export const StudioPreview = {
     // A retained older preview cannot navigate or overwrite a newer source revision.
     if (!this.artifact || this.disposed) return;
     if ((this.root.hidden || this.dock?.visible === false) && ['select','layout'].includes(message.event)) return;
+    if (message.event === 'debug-command') {
+      if (!this.root.hidden && this.app.studio?.current === this && ['continue','stop','step-over','step-out','step-line','back-line'].includes(message.command)) this.app.debugCommand(message.command);
+      return;
+    }
     if (message.event === 'error') { this.error(Object.assign(Error(message.error?.message ?? 'Preview error'), message.error)); return; }
     if (message.event === 'layout') { this.assertLive(); this.select(message.id); this.edit({op: 'setLayout', node: message.id, rectangle: message.rectangle, grid: 1, snap: false}).catch(error => this.error(error)); return; }
     if (message.event === 'select') { if (this.artifact) { this.select(message.id); this.dock?.open('properties'); } return; }
     if (message.event === 'ready' || message.event === 'snapshot') {
       this.snapshot = message.snapshot; this.renderState();
-      if (message.event === 'ready' && this.armOnReady) { this.armOnReady=false; this.debug('arm').catch(error=>this.error(error)); }
       if (message.event === 'ready' && this.app.isCurrentUI(this.entryFile, this.model.revision, this.inspectionEpoch) && this.app.$('status').textContent === 'Rust UI preview loading') this.app.status('Rust UI preview running', 'success');
       if (message.event === 'ready' && this.artifact) { this.status.dataset.kind = 'ready'; this.status.textContent = this.nativeAsset ? `Live native rustc Wasm · ${this.nativeAsset.name} · isolated origin · inspection/export only` : `Live ${this.backend} preview · ${this.artifact.nodes.length} source nodes · isolated origin`; }
     } else if (message.event.startsWith('debug-')) {
       if (this.snapshot) this.snapshot.debugger = message.detail;
       this.renderState(); const span = message.detail?.state?.next ?? message.detail?.state?.last?.span;
-      if (!this.root.hidden && this.dock?.visible !== false && span?.file === this.file) this.app.selection.select(span, 'ui-studio', this.model.revision);
+      if (['debug-paused','debug-error'].includes(message.event) && span && !this.root.hidden) {
+        if (this.revealDebugSpan) this.revealDebugSpan(span);
+        else if (this.dock?.visible !== false && span.file === this.file) this.app.selection.select(span, 'ui-studio', this.model.revision);
+      }
     }
   }
 };

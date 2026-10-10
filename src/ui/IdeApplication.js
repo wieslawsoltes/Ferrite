@@ -58,7 +58,7 @@ export class IdeApplication {
     this.search=new SearchView(this.panels.get('search'),this.model,this.selection);
     this.nativeArtifacts=new NativeArtifactsView(this.panels.get('native-artifacts'),this.selection);
     this.problems=new DiagnosticsView(this.panels.get('problems'),this.selection);this.problems.render([]);
-    this.debugger=new DebuggerView(this.panels.get('debugger'),this.selection,command=>this.execution.command(command,this.model.breakpointList));
+    this.debugger=new DebuggerView(this.panels.get('debugger'),this.selection,command=>this.debugCommand(command),{onSelect:span=>this.studio?.current && this.debugger.debug ? this.studio.current.revealDebugSpan(span) : this.selection.select(span,'debugger')});
     this.tests=new TestsView(this.panels.get('tests'),this.selection);this.tests.reset();
     this.repositories=new RepositoryController(this.model,this.native,{onLoaded:()=>{this.backend='native';this.$('backend-select').value='native';this.options={};if(this.cargo)this.cargo.options={};},onChanged:()=>{if(this.nativeRepositoryAttached&&!this.repositories.session){this.backend='browser';this.$('backend-select').value='browser';this.options={};if(this.cargo)this.cargo.options={};}this.nativeRepositoryAttached=!!this.repositories.session;if(this.cargo){this.cargo.repository=this.repositories.session;this.cargo.render();}this.repositoryView?.render();this.dependencyView?.render();},onLog:event=>{if(event.type==='log')this.runOutput.textContent+=event.text??'';}});
     this.repositoryView=new RepositoryView(this.panels.get('repositories'),this.repositories,{onError:error=>this.error(error),onBrowserFolder:result=>{this.stop(false);this.backend='browser';this.$('backend-select').value='browser';this.editor.clearHistory();this.model.replace(result.files);this.model.save();this.status(`Imported local folder: ${result.omitted.length} files omitted from the text-only browser project`,'success');}});
@@ -108,9 +108,9 @@ export class IdeApplication {
       else if(modifier&&event.shiftKey&&key==='p'){event.preventDefault();this.palette.open();}
       else if(modifier&&key==='s'){event.preventDefault();this.model.save();this.status('Workspace saved.','success');}
       else if(modifier&&event.key==='Enter'){event.preventDefault();this.compile('run');}
-      else if(event.key==='F5'){event.preventDefault();if(this.execution.worker)this.execution.command('continue',this.model.breakpointList);else this.compile('debug');}
-      else if(event.key==='F10'){event.preventDefault();this.execution.command('step-line');}
-      else if(event.key==='F11'){event.preventDefault();this.execution.command('step');}
+      else if(event.key==='F5'){event.preventDefault();event.shiftKey?this.stop():this.debugCommand('continue');}
+      else if(event.key==='F10'){event.preventDefault();this.debugCommand(event.shiftKey?'back-line':'step-over');}
+      else if(event.key==='F11'){event.preventDefault();this.debugCommand(event.shiftKey?'step-out':'step-line');}
       else if(event.altKey&&event.key==='1'){event.preventDefault();this.dock.toggle('project');}
     });
     this.$('editor-root').addEventListener('editor-position',e=>{this.$('source-position').textContent=`${e.detail.line}:${e.detail.column}`;});
@@ -134,6 +134,7 @@ export class IdeApplication {
     {label:'Split Editor Down',icon:'split',execute:()=>this.studio.split(this.model.active,'down')},
     ...['code','split','design','preview'].map(mode=>({label:`View: ${mode}`,icon:'fit',execute:()=>this.studio.setMode(mode)})),
     ...['check','build','run','debug','test'].map(command=>({label:`${command[0].toUpperCase()+command.slice(1)} current project`,icon:command==='run'?'run':'code',execute:()=>this.compile(command)})),
+    ...[['Continue debugging','continue'],['Pause debugging','pause'],['Step over','step-over'],['Step into source line','step-line'],['Step out','step-out'],['Step instruction','step'],['Reverse source line','back-line'],['Stop debugging','stop']].map(([label,command])=>({label,icon:'debug',execute:()=>this.debugCommand(command)})),
     {label:'Open Git repository or local Cargo directory',icon:'folder',execute:()=>this.dock.open('repositories')},
     {label:'Add remote or local Cargo crate',icon:'cargo',execute:()=>this.dock.open('crates')},
     {label:'Find in Files',icon:'search',execute:()=>this.openSearch(false)},
@@ -153,7 +154,7 @@ export class IdeApplication {
     else if(event.kind==='edit'){
       this.tabs.render();this.projectView.render();this.invalidate();this.schedule();clearTimeout(this.saveTimer);this.saveTimer=setTimeout(()=>this.model.save(),800);
     }else if(['files','replace'].includes(event.kind)){if(event.kind==='replace'||!Object.hasOwn(this.model.files,this.projectView.selected)&&!this.model.folders.has(this.projectView.selected))this.projectView.selected=this.model.active;this.renderWorkspace();this.cargo.render();this.invalidate();if(!event.native)this.schedule();}
-    else if(event.kind==='open'){this.projectView.selected=this.model.active;this.renderWorkspace();const entry=this.uiCommands.entry();if((entry&&entry!==this.build?.file)||(!entry&&this.build?.frontend==='rust-ui')){this.invalidate();this.schedule();}}else if(event.kind==='saved'){this.tabs.render();this.projectView.render();}
+    else if(event.kind==='open'){this.projectView.selected=this.model.active;this.renderWorkspace();const entry=this.uiCommands.entry();if((entry&&entry!==this.build?.file)||(!entry&&this.build?.frontend==='rust-ui')){this.invalidate();this.schedule();}if(this.studio.current)this.studio.current.renderState();else if(!this.execution.worker)this.debugger.render(null);}else if(event.kind==='saved'){this.tabs.render();this.projectView.render();}
     else if(event.kind==='storage-error')this.status('Browser storage could not save this workspace. Export a snapshot.','error');
   }
   renderWorkspace(){this.tabs.render();this.projectView.render();this.editor.open(this.model.active);this.$('active-path').textContent=this.model.active??'No file open';this.$('editor-language').textContent=this.model.active?.endsWith('.rs')?'Rust':this.model.active?.endsWith('.toml')?'TOML':'Text';this.projectFooter.textContent=`${Object.keys(this.model.files).length} files · ${this.model.folders.size} folders · ${this.repositories.session?'native checkout (sync on command)':'browser workspace'}`;const manifest=this.model.files[this.repositories.session?.manifest??'Cargo.toml']??'';this.$('project-name').textContent=this.model.name||/^name\s*=\s*"([^"]+)"/m.exec(manifest)?.[1]||'Cargo workspace';}
@@ -204,6 +205,14 @@ export class IdeApplication {
     this.writeOutput(`Rust UI ${command}: ${build.file}\n${build.sem.instances.length} typed instances · ${build.verification.blocks} verified MIR blocks\n${build.elapsedMs.toFixed(2)} ms · ${build.diagnostics.length} diagnostics\n${detail}\nInspect Compiler for source-linked stages and Profile for measured pass timings.`);
     this.dock.open('compiler');this.dock.open('run');
   }
+  async debugCommand(command) {
+    try {
+      if (this.backend !== 'native' && await this.uiCommands.debug(command)) return;
+      if (command === 'stop') this.stop();
+      else if (this.execution.worker) this.execution.command(command, this.model.breakpointList);
+      else if (command === 'continue' || command === 'arm') await this.compile('debug');
+    } catch (error) { if (error.name !== 'AbortError') this.error(error); }
+  }
   async languageCommand(command){return this.editorLanguage.command(command);}
   async nativeCommand(command,serial,revision){
     if(command==='debug'){this.error(Error('The browser debugger operates on Ferrite MIR. Native debugger integration is not implemented.'));return;}
@@ -244,7 +253,7 @@ export class IdeApplication {
   }
   writeOutput(text){this.runOutput.classList.remove('error');this.runOutput.textContent=text;this.runOutput.scrollTop=this.runOutput.scrollHeight;}
   error(error){const diagnostic=error.toJSON?.()??{code:error.code??'ERROR',message:error.message??String(error),span:error.span??null,notes:error.notes??[]};this.status(`${diagnostic.code} · ${diagnostic.message}`,'error');this.problems.render([diagnostic]);this.dock.open('problems');this.runOutput.textContent=`${diagnostic.code}: ${diagnostic.message}\n${Dom.sourceLabel(diagnostic.span)}`;this.runOutput.classList.add('error');}
-  stop(notify=true){this.uiCommands?.cancel();this.nativeCheckPending=false;clearTimeout(this.compileTimer);this.requestSerial++;this.compiler.cancel();this.execution.stop(false);this.native.cancel().catch(()=>{});if(notify)this.status('Stopped','');}
+  stop(notify=true){this.studio?.current?.stopDebugging();this.uiCommands?.cancel();this.nativeCheckPending=false;clearTimeout(this.compileTimer);this.requestSerial++;this.compiler.cancel();this.execution.stop(false);this.native.cancel().catch(()=>{});if(notify)this.status('Stopped','');}
   status(message,kind=''){const node=this.$('status');node.textContent=message;node.dataset.kind=kind;}
   openSearch(currentFile=false){const input=this.editor.textarea,text=input.value.slice(input.selectionStart,input.selectionEnd);this.dock.open('search');this.search.open(text.length<=1024?text:'',currentFile);}
   createFile(){return this.projects.createFile();}

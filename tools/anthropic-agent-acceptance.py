@@ -222,8 +222,18 @@ def run():
             (OUT / 'results.json').write_text(json.dumps(evidence, indent=2))
             print('PASS Anthropic Timer coding: seven Messages turns, paged analysis, two-file approval, real compiler/preview, button events and bounds, credential isolation', flush=True)
         except Exception:
-            page.screenshot(path=str(OUT / 'failure.png'))
-            (OUT / 'failure.json').write_text(json.dumps({'traceback': traceback.format_exc(), 'errors': errors, 'turns': fixture.turn, 'body': page.locator('body').inner_text()[-14000:]}, indent=2).replace(KEY, '[REDACTED]'))
+            # A crashed or restricted browser may also reject screenshots or DOM access.
+            # Retain the original failure instead of masking it with evidence collection.
+            failure = {'traceback': traceback.format_exc(), 'errors': errors, 'turns': fixture.turn}
+            try:
+                page.screenshot(path=str(OUT / 'failure.png'))
+            except Exception as error:
+                failure['screenshotError'] = str(error)
+            try:
+                failure['body'] = page.locator('body').inner_text(timeout=3000)[-14000:]
+            except Exception as error:
+                failure['bodyError'] = str(error)
+            (OUT / 'failure.json').write_text(json.dumps(failure, indent=2).replace(KEY, '[REDACTED]'))
             raise
         finally:
             context.close()

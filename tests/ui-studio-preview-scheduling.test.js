@@ -11,7 +11,7 @@ function fixture() {
     root: {hidden: false}, generation: 0, entryFile: 'src/main.ui.rs', entry: 'app', backend: 'javascript',
     model: {files: {'src/main.ui.rs': source}, revision: 1, workspaceEpoch: 0}, css: {value: ''},
     layoutMode: {value: 'off', dataset: {}, removeAttribute() {}}, frame: {style: {}}, pickButton: {setAttribute() {}},
-    status: {dataset: {}}, saveProject() {}, renderOutline() {}, publishInspection() {},
+    status: {dataset: {}}, saveProject() {}, renderOutline() {}, renderState() {}, publishInspection() {},
     app: {settings: {optimize: true}, publishUIBuild() {}, failUIBuild() {}},
     preview: {reset: () => 'channel', load: html => mounted.push(html)},
     compiler: {compile(files, command, options, signal) {
@@ -90,4 +90,22 @@ test('an already cancelled preview cannot save settings, compile or invalidate a
   session.saveProject = () => saves++;
   await assert.rejects(session.build({signal: AbortSignal.abort()}), {name: 'AbortError'});
   assert.equal(saves, 0); assert.equal(session.generation, 0); assert.equal(operations.length, 0);
+});
+
+
+test('agent preview resets stale debugger inspection and retains compiled backend settings', async () => {
+  const {session, operations} = fixture();
+  const old = {state: 'paused'}; let stopped = 0, rendered = 0;
+  session.snapshot = {debugger: old}; session.inspection = old; session.artifact = old;
+  session.stopDebugging = () => stopped++;
+  session.renderState = () => {
+    rendered++;
+    assert.equal(session.snapshot, null); assert.equal(session.inspection, null); assert.equal(session.artifact, null);
+  };
+  const task = session.build();
+  assert.equal(stopped, 1); assert.equal(rendered, 1);
+  assert.equal(session.buildingGeneration, session.generation);
+  operations[0].finish(); await task;
+  assert.equal(session.compiledBackend, 'javascript'); assert.equal(session.compiledOptimize, true);
+  assert.equal(session.compiledGeneration, session.generation); assert.equal(session.buildingGeneration, null);
 });

@@ -63,6 +63,8 @@ jobs:
         env:
           FERRITE_NATIVE_TEST: '1'
         run: npm run test:browser
+      - name: Exercise compiler output for samples, UI builds, cold reload and retained views
+        run: npm run test:compiler-output
       - name: Exercise agent login, MCP, native PTY and ncurses keyboard/mouse/resize/reconnect in Chromium
         run: npm run test:agent:browser
       - name: Exercise bridge-free browser agents, persistence, review and terminal harness

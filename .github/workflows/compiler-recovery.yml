@@ -34,6 +34,15 @@ jobs:
           if hashlib.sha256(data).hexdigest() != manifest['sha256']:
               raise SystemExit('Transport digest mismatch')
           payload = json.loads(gzip.decompress(data))
+          for repair in manifest.get('restoreTrailingContext', []):
+              change = payload['commits'][repair['commit']]
+              if hashlib.sha256(change['patch'].encode()).hexdigest() != repair['before']:
+                  raise SystemExit('Patch context repair source mismatch')
+              if not re.fullmatch(r'(?: \n){1,8}', repair['suffix']):
+                  raise SystemExit('Only omitted blank context lines may be restored')
+              change['patch'] += repair['suffix']
+              if hashlib.sha256(change['patch'].encode()).hexdigest() != repair['after']:
+                  raise SystemExit('Restored patch digest mismatch')
           target = payload['target']
           if target not in ['feat/compiler-supertraits', 'feat/compiler-parameterized-traits', 'feat/compiler-associated-items']:
               raise SystemExit('Unexpected target branch')

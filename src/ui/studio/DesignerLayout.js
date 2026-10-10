@@ -1,3 +1,4 @@
+import {PanelLayout} from '../docking/PanelLayout.js';
 const group = (id, ...tabs) => ({type:'group',id,tabs,active:tabs[0]});
 const split = (id, axis, ratio, first, second) => ({type:'split',id,axis,ratio,first,second});
 export const DESIGNER_PANELS = ['structure','toolbox','canvas','properties','styles','debug','settings'];
@@ -14,4 +15,10 @@ export function designerLayout(preset = 'design') {
     hidden = ['settings','toolbox'];
   }
   return {version:1,root,floating:[],hidden,homes:{}};
+}
+
+/** Normalize persisted layouts without allowing arbitrary panel identities or aliased state. */
+export function restoreDesignerLayout(saved) {
+  if (Array.isArray(saved?.hidden) && saved.hidden.length > 64) saved = null;
+  return new PanelLayout(DESIGNER_PANELS, designerLayout(), saved).snapshot();
 }

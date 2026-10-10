@@ -6,7 +6,9 @@ function fixture() {
   const pending = [], attributes = new Map();
   const studio = {generation: 1, assertLive() {}, assertSourcePreview() {},
     layoutMode: {value: 'move', dataset: {activeMode: 'off'}, setAttribute(k, v) {attributes.set(k, v);}, removeAttribute(k) {attributes.delete(k);}},
+    pickButton: {setAttribute() {}},
     frame: {style: {pointerEvents: ''}}, preview: {request(command, values) {
+      if (command === 'pick') { assert.deepEqual(values, {value: false}); return Promise.resolve({picking: false}); }
       assert.equal(command, 'layout');
       return new Promise((resolve, reject) => pending.push({values, resolve, reject}));
     }},

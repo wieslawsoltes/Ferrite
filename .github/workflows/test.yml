@@ -71,6 +71,11 @@ jobs:
         run: |
           set -o pipefail
           npm run test:ui:browser 2>&1 | tee artifacts/ui-browser.log
+      - name: Exercise all seven GUIs, sample browsing and offline JS/MIR/Wasm exports
+        run: |
+          set -o pipefail
+          node tools/seven-guis-native.mjs
+          npm run test:7guis:browser 2>&1 | tee artifacts/seven-guis.log
       - name: Exercise first-party SSR and hydration in Chromium
         run: npm run test:ui:rendering
       - name: Exercise actual React, Radix, concurrent rendering and server streams

@@ -184,6 +184,22 @@ export class UISession {
         const descriptor = spec.callbacks[2], environment = args[2];
         return create(u.cloneElement(node(args[0]), {[eventName]: event => this.event(descriptor, environment, [spec.name === 'on_event' ? this.snapshotEvent(event) : String(event.target?.value ?? event.key ?? '')], event, bindings)}));
       }
+      case 'interval': {
+        const milliseconds=Number(args[0]);
+        if(!Number.isInteger(milliseconds)||milliseconds<0||milliseconds>2147483647)throw Error('Invalid UI interval');
+        const latest=u.useRef(null);latest.current={descriptor:spec.callbacks[1],environment:args[1],bindings};
+        u.useEffect(()=>{
+          if(!milliseconds)return;
+          let previous=performance.now(),timer=setInterval(()=>{
+            const now=performance.now(),delta=Math.max(0,now-previous);previous=now;
+            if(this.disposed||this.debugger.armed)return;
+            try{const current=latest.current;this.closure(current.descriptor,current.environment,[delta],{label:'timer',bindings:current.bindings});}
+            catch(error){clearInterval(timer);this.emit('error',{message:error.message,code:error.code,span:error.span});this.onError?.(error);}
+          },milliseconds);
+          return ()=>clearInterval(timer);
+        },[milliseconds]);return null;
+      }
+      case 'state_with': return {...newState(spec.stateType, () => this.values.clone(spec.stateType, callback(0))), marker: {}};
       case 'state': return {...newState(spec.stateType, this.values.clone(spec.stateType, args[0])), marker: {}};
       case 'read': return this.values.clone(spec.stateType, state(args[0], spec.stateType).value);
       case 'write': state(args[0], spec.stateType).set(this.values.clone(spec.stateType, args[1])); return null;
@@ -241,7 +257,12 @@ export class UISession {
     const text = value => { const result = String(value ?? ''); if (result.length > 1000000) throw Error('DOM event value budget exceeded'); return result; };
     const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
     const integer = (value, unsigned = false) => BigInt(unsigned ? number(value) >>> 0 : number(value) | 0);
-    return {event_type: text(event.type), value: text(event.target?.value), key: text(event.key), code: text(event.code),
+    const target=event.currentTarget,rect=target?.getBoundingClientRect?.();
+    let offsetX=rect?number(event.clientX)-rect.left:number(event.offsetX),offsetY=rect?number(event.clientY)-rect.top:number(event.offsetY);
+    if(target?.getScreenCTM&&typeof DOMPoint==='function'){
+      try{const p=new DOMPoint(number(event.clientX),number(event.clientY)).matrixTransform(target.getScreenCTM().inverse());offsetX=p.x;offsetY=p.y;}catch{/* Detached or singular SVG: fall back to CSS coordinates. */}
+    }else if(rect){if(rect.width&&target.offsetWidth)offsetX*=target.offsetWidth/rect.width;if(rect.height&&target.offsetHeight)offsetY*=target.offsetHeight/rect.height;}
+    return {offset_x:offsetX,offset_y:offsetY,event_type: text(event.type), value: text(event.target?.value), key: text(event.key), code: text(event.code),
       checked: !!event.target?.checked, repeat: !!event.repeat, alt_key: !!event.altKey, ctrl_key: !!event.ctrlKey,
       meta_key: !!event.metaKey, shift_key: !!event.shiftKey, button: integer(event.button), buttons: integer(event.buttons, true),
       client_x: number(event.clientX), client_y: number(event.clientY), pointer_id: integer(event.pointerId), pressure: number(event.pressure),

@@ -15,6 +15,7 @@ export class SymbolIndex {
     this.structs.set('std::marker::PhantomData', {kind: 'struct', name: 'std::marker::PhantomData',
       generics: [{name: 'T', bounds: []}], fields: [], form: 'unit', predicates: [], attributes: [],
       visibility: 'pub', module: 'std::marker', builtin: 'phantom', span: {file: 'ferrite:stdlib', start: 0, end: 0, line: 1, column: 1}});
+    for(const name of ['ParseIntError','ParseFloatError'])this.structs.set('std::num::'+name,{kind:'struct',name:'std::num::'+name,generics:[],fields:[],form:'record',predicates:[],attributes:[],visibility:'pub',module:'std::num',builtin:'parse-error',span:{file:'ferrite:stdlib',start:0,end:0,line:1,column:1}});
     this.enums.set('Option', {kind: 'enum', name: 'Option', generics: [{name: 'T', bounds: []}],
       variants: [{name: 'Some', fields: ['T']}, {name: 'None', fields: []}], attributes: []});
     this.enums.set('Result', {kind: 'enum', name: 'Result', generics: [{name: 'T', bounds: []}, {name: 'E', bounds: []}],

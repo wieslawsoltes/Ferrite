@@ -15,7 +15,7 @@ export const StudioPreview = {
     const generation = ++this.generation, file = this.entryFile, channel = this.preview.reset();
     this.layoutMode.value = 'off'; this.layoutMode.dataset.activeMode = 'off'; this.frame.style.pointerEvents = ''; this.layoutMode.removeAttribute('aria-busy'); this.picking = false; this.pickButton.setAttribute('aria-pressed', 'false'); this.artifact = null;
     this.status.textContent = 'Compiling typed Rust UI in a worker…'; this.status.dataset.kind = 'building';
-    const {artifact, html} = await this.compiler.compile({...this.model.files}, 'ui-compile', {file, entry: this.entry, backend: this.backend, css: this.css.value, channel}, combined);
+    const {artifact, html} = await this.compiler.compile({...this.model.files}, 'ui-compile', {file, entry: this.entry, backend: this.backend, maxSteps: this.project?.settings.maxSteps ?? 250000, css: this.css.value, channel}, combined);
     combined.throwIfAborted(); if (generation !== this.generation || source !== this.model.files[file]) throw new DOMException('Stale UI build', 'AbortError');
     this.dependencies = {...artifact.files}; this.observedFiles = {...this.model.files};
     this.artifact = artifact; this.compiledSource = source; this.compiledFile = file; this.compiledGeneration = generation;
@@ -49,6 +49,7 @@ export const StudioPreview = {
     if (message.event === 'select') { if (this.artifact) { this.select(message.id); this.dock?.open('properties'); } return; }
     if (message.event === 'ready' || message.event === 'snapshot') {
       this.snapshot = message.snapshot; this.renderState();
+      if (message.event === 'ready' && this.armOnReady) { this.armOnReady=false; this.debug('arm').catch(error=>this.error(error)); }
       if (message.event === 'ready' && this.artifact) { this.status.dataset.kind = 'ready'; this.status.textContent = this.nativeAsset ? `Live native rustc Wasm · ${this.nativeAsset.name} · isolated origin · inspection/export only` : `Live ${this.backend} preview · ${this.artifact.nodes.length} source nodes · isolated origin`; }
     } else if (message.event.startsWith('debug-')) {
       if (this.snapshot) this.snapshot.debugger = message.detail;

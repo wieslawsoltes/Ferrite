@@ -212,6 +212,18 @@ export class Runtime {
   format(args, format) {
     return format.parts.map(part => part.text ?? (part.debug ? this.debug(args[part.argument + 1]) : String(args[part.argument + 1]))).join('');
   }
+  parseNumber(text,type) {
+    if(typeof text!=='string'||text.length>1000000||!this.integer(type)&&!['f32','f64'].includes(type))this.fail('Invalid numeric parser descriptor','R_PARSE');
+    const ok=value=>({tag:'Result::Ok',values:[value]}),error=()=>({tag:'Result::Err',values:[{}]});
+    if(this.integer(type)){
+      if(text.length>1000||!(type[0]==='u'?/^\+?[0-9]+$/:/^[+-]?[0-9]+$/).test(text))return error();
+      const value=BigInt(text),{min,max}=this.bounds(type);return value<min||value>max?error():ok(value);
+    }
+    // Unlike Number/parseFloat, Rust never accepts empty, whitespace, hex, or a prefix.
+    if(!/^[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?|inf(?:inity)?|nan)$/i.test(text))return error();
+    const value=/^[+-]?nan$/i.test(text)?NaN:/^[+-]?inf(?:inity)?$/i.test(text)?(text[0]==='-'?-Infinity:Infinity):Number(text);
+    return ok(type==='f32'?Math.fround(value):value);
+  }
   builtin(name, args, {format = null, receiver = null, receiverReference = false, receiverDeref = false} = {}) {
     let value = receiverReference ? this.read(receiver) : receiver;
     if (receiverDeref) value = this.deref(value);
@@ -225,6 +237,7 @@ export class Runtime {
       case 'dbg': this.append(this.debug(args[0]) + '\n'); return args[0];
       case 'vec': return args;
       case 'Vec::new': return [];
+      case 'String::new': return '';
       case 'String::from': return String(args[0]);
       case 'clone': return this.clone(args[0]);
       case 'method::clone': return this.clone(value);
@@ -235,7 +248,23 @@ export class Runtime {
         for (const c of value) { const code = c.codePointAt(0); bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4; }
         return BigInt(bytes);
       }
-      case 'method::push': if (value.length >= 100000) this.fail('Vector length limit exceeded'); value.push(args[0]); return null;
+      case 'method::push':
+        if(typeof value==='string') {if(value.length+args[0].length>1000000)this.fail('String length limit exceeded');if(receiverDeref)this.write(this.read(receiver),value+args[0]);else this.write(receiver,value+args[0]);return null;}
+        if (value.length >= 100000) this.fail('Vector length limit exceeded'); value.push(args[0]); return null;
+      case 'method::remove': {const i=Number(args[0]);if(!Number.isSafeInteger(i)||i<0||i>=value.length)this.fail('Vector removal index out of bounds','R_INDEX');return value.splice(i,1)[0];}
+      case 'method::into_bytes': {if(value.length>1000000)this.fail('String length limit exceeded');return Array.from(new TextEncoder().encode(value),byte=>BigInt(byte));}
+      case 'method::as_str': return value;
+      case 'method::trim': return value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu,'');
+      case 'method::starts_with': return value.startsWith(args[0]);
+      case 'method::contains': return value.includes(args[0]);
+      case 'method::to_lowercase': return value.toLowerCase();
+      case 'method::to_ascii_uppercase': return value.replace(/[a-z]/g,char=>char.toUpperCase());
+      case 'method::is_empty': return value.length===0;
+      case 'method::is_finite': return Number.isFinite(value);
+      case 'method::abs': return Math.abs(value);
+      case 'method::floor': return Math.floor(value);
+      case 'method::round': return value<0?-Math.round(-value):Math.round(value);
+      case 'method::parse': return this.parseNumber(value,format?.type);
       case 'method::pop': return value.length ? {tag: 'Option::Some', values: [value.pop()]} : {tag: 'Option::None', values: []};
       case 'method::push_str': {
         if (receiverDeref) this.write(this.read(receiver), value + args[0]); else this.write(receiver, value + args[0]);

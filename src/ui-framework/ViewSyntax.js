@@ -155,7 +155,7 @@ export class ViewSyntax {
       synthetic(`let ${temp}_node = `, node);
       if (component) {
         const props = node.attributes.findIndex(a => a.name === 'props');
-        synthetic(`ui::component(move || ${node.tag}(${props < 0 ? '' : `${temp}_a${props}`}))`, node);
+        synthetic(`ui::component(move || ${node.tag}(${props < 0 ? '' : `${temp}_a${props}.clone()`}))`, node);
       } else {
         synthetic(node.tag ? `ui::element(${rustString(node.tag)}, vec![` : 'ui::fragment(vec![', node);
         node.children.forEach((child, index) => { if (index) synthetic(', ', node); lower(child); }); synthetic('])', node);

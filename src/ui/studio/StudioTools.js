@@ -24,7 +24,7 @@ export const StudioTools = {
       file = this.nativeAsset.name; backend = 'native-wasm'; html = exportNativeHTML(this.nativeAsset.bytes, {title: file, css: this.css.value});
     } else {
       this.saveProject(); file = this.entryFile;
-      ({html} = await this.compiler.compile({...this.model.files}, hydrate ? 'ui-render' : 'ui-export', {file, entry: this.entry, backend: this.backend, css: this.css.value}));
+      ({html} = await this.compiler.compile({...this.model.files}, hydrate ? 'ui-render' : 'ui-export', {file, entry: this.entry, backend: this.backend, maxSteps: this.project?.settings.maxSteps ?? 250000, css: this.css.value}));
     }
     const url = URL.createObjectURL(new Blob([html], {type: 'text/html;charset=utf-8'})); const link = document.createElement('a');
     link.href = url; link.download = file.split('/').pop().replace(/\.(?:rs|wasm)$/, '.html'); document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);

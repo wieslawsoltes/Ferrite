@@ -77,7 +77,8 @@ export function createDesignerView(s) {
   debugBar.append(s.button('Inspect',()=>s.inspect(),'tree'));
   for(const [label,command,icon] of [['Arm events','arm','debug'],['Instruction','step','step'],['Source line','step-line','line'],['Back instruction','back','step'],['Back line','back-line','line'],['Restart event','restart','debug'],['Continue','continue','run'],['Disarm','stop','stop']])debugBar.append(s.button(label,()=>s.debug(command),icon));
   s.states=Dom.element('div','studio-states');s.debugOutput=Dom.element('pre','studio-debug');debug.append(debugBar,s.states,s.debugOutput);
-  const settings=Dom.element('div','studio-settings-panel');settings.append(s.field('Entry file',s.entryFiles),s.field('Entry function',s.entryInput),s.button('Export HTML',()=>s.download(),'export'),s.button('Export hydrated HTML',()=>s.download({hydrate:true}),'export'));
+  s.budgetInput=s.input('UI instruction budget','250000');s.budgetInput.type='number';s.budgetInput.min='1';s.budgetInput.max='2000000';s.budgetInput.step='1';s.budgetInput.onchange=()=>{s.saveProject();s.markStale();};
+  const settings=Dom.element('div','studio-settings-panel');settings.append(s.field('Entry file',s.entryFiles),s.field('Entry function',s.entryInput),s.field('Instruction budget per render / event',s.budgetInput),s.button('Export HTML',()=>s.download(),'export'),s.button('Export hydrated HTML',()=>s.download({hydrate:true}),'export'));
   s.nativeInput=Dom.element('input');s.nativeInput.type='file';s.nativeInput.accept='.wasm,application/wasm';s.nativeInput.hidden=true;s.nativeInput.setAttribute('aria-label','Load trusted Cargo UI Wasm');
   s.nativeInput.onchange=()=>{
     const file=s.nativeInput.files?.[0];s.nativeInput.value='';if(!file)return;

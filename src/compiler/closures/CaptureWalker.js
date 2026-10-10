@@ -40,7 +40,7 @@ export class CaptureWalker {
       let callee = node.callee;
       if (callee?.kind === 'field') {
         const method = callee.field;
-        callee = {...callee, object: walk(callee.object, names, ['push', 'pop', 'push_str'].includes(method) ? 'mutate' : method === 'unwrap' ? 'consume' : 'read')};
+        callee = {...callee, object: walk(callee.object, names, ['push', 'pop', 'push_str', 'remove'].includes(method) ? 'mutate' : ['unwrap','into_bytes'].includes(method) ? 'consume' : 'read')};
       } else if (callee) callee = walk(callee, names, 'read');
       return {...node, ...(callee ? {callee} : {}), args: node.args.map(arg => walk(arg, names, borrows ? 'read' : 'consume'))};
     }

@@ -23,14 +23,14 @@ export const StudioProject = {
   loadProject(file) {
     this.project = UIProject.load(this.model.files, file, {css: UI_SAMPLE_CSS}); this.entryFile = file; this.file = file;
     const settings = this.project.settings; this.entry = settings.entry; this.backend = settings.backend;
-    this.entryInput.value = this.entry; this.backendSelect.value = this.backend; this.css.value = this.project.css;
+    this.budgetInput.value = String(settings.maxSteps ?? 250000); this.entryInput.value = this.entry; this.backendSelect.value = this.backend; this.css.value = this.project.css;
     this.viewport.value = settings.viewport; this.frame.style.width = settings.viewport;
   },
   saveProject() {
     if (!Object.hasOwn(this.model.files, this.entryFile) || this.savingProject) return;
     try {
       const project = UIProject.load(this.model.files, this.entryFile, {css: this.css.value});
-      const changes = project.changes({entry: this.entry, backend: this.backend, viewport: this.viewport.value}, this.css.value);
+      const changes = project.changes({entry: this.entry, backend: this.backend, viewport: this.viewport.value,...(project.settings.maxSteps !== undefined || Number(this.budgetInput.value) !== 250000 ? {maxSteps:Number(this.budgetInput.value)} : {})}, this.css.value);
       this.savingProject = true; this.model.applyWorkspaceTransaction(changes); this.model.save();
       this.project = UIProject.load(this.model.files, this.entryFile);
     } catch (error) { this.error(error); } finally { this.savingProject = false; }
@@ -44,7 +44,7 @@ export const StudioProject = {
     this.observedFiles = {...this.model.files};
     this.markStale();
     if (!this.savingProject && Object.hasOwn(this.model.files,this.entryFile)) {
-      try { const project=UIProject.load(this.model.files,this.entryFile,{css:this.css.value}); this.project=project; this.css.value=project.css; this.entry=project.settings.entry; this.backend=project.settings.backend; this.entryInput.value=this.entry; this.backendSelect.value=this.backend; this.viewport.value=project.settings.viewport; this.frame.style.width=project.settings.viewport; }
+      try { const project=UIProject.load(this.model.files,this.entryFile,{css:this.css.value}); this.project=project; this.budgetInput.value=String(project.settings.maxSteps??250000); this.css.value=project.css; this.entry=project.settings.entry; this.backend=project.settings.backend; this.entryInput.value=this.entry; this.backendSelect.value=this.backend; this.viewport.value=project.settings.viewport; this.frame.style.width=project.settings.viewport; }
       catch(error){this.error(error);}
     }
     this.refreshSource({preserve:true,invalidate:false});

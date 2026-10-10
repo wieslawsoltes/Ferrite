@@ -89,7 +89,7 @@ export class ProjectController {
   }
   showProjects() {
     const dialog=Dom.element('dialog','form-dialog project-dialog');dialog.setAttribute('aria-label','Projects');dialog.append(Dom.element('h2','','Projects'));
-    const buttons=Dom.element('div','project-commands');for(const [label,action] of [['New Project…',()=>this.newProject()],['Open Folder…',()=>this.openFolder()],['Open Repository…',()=>this.app.dock.open('repositories')],['Import Project…',()=>this.app.$('import-input').click()]])buttons.append(Dom.button(label,()=>{dialog.close();action();},{icon:'folder'}));dialog.append(buttons,Dom.element('h3','','Recent projects'));
+    const buttons=Dom.element('div','project-commands');for(const [label,action] of [['Browse Samples…',()=>this.app.samples.open()],['New Project…',()=>this.newProject()],['Open Folder…',()=>this.openFolder()],['Open Repository…',()=>this.app.dock.open('repositories')],['Import Project…',()=>this.app.$('import-input').click()]])buttons.append(Dom.button(label,()=>{dialog.close();action();},{icon:'folder'}));dialog.append(buttons,Dom.element('h3','','Recent projects'));
     const list=Dom.element('div','recent-projects');for(const project of this.store.list())list.append(Dom.button(project.name,()=>{dialog.close();this.run(()=>{this.app.editor.capture();this.app.stop(false);this.store.open(project.id);});},{icon:'cargo',title:project.name}));if(!list.children.length)list.append(Dom.element('p','muted','Projects appear here after creating or switching a project.'));
     dialog.append(list,Dom.button('Close',()=>dialog.close()));dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();
   }

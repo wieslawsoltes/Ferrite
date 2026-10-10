@@ -131,6 +131,10 @@ export class OwnershipAnalyzer {
       if (consume && !node.copy) throw new Diagnostic('E0507', 'Moving a non-Copy value out of a reference is not allowed', node.span);
       return [];
     }
+    // Rust comparison operators borrow both operands, including owned strings.
+    if (node.kind === 'binary' && ['==', '!=', '<', '>', '<=', '>='].includes(node.op)) {
+      this.value(node.left, false); this.value(node.right, false); return [];
+    }
     if (node.kind === 'field' || node.kind === 'index') {
       this.value(node.object, false); if (node.index) this.value(node.index);
       if (consume && !node.copy) {
@@ -152,14 +156,14 @@ export class OwnershipAnalyzer {
       this.value(node.kind === 'ifLet' ? node.value : node.condition);
       const before = new Set(this.moved), yesRoots = this.block(node.then), yes = new Set(this.moved);
       this.moved = new Set(before); const noRoots = this.value(node.otherwise);
-      this.moved = new Set([...yes, ...this.moved]); return [...new Set([...yesRoots, ...noRoots])];
+      this.moved = new Set([...(node.then.type === '!' ? [] : yes), ...(node.otherwise?.type === '!' ? [] : this.moved)]); return [...new Set([...yesRoots, ...noRoots])];
     }
     if (node.kind === 'match') {
       this.value(node.value);
       const before = new Set(this.moved), merged = new Set(before), roots = [];
       for (const arm of node.arms) {
         this.moved = new Set(before); this.value(arm.guard); roots.push(...this.value(arm.body));
-        this.moved.forEach(slot => merged.add(slot));
+        if(arm.body.type !== '!')this.moved.forEach(slot => merged.add(slot));
       }
       this.moved = merged; return [...new Set(roots)];
     }
@@ -184,8 +188,8 @@ export class OwnershipAnalyzer {
       if(node.temporaryCallee)this.value(node.temporaryCallee.value,true,node.temporaryCallee.binding.slot);
       const name = node.builtin ?? node.name;
       if (node.receiver) {
-        const consumes = name === 'method::unwrap';
-        const mutates = ['method::push', 'method::pop', 'method::push_str'].includes(name);
+        const consumes = ['method::unwrap','method::into_bytes'].includes(name);
+        const mutates = ['method::push', 'method::pop', 'method::push_str', 'method::remove'].includes(name);
         this.value(node.receiver, consumes);
         if (mutates) {
           if (node.receiverDeref) this.referenceAccess(node.receiver, 'mutate');

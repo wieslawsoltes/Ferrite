@@ -55,7 +55,7 @@ def memory_document(page):
       return urls['src/ui/main.js'];
     }''', definitions)
     html = (ROOT / 'index.html').read_text()
-    for stylesheet in ['styles/ide.css', 'src/vendor/xterm/xterm.css', 'styles/agent.css']:
+    for stylesheet in ['styles/ide.css', 'src/vendor/xterm/xterm.css', 'styles/agent.css', 'styles/workspace.css']:
         html = html.replace('<link rel="stylesheet" href="./' + stylesheet + '">', '<style>' + (ROOT / stylesheet).read_text() + '</style>')
     page.set_content(html.replace('./src/ui/main.js', entry), wait_until='load')
 
@@ -89,7 +89,7 @@ def run():
             expect(page.locator('#status')).to_have_attribute('data-kind', 'success')
 
         def select_sample(name):
-            page.locator('#sample-select').select_option(label=name)
+            page.keyboard.press('Control+Shift+P');page.get_by_role('textbox', name='Search Everywhere').fill('Example: ' + name);page.get_by_role('textbox', name='Search Everywhere').press('Enter')
             status_success()
 
         def show_tool(name):
@@ -177,7 +177,7 @@ def run():
                 page.get_by_role('button', name='Rename', exact=True).last.click()
                 expect(page.locator('#active-path')).to_have_text('src/renamed.rs')
                 page.locator('#file-delete').click()
-                page.get_by_role('button', name='Delete file', exact=True).click()
+                page.get_by_role('dialog').get_by_role('button', name='Delete', exact=True).click()
                 page.wait_for_function('!Object.hasOwn(window.ferrite.getSnapshot().files,"src/renamed.rs")')
                 status_success()
             case('multi-file create, tab switching, rename and delete', files)
@@ -241,7 +241,7 @@ def run():
             case('test harness runs tests, ignore and should_panic', unit_tests)
 
             def negative_diagnostics():
-                page.locator('#sample-select').select_option(label='Ownership diagnostic · use after move')
+                page.keyboard.press('Control+Shift+P');page.get_by_role('textbox', name='Search Everywhere').fill('Example: ' + 'Ownership diagnostic · use after move');page.get_by_role('textbox', name='Search Everywhere').press('Enter')
                 expect(page.locator('#status')).to_have_attribute('data-kind', 'error')
                 diagnostic = page.locator('.problem-item .source-link')
                 expect(diagnostic).to_contain_text('E0382')
@@ -263,7 +263,8 @@ def run():
                 download.value.save_as(target)
                 snapshot = json.loads(target.read_text())
                 assert snapshot['format'] == 'ferrite-project-v1'
-                assert set(snapshot) == {'format', 'files'}
+                assert set(snapshot) == {'format', 'files', 'folders', 'name'}
+                assert 'src' in snapshot['folders']
                 page.locator('#import-input').set_input_files(target)
                 status_success()
                 assert 'while let' in page.locator('#source').input_value()
@@ -523,7 +524,7 @@ def run():
                 assert address.startswith('http://127.0.0.1:') and len(token) >= 32
 
                 def native_cargo():
-                    page.locator('#sample-select').select_option(label='Native Rust · async, closures & macros')
+                    page.keyboard.press('Control+Shift+P');page.get_by_role('textbox', name='Search Everywhere').fill('Example: ' + 'Native Rust · async, closures & macros');page.get_by_role('textbox', name='Search Everywhere').press('Enter')
                     expect(page.locator('#status')).to_contain_text('connect Native Cargo')
                     page.locator('#native-connect').click()
                     page.get_by_role('textbox', name='Cargo bridge address').fill(address)

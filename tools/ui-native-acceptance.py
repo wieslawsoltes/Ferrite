@@ -68,8 +68,11 @@ def run():
             else:
                 editor.goto(f'http://127.0.0.1:{server.server_port}/')
             editor.wait_for_function('!!window.ferrite')
+            editor.locator('#file-ui-view').click()
+            editor.get_by_label('View file path', exact=True).fill('src/native.ui.rs')
+            editor.get_by_role('button', name='Create view', exact=True).click()
+            expect(editor.locator('.ui-studio .studio-status')).to_have_attribute('data-kind', 'ready')
             before = editor.evaluate('window.ferrite.getSnapshot().files')
-            editor.locator('[data-panel="ui-studio"]').click()
             studio = editor.locator('.ui-studio')
             studio.get_by_label('Load trusted Cargo UI Wasm', exact=True).set_input_files(str(OUT / 'app.wasm'))
             expect(studio.locator('.studio-status')).to_have_attribute('data-kind', 'ready')
@@ -83,6 +86,7 @@ def run():
             assert editor.locator('.studio-preview').get_attribute('sandbox') == 'allow-scripts'
             assert editor.evaluate("document.querySelector('.studio-preview').contentDocument === null")
             checks.append('native Wasm file picker, opaque-origin preview, real click, inspection and unchanged workspace')
+            studio.locator('summary').filter(has_text='Settings / Export').click()
             with editor.expect_download() as info:
                 studio.get_by_role('button', name='Export HTML', exact=True).click()
             exported = OUT / 'ide-export.html'; info.value.save_as(exported)

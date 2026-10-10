@@ -185,7 +185,7 @@ def run():
             agent.get_by_role('button',name='Import native workspace').click()
             expect(agent.locator('.agent-workspace-status')).to_contain_text('Synchronized')
             native_before=(Path(connection['root'])/'src/main.rs').read_text()
-            page.locator('#sample-select').select_option(label='Geometry lab · traits & modules')
+            page.keyboard.press('Control+Shift+P');page.get_by_role('textbox', name='Search Everywhere').fill('Example: ' + 'Geometry lab · traits & modules');page.get_by_role('textbox', name='Search Everywhere').press('Enter')
             expect(agent.locator('.agent-workspace-status')).to_contain_text('synchronization is off')
             page.wait_for_timeout(750)
             assert (Path(connection['root'])/'src/main.rs').read_text()==native_before

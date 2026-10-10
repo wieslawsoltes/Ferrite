@@ -1,6 +1,6 @@
 # Rust UI Studio
 
-Rust UI Studio is an optional Ferrite tool window, an independent component runtime,
+Rust UI Studio is a document-oriented Ferrite editor, an independent component runtime,
 a typed `view!` compiler frontend, a source-backed designer, a live event debugger,
 a shared MCP tool family, and an embeddable JavaScript compiler SDK. It works without
 a native bridge. The existing default project and terminal remain unchanged.
@@ -21,12 +21,17 @@ function components**, not binary compatibility or automatic JavaScript-to-Rust 
 
 ## Open the designer
 
-Run the ordinary IDE, select **Rust UI Studio** in the right tool region or tool rail,
-then select **+ counter**, **+ form**, or **+ components**. Each creates a new source
-file without overwriting an existing example. Select a backend and press **Preview**.
-On a narrow display the tool rail opens the Studio as a floating window.
+Use **Project → Rust UI application** to create a project, or **UI View** to create
+an additional `.ui.rs` file. The view dialog offers Blank, Counter, Form and Components
+templates; no sample buttons occupy the editor. Opening an existing view in Project or
+its document tab activates that file's designer and live preview.
 
-The ordinary editor and Studio's Rust source editor edit the same workspace file.
+Choose **Code**, **Split**, **Design** or **Preview** above the editor. Split can place
+code beside or above the designer. Structure/Toolbox and Properties/Styles/Debug are
+separate resizable panels, with explicit panel toggles on narrow displays. The ordinary
+source editor is the only visible Rust code surface; visual changes edit the same file.
+See [project/document workflows](ide-workspace.md) for folders, tabs and persistence.
+
 **Pick element** selects a rendered element and its original source range. The outline
 also selects text/expression nodes. The property editor supports literal/expression/
 boolean attributes, tag and text changes, insertion, duplication and deletion. Drag an

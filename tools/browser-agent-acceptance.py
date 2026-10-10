@@ -179,7 +179,7 @@ def run():
             page.locator('[data-agent-tab="context"]').click();page.get_by_role('textbox',name='Pinned context',exact=True).fill('private-project-only-constraint')
             page.locator('[data-agent-tab="followups"]').click();page.get_by_role('textbox',name='Queued follow-up',exact=True).fill('private-project-only-draft')
             fixture.mode='pending';page.locator('#agent-prompt').fill('Prepare a task to be revoked.');page.locator('#agent-run').click();expect(page.locator('.agent-question')).to_contain_text('project-switch')
-            page.locator('#sample-select').select_option(label='Generics & modules');show_agent();expect(page.locator('.agent-badge')).to_have_text('Ready · browser');expect(page.locator('.agent-question')).to_have_count(0);expect(page.locator('#agent-model')).to_have_attribute('placeholder','API sign in required');expect(page.locator('#agent-session-select option')).to_have_count(1)
+            page.keyboard.press('Control+Shift+P');page.get_by_role('textbox', name='Search Everywhere').fill('Example: ' + 'Generics & modules');page.get_by_role('textbox', name='Search Everywhere').press('Enter');show_agent();expect(page.locator('.agent-badge')).to_have_text('Ready · browser');expect(page.locator('.agent-question')).to_have_count(0);expect(page.locator('#agent-model')).to_have_attribute('placeholder','API sign in required');expect(page.locator('#agent-session-select option')).to_have_count(1)
             expect(page.locator('[aria-label="Pinned context"]')).to_have_value('')
             expect(page.locator('[aria-label="Queued follow-up"]')).to_have_value('')
             expect(page.locator('#agent-prompt')).to_have_value('')

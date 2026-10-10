@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {UIStudio} from '../src/ui/studio/UIStudio.js';
+import {UIStudioSession as UIStudio} from '../src/ui/studio/UIStudioSession.js';
 
 function fixture() {
   const pending = [], attributes = new Map();

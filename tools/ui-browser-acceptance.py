@@ -41,15 +41,24 @@ def run():
             else:
                 page.goto(base)
             page.wait_for_function('!!window.ferrite')
-            page.locator('[data-panel="ui-studio"]').click()
+            def new_view(path, template):
+                page.locator('#file-ui-view').click()
+                page.get_by_label('View file path', exact=True).fill(path)
+                page.get_by_label('View template', exact=True).select_option(template)
+                page.get_by_role('button', name='Create view', exact=True).click()
+                page.wait_for_function('(path) => ferrite.getUIState().entryFile === path', arg=path)
+            def open_file(path):
+                page.keyboard.press('Control+Shift+P')
+                page.get_by_role('textbox', name='Search Everywhere').fill('Open ' + path)
+                page.get_by_role('button', name='Open ' + path, exact=True).click()
+            new_view('src/counter.ui.rs', 'counter')
             studio = page.locator('.ui-studio')
-            studio.get_by_role('button', name='counter', exact=True).click()
             expect(studio.locator('.studio-status')).to_have_attribute('data-kind', 'ready')
-            frame = page.frame_locator('.studio-preview')
+            frame = page.frame_locator('.ui-studio .studio-preview')
             expect(frame.locator('output')).to_have_text('0')
             frame.get_by_role('button', name='Increase').click(); expect(frame.locator('output')).to_have_text('1')
-            assert page.locator('.studio-preview').get_attribute('sandbox') == 'allow-scripts'
-            assert page.evaluate("document.querySelector('.studio-preview').contentDocument === null")
+            assert page.locator('.ui-studio .studio-preview').get_attribute('sandbox') == 'allow-scripts'
+            assert page.evaluate("document.querySelector('.ui-studio .studio-preview').contentDocument === null")
             results.append('source example compiled; real click updates Rust state; preview has opaque origin')
             # Canvas picking updates the source selection, not a detached design-only model.
             studio.get_by_role('button', name='Pick element', exact=True).click()
@@ -67,8 +76,10 @@ def run():
             expect(frame.locator('h1')).to_have_attribute('data-design', 'edited')
             assert 'data-design="edited"' in page.evaluate('Object.values(window.ferrite.getSnapshot().files).find(s=>s.includes("A little Rust"))')
             # Export the actual edited app and execute the download without network.
+            studio.locator('summary').filter(has_text='Settings / Export').click()
             with page.expect_download() as info:
                 studio.get_by_role('button', name='Export HTML', exact=True).click()
+            studio.locator('summary').filter(has_text='Settings / Export').click()
             download = info.value; path = OUTPUT / 'counter.html'; download.save_as(path)
             offline = browser.new_context(viewport={'width': 900, 'height': 650}, offline=True)
             offpage = offline.new_page(); offerrors = []
@@ -84,6 +95,7 @@ def run():
                 studio.get_by_role('button', name='Preview', exact=True).click()
                 expect(studio.locator('.studio-status')).to_have_attribute('data-kind', 'ready')
                 frame.get_by_role('button', name='Increase').click(); expect(frame.locator('output')).to_have_text('1')
+            studio.get_by_role('tab', name='Debug', exact=True).click()
             studio.get_by_role('button', name='Arm events', exact=True).click()
             page.wait_for_function('window.ferrite.getUIState().snapshot?.debugger?.armed')
             frame.get_by_role('button', name='Increase').click()
@@ -96,14 +108,13 @@ def run():
             studio.get_by_role('button', name='Continue', exact=True).click(); expect(frame.locator('output')).to_have_text('2')
             studio.get_by_role('button', name='Disarm', exact=True).click()
             results.append('Wasm/JS/MIR real DOM parity; event callback instruction stepping changes actual UI state')
-            studio.get_by_role('button', name='form', exact=True).click()
+            new_view('src/form.ui.rs', 'form')
             expect(studio.locator('.studio-status')).to_have_attribute('data-kind', 'ready')
             frame.get_by_label('Your name').fill('Browser')
             expect(frame.locator('h1')).to_have_text('Hello, Browser!')
             frame.get_by_role('button', name='Focus input').click(); expect(frame.locator('input')).to_be_focused()
             # Source typing is reflected in the normal workspace and recompiles.
-            studio.locator('summary').filter(has_text='Rust source').click()
-            source = studio.get_by_label('UI Rust source', exact=True)
+            source = page.locator('#source')
             source.fill(source.input_value().replace('Hello, ', 'Welcome, '))
             assert 'Welcome, ' in page.locator('#source').input_value()
             page.locator('#source').fill(page.locator('#source').input_value().replace('Welcome, ', 'Greetings, '))
@@ -148,7 +159,7 @@ def run():
             }
             page.locator('#import-input').set_input_files({'name': 'ui.ferrite.json', 'mimeType': 'application/json', 'buffer': json.dumps({'format': 'ferrite-project-v1', 'files': project_files}).encode()})
             page.wait_for_function("!!window.ferrite.getSnapshot().files['src/card.rs']")
-            studio.get_by_label('UI project entry file', exact=True).select_option('src/app.rs')
+            open_file('src/app.rs')
             studio.get_by_role('button', name='Preview', exact=True).click()
             expect(studio.locator('.studio-status')).to_have_attribute('data-kind', 'ready')
             studio.get_by_role('button', name='Pick element', exact=True).click(); frame.locator('button').click()
@@ -166,8 +177,7 @@ def run():
             page.wait_for_function("window.ferrite.getSnapshot().files['src/card.rs'].includes('left: 64px')")
             assert 'top: 48px' in page.evaluate("window.ferrite.getSnapshot().files['src/card.rs']")
             frame.locator('button').click(); expect(frame.locator('button')).to_have_text('4')
-            styles = studio.get_by_label('UI application CSS').locator('..')
-            if not styles.evaluate('(node) => node.open'): styles.locator('summary').click()
+            studio.get_by_role('tab', name='Styles', exact=True).click()
             studio.get_by_label('UI application CSS').fill('button { color: rgb(120, 20, 40); }')
             studio.get_by_label('UI backend', exact=True).select_option('wasm')
             studio.get_by_label('Preview width', exact=True).select_option('375px')
@@ -177,7 +187,7 @@ def run():
             assert 'rgb(120, 20, 40)' in saved['files'][settings['stylesheet']]
             # Reload through the same public snapshot import path in both harness modes.
             page.locator('#import-input').set_input_files({'name': 'saved.ferrite.json', 'mimeType': 'application/json', 'buffer': json.dumps(saved).encode()})
-            studio.get_by_label('UI project entry file', exact=True).select_option('src/app.rs')
+            open_file('src/app.rs')
             expect(studio.get_by_label('UI backend', exact=True)).to_have_value('wasm')
             expect(studio.get_by_label('Preview width', exact=True)).to_have_value('375px')
             studio.get_by_role('button', name='Preview', exact=True).click()
@@ -187,7 +197,7 @@ def run():
             page.set_viewport_size({'width': 390, 'height': 844})
             page.locator('[data-tool="ui-studio"]').click()
             expect(studio).to_be_visible(); page.screenshot(path=str(OUTPUT / 'mobile-ui-studio.png'))
-            results.append('UI Studio remains reachable and operable as a mobile floating tool window')
+            results.append('Document designer remains reachable on mobile')
             assert not errors, errors
             browser.close()
     finally:

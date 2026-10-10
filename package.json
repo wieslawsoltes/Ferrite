@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "check": "node tools/check-syntax.mjs && node tools/bundle-workers.mjs --check && node tools/vendor-terminal.mjs --check && node tools/bundle-sdk.mjs --check",
+    "check": "node tools/check-syntax.mjs && node tools/bundle-workers.mjs --check && node tools/vendor-terminal.mjs --check && node tools/bundle-sdk.mjs --check && node tools/build-seven-guis.mjs --check",
     "build:workers": "node tools/bundle-workers.mjs",
     "test:browser": "python tools/browser-acceptance.py",
     "test:native": "node tools/native-smoke.mjs && node tools/agent-native-smoke.mjs",
@@ -31,7 +31,10 @@
     "build:ui:native": "node tools/native-ui.mjs",
     "test:ui:native": "python tools/ui-native-acceptance.py",
     "test:designer:browser": "python tools/designer-docking-acceptance.py",
-    "test:editor-language": "python tools/editor-language-acceptance.py"
+    "test:editor-language": "python tools/editor-language-acceptance.py",
+    "build:7guis": "node tools/build-seven-guis.mjs",
+    "test:7guis": "node --test tests/seven-guis-*.test.js",
+    "test:7guis:browser": "python tools/seven-guis-acceptance.py"
   },
   "engines": {
     "node": ">=22"

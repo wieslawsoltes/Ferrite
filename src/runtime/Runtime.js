@@ -237,6 +237,7 @@ export class Runtime {
       case 'dbg': this.append(this.debug(args[0]) + '\n'); return args[0];
       case 'vec': return args;
       case 'Vec::new': return [];
+      case 'String::new': return '';
       case 'String::from': return String(args[0]);
       case 'clone': return this.clone(args[0]);
       case 'method::clone': return this.clone(value);

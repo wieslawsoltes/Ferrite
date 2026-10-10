@@ -1,3 +1,6 @@
+import {SampleBrowser} from './views/SampleBrowser.js';
+import {SampleProjects} from './model/SampleProjects.js';
+import {UICommandController} from './controllers/UICommandController.js';
 import {EditorLanguageController} from './controllers/EditorLanguageController.js';
 import {ProjectController} from './controllers/ProjectController.js';
 import {UIStudio} from './studio/UIStudio.js';
@@ -62,7 +65,7 @@ export class IdeApplication {
     this.cargo=new CargoView(this.panels.get('cargo'),this.model,this.native,{onCommand:command=>this.compile(command),onOptions:options=>{this.options=options;this.invalidate();this.schedule();},onConnected:connected=>{if(!connected)this.repositories.detach();this.repositoryView.render();this.dependencyView.render();this.backend=connected?'native':'browser';this.$('backend-select').value=this.backend;this.status(connected?'Connected to the trusted native Cargo toolchain.':'Native bridge disconnected.','success');}});
     this.structureRegistry=new SpanRegistry(this.selection,'structure');this.runOutput=Dom.element('pre','run-output');this.runOutput.id='terminal';this.runOutput.setAttribute('aria-label','Program output');
     this.runLabel=Dom.element('span','','No program running');const runHeader=Dom.element('div','run-header');runHeader.append(Dom.icon('console'),this.runLabel,Dom.button('Clear',()=>{this.runOutput.textContent='';},{className:'subtle-button'}));this.panels.get('run').append(runHeader,this.runOutput);
-    this.studio=new UIStudio(this);this.editorLanguage=new EditorLanguageController(this);
+    this.studio=new UIStudio(this);this.editorLanguage=new EditorLanguageController(this);this.samples=new SampleBrowser(this);this.uiCommands=new UICommandController(this);
     this.agent=new AgentWorkbench(this);
     const stdinForm=Dom.element('form','native-stdin'),stdin=Dom.element('input','text-field');stdin.placeholder='Native stdin (line input; not a PTY)';stdin.setAttribute('aria-label','Native standard input');const send=Dom.button('Send input',null);send.type='submit';stdinForm.append(stdin,send);stdinForm.onsubmit=async event=>{event.preventDefault();try{if(!this.repositories.session)throw Error('Open a native repository to send input');await this.native.sendInput(this.repositories.session.id,stdin.value+'\n');stdin.value='';}catch(error){this.status(error.message,'error');}};this.panels.get('run').append(stdinForm);stdinForm.append(Dom.button('Close stdin',async()=>{try{if(!this.repositories.session)throw Error('Open a native repository first');await this.native.sendInput(this.repositories.session.id,null);}catch(error){this.status(error.message,'error');}},{className:'subtle-button'}));
     this.palette=new CommandPalette(()=>this.commands());this.toolbar(definitions);this.events();
@@ -75,7 +78,7 @@ export class IdeApplication {
       const button=Dom.button(title,()=>this.compile(command),{icon,className:`${command}-action ${command==='run'?'primary-run':''}`});button.id=command;button.title=command==='run'?'Run (Ctrl/Cmd+Enter)':command==='debug'?'Debug executable MIR (F5)':`Compile: ${command}`;this.$('run-actions').append(button);
     }
     this.$('stop').append(Dom.icon('stop'));this.$('stop').onclick=()=>this.stop();this.$('layout-reset').append(Dom.icon('reset'));this.$('layout-reset').onclick=()=>this.dock.reset();
-    for(const [title,icon,action] of [['Project','cargo',()=>this.projects.newProject()],['Folder','folder',()=>this.projects.openFolder()],['UI View','fit',()=>this.projects.newView()],['New','plus',()=>this.createFile()],['Rename','file',()=>this.renameFile()],['Delete','trash',()=>this.removeFile()],['Save','save',()=>{this.model.save();this.status('Workspace saved in this browser.','success');}],['Import','import',()=>this.$('import-input').click()],['Repository','folder',()=>this.dock.open('repositories')],['Export','export',()=>this.download('ferrite-project.ferrite.json',JSON.stringify(this.model.snapshot(),null,2))]]){
+    for(const [title,icon,action] of [['Samples','folder',()=>this.samples.open()],['Project','cargo',()=>this.projects.newProject()],['Folder','folder',()=>this.projects.openFolder()],['UI View','fit',()=>this.projects.newView()],['New','plus',()=>this.createFile()],['Rename','file',()=>this.renameFile()],['Delete','trash',()=>this.removeFile()],['Save','save',()=>{this.model.save();this.status('Workspace saved in this browser.','success');}],['Import','import',()=>this.$('import-input').click()],['Repository','folder',()=>this.dock.open('repositories')],['Export','export',()=>this.download('ferrite-project.ferrite.json',JSON.stringify(this.model.snapshot(),null,2))]]){
       const button=Dom.button(title,action,{icon});button.id=`file-${title.toLowerCase().replaceAll(' ','-')}`;this.$('file-actions').append(button);
     }
     this.$('auto-check').checked=this.settings.auto;this.$('optimize').checked=this.settings.optimize;
@@ -113,6 +116,8 @@ export class IdeApplication {
     window.addEventListener('beforeunload',()=>{clearTimeout(this.saveTimer);this.model.save();});
   }
   commands(){return [
+    {label:'Browse Samples',icon:'folder',execute:()=>this.samples.open()},
+    ...SampleProjects.all.filter(item=>item.kind==='ui').map(sample=>({label:'Sample: '+sample.title,icon:'fit',execute:()=>this.samples.open(sample.id)})),
     {label:'New Project',icon:'cargo',execute:()=>this.projects.newProject()},
     {label:'Open Folder',icon:'folder',execute:()=>this.projects.openFolder()},
     {label:'Recent Projects',icon:'folder',execute:()=>this.projects.showProjects()},
@@ -151,6 +156,8 @@ export class IdeApplication {
   schedule(){clearTimeout(this.compileTimer);if(this.backend==='native'&&this.native.active){this.nativeCheckPending=this.settings.auto;return;}if(this.settings.auto)this.compileTimer=setTimeout(()=>this.compile('check'),260);}
   async chooseSample(name){const sample=SampleCatalog.projects.find(s=>s.name===name);if(!sample)return;try{this.projects.store.archive();}catch(error){this.projects.error(error);return;}this.stop(false);this.options={};this.cargo.options={};this.editor.clearHistory();this.model.replace(sample.files);this.model.save();this.backend=sample.native?'native':'browser';this.$('backend-select').value=this.backend;if(sample.native){clearTimeout(this.compileTimer);this.status('This example uses full Rust; connect Native Cargo to compile it.','');this.dock.open('cargo');}else await this.compile('check');}
   async compile(command='check'){
+    const uiEntry=this.backend!=='native'&&this.uiCommands?.entry();
+    if(uiEntry&&['check','run','debug','build','test'].includes(command)){clearTimeout(this.compileTimer);return this.uiCommands.run(command,uiEntry);}
     clearTimeout(this.compileTimer);if(this.backend==='native'&&this.native.active){if(command==='check')this.nativeCheckPending=true;else this.status('Stop the current native operation before starting another.','');return;}const serial=++this.requestSerial,revision=this.model.revision;
     if(this.backend==='native'||!['check','build','run','debug','test'].includes(command))return this.nativeCommand(command,serial,revision);
     this.execution.stop(false);this.status(`Compiling ${command}…`,'busy');this.$('status').dataset.command=command;
@@ -210,7 +217,7 @@ export class IdeApplication {
   }
   writeOutput(text){this.runOutput.classList.remove('error');this.runOutput.textContent=text;this.runOutput.scrollTop=this.runOutput.scrollHeight;}
   error(error){const diagnostic=error.toJSON?.()??{code:error.code??'ERROR',message:error.message??String(error),span:error.span??null,notes:error.notes??[]};this.status(`${diagnostic.code} · ${diagnostic.message}`,'error');this.problems.render([diagnostic]);this.dock.open('problems');this.runOutput.textContent=`${diagnostic.code}: ${diagnostic.message}\n${Dom.sourceLabel(diagnostic.span)}`;this.runOutput.classList.add('error');}
-  stop(notify=true){this.nativeCheckPending=false;clearTimeout(this.compileTimer);this.requestSerial++;this.compiler.cancel();this.execution.stop(false);this.native.cancel().catch(()=>{});if(notify)this.status('Stopped','');}
+  stop(notify=true){this.uiCommands?.cancel();this.nativeCheckPending=false;clearTimeout(this.compileTimer);this.requestSerial++;this.compiler.cancel();this.execution.stop(false);this.native.cancel().catch(()=>{});if(notify)this.status('Stopped','');}
   status(message,kind=''){const node=this.$('status');node.textContent=message;node.dataset.kind=kind;}
   openSearch(currentFile=false){const input=this.editor.textarea,text=input.value.slice(input.selectionStart,input.selectionEnd);this.dock.open('search');this.search.open(text.length<=1024?text:'',currentFile);}
   createFile(){return this.projects.createFile();}

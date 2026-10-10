@@ -539,6 +539,10 @@ export class SemanticAnalyzer {
     if (callee.kind === 'field') return this.method(node, ctx, expected);
     if (callee.kind !== 'variable') throw new Diagnostic('F_CALL', 'This callee is not yet callable', node.span);
     const name = callee.name;
+    if (name === 'String::new') {
+      if (node.args.length || callee.typeArguments?.length) throw new Diagnostic('E0061', 'String::new takes no arguments or type parameters', node.span);
+      node.builtin = 'String::new'; return 'String';
+    }
     if (name === 'String::from') {
       if (node.args.length !== 1) throw new Diagnostic('E0061', 'String::from expects one argument', node.span);
       T.unify('&str', this.infer(node.args[0], ctx, '&str'), new Map(), node);

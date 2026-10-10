@@ -131,6 +131,10 @@ export class OwnershipAnalyzer {
       if (consume && !node.copy) throw new Diagnostic('E0507', 'Moving a non-Copy value out of a reference is not allowed', node.span);
       return [];
     }
+    // Rust comparison operators borrow both operands, including owned strings.
+    if (node.kind === 'binary' && ['==', '!=', '<', '>', '<=', '>='].includes(node.op)) {
+      this.value(node.left, false); this.value(node.right, false); return [];
+    }
     if (node.kind === 'field' || node.kind === 'index') {
       this.value(node.object, false); if (node.index) this.value(node.index);
       if (consume && !node.copy) {

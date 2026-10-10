@@ -9,7 +9,7 @@ export class UIProject {
   }
   static settings(value, entryFile) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('Invalid UI project settings');
-    const known = new Set(['version', 'entryFile', 'entry', 'backend', 'stylesheet', 'viewport', 'grid', 'snap']);
+    const known = new Set(['version', 'entryFile', 'entry', 'backend', 'stylesheet', 'viewport', 'grid', 'snap', 'maxSteps']);
     if (Object.keys(value).some(key => !known.has(key))) throw Error('Unknown UI project setting');
     const file = VirtualFileSystem.path(entryFile);
     if (value.version !== 1 || value.entryFile !== file) throw Error('UI project version or entry file mismatch');
@@ -18,6 +18,7 @@ export class UIProject {
     if (typeof value.stylesheet !== 'string' || value.stylesheet !== VirtualFileSystem.path(value.stylesheet) || !value.stylesheet.endsWith('.css')) throw Error('A UI stylesheet must be a workspace CSS path');
     if (!['100%', '375px', '768px', '1280px'].includes(value.viewport)) throw Error('Invalid UI viewport');
     if (!Number.isFinite(value.grid) || value.grid < 1 || value.grid > 256 || typeof value.snap !== 'boolean') throw Error('Invalid canvas grid');
+    if (value.maxSteps !== undefined && (!Number.isSafeInteger(value.maxSteps) || value.maxSteps < 1 || value.maxSteps > 2_000_000)) throw Error('UI instruction budget must be between 1 and 2,000,000');
     return Object.freeze({...value});
   }
   static load(files, entryFile, {css = ''} = {}) {

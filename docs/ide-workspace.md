@@ -38,7 +38,8 @@ Tree undo preserves source, folders, tabs, positions, breakpoints and the dirty
 baseline. It refuses to overwrite newer conflicting source edits. Closing a tab
 does not delete or discard its source. File operations do not rewrite Rust `mod`
 declarations, `#[path]` attributes, imports or Cargo target paths; adjust those
-references separately. Semantic symbol rename remains the rust-analyzer command.
+references separately. Symbol rename uses the browser-supported exact-local preview
+or the connected rust-analyzer; see [editor language tooling](editor-language.md).
 
 ## Documents and splits
 
@@ -85,18 +86,26 @@ closing a view or evicting an inactive session disposes its worker, listeners an
 preview channel. Source and persisted document settings survive eviction, but live
 application state does not survive eviction, rebuild, project switching or reload.
 
-Structure and Toolbox occupy the left designer pane. The canvas occupies the center;
-Properties, Styles and Debug are separate inspector tabs on the right. Pane toggles
-and separators control space. The toolbox inserts source-backed elements, while
-outline dragging reparents nodes. Pick element, attribute editing, literal geometry,
-application state inspection and MIR event debugging use the existing source-aware
-compiler/runtime services. Settings / Export holds entry/backend settings, standalone
-HTML exports and trusted native Wasm import. There are no sample buttons in the
-workspace toolbar or designer; templates live in the New UI View dialog.
+Structure, Toolbox, Canvas, Properties, Styles, Debug and Settings / Export are
+independently dockable panels. Drag a panel tab to an edge to split, to another
+panel's center to stack tabs, or outside the workbench to float. Every panel also
+has explicit float, actions and hide buttons; the actions menu supports named
+relative destinations without dragging. **Panels** reopens hidden tools and offers
+Reset designer layout, Wide canvas and Debug presets. Floating and docking retain
+the same mounted canvas and inspector inputs instead of rebuilding their contents.
 
-At phone width, Code+Designer stacks vertically. Structure or Inspector can replace
-the narrow canvas temporarily through their explicit toggle buttons. Tool windows
-remain available from the existing docking rails.
+Search the outline or toolbox, choose Inside / Before / After selection, and click
+a component to insert validated source. Outline dragging reparents source nodes.
+Pick element selects without activating application controls; Interact runs the app.
+Move / Resize are explicit absolute-CSS editing modes, not a general layout engine.
+The compact property inspector separates content, attributes and optional geometry.
+Settings / Export holds entry settings, standalone HTML exports and trusted native
+Wasm import. Templates remain in New UI View, not sample toolbar buttons.
+
+At phone width, Code+Designer stacks vertically. **Panels → Show Properties**, **Show
+Toolbox** or **Show Canvas** switches the compact surface without rewriting the saved
+desktop docking arrangement. Outer IDE tool windows remain on their existing rails.
+See [designer docking](designer-docking.md) for gestures, keyboard access and scope.
 
 ## Persistence and execution boundaries
 
@@ -104,7 +113,9 @@ Browser-local workspace state includes files, empty folders, project name, activ
 open tabs, pin/preview/closed-tab metadata, per-file modes/orientation/ratios, primary
 editor positions and breakpoints. Portable project snapshots include files, folders
 and name, not transient runtime state. The secondary ordinary-editor selection is
-session-local. Designer internal pane widths/tabs are session-local too.
+session-local. Each view's validated designer split tree, tab order, active tabs,
+hidden panels, floating geometry and return locations are persisted separately.
+Maximization and the compact-screen selected panel are presentation-only state.
 
 Folder imports do not grant implicit write-back, filesystem watching, binary asset
 editing or arbitrary OS access. Use the existing authenticated native repository
@@ -122,10 +133,14 @@ and [UI compatibility](ui-compatibility.md).
 
 `npm test` covers atomic operations, sidecar rewrites, collision rejection, tab
 lifecycle, persistence, stale undo and quota failure. `npm run test:ui:browser` runs
-the existing source/canvas/backend/export checks and `tools/ui-workspace-acceptance.py`.
-The latter exercises actual project dialogs, independent live counters, file-owned
+the existing source/canvas/backend/export checks, `tools/ui-workspace-acceptance.py`
+and `tools/designer-docking-acceptance.py`.
+The workspace suite exercises actual project dialogs, independent live counters, file-owned
 CSS, stale background edits, tab menus, folder/view moves, duplicate sidecars, ordinary
 editor splits, project restoration, HTTP-origin reload and phone-width pane access.
-CI uses real HTTP delivery. `FERRITE_MEMORY_TEST=1` is a restricted-container fallback
+The docking suite checks retained iframe identity/runtime state, inspector drafts,
+all seven panels, drag guides/cancellation, keyboard grouping, per-document floating
+ownership, compact access and actual reload persistence. CI uses real HTTP delivery.
+`FERRITE_MEMORY_TEST=1` is a restricted-container fallback
 that executes the same modules but does not establish HTTP, OS picker or persistent
 storage delivery guarantees. Screenshots/results are retained under `artifacts/`.

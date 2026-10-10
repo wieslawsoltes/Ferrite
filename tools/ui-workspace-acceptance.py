@@ -6,7 +6,7 @@ not claim network delivery, OS folder picking or localStorage reload coverage.
 """
 import json
 import os
-import runpy
+from designer_browser_support import memory_document
 import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -31,7 +31,7 @@ def run():
             page = browser.new_page(viewport={'width':1800,'height':1080})
             page.set_default_timeout(15000)
             page.on('pageerror', lambda error: errors.append(str(error)))
-            if MEMORY: runpy.run_path(str(ROOT/'tools/browser-acceptance.py'))['memory_document'](page)
+            if MEMORY: memory_document(page)
             else: page.goto(f'http://127.0.0.1:{server.server_port}/')
             page.wait_for_function('!!window.ferrite')
             studio = page.locator('.ui-studio')
@@ -86,7 +86,7 @@ def run():
             page.wait_for_timeout(600)
             assert page.evaluate('ferrite.getUIState().entryFile')=='src/pages/second.ui.rs'
             tab('first.ui.rs').click();source.fill(original);mode('Split');ready()
-            studio.get_by_role('tab',name='Styles',exact=True).click()
+            mode('Design');studio.get_by_role('tab',name='Styles',exact=True).click()
             studio.get_by_label('UI application CSS',exact=True).fill('body { color: rgb(11, 22, 33); }')
             studio.get_by_role('button',name='Preview',exact=True).click();ready()
             expect(frame.locator('body')).to_have_css('color','rgb(11, 22, 33)')
@@ -103,7 +103,7 @@ def run():
             page.get_by_role('dialog').get_by_role('button',name='Rename',exact=True).click();ready('src/pages/home.ui.rs')
             assert page.evaluate("JSON.parse(ferrite.getSnapshot().files['src/pages/home.ui.json']).entryFile")=='src/pages/home.ui.rs'
             assert page.evaluate("!!ferrite.getSnapshot().files['src/pages/home.ui.css']")
-            page.locator('#source').click();page.keyboard.press('ArrowRight')
+            mode('Split');page.locator('#source').click();page.keyboard.press('ArrowRight')
             page.wait_for_function("ferrite.getSelection()?.file === 'src/pages/home.ui.rs'")
             check('tab menus, reopen and view rename preserve sidecars and source selection identity')
 
@@ -144,9 +144,11 @@ def run():
                 expect(page.locator('.document-workspace')).to_have_attribute('data-mode','preview')
                 check('HTTP-origin browser storage survives a real page reload')
             page.set_viewport_size({'width':390,'height':844});mode('Split')
-            expect(studio).to_be_visible();studio.get_by_role('button',name='Toggle UI inspector',exact=True).click()
+            expect(studio).to_be_visible();studio.get_by_role('button',name='Panels',exact=True).click()
+            page.get_by_role('button',name='Show Properties',exact=True).click()
             expect(studio.get_by_role('tab',name='Properties',exact=True)).to_be_visible()
-            studio.get_by_role('button',name='Toggle UI inspector',exact=True).click()
+            studio.get_by_role('button',name='Panels',exact=True).click()
+            page.get_by_role('button',name='Show Canvas',exact=True).click()
             expect(frame.locator('body')).to_be_visible();page.screenshot(path=str(OUT/'mobile-document-workspace.png'))
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             check('mobile stacks code and preview; inspector remains explicitly reachable')

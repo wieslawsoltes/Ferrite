@@ -2,7 +2,7 @@
 """Actual Chromium: source-backed designer, isolated previews, SDK and offline exports."""
 import json
 import os
-import runpy
+from designer_browser_support import memory_document
 import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -37,7 +37,7 @@ def run():
             page = context.new_page(); page.set_default_timeout(20000)
             page.on('pageerror', lambda error: errors.append(str(error)))
             if MEMORY:
-                runpy.run_path(str(ROOT / 'tools' / 'browser-acceptance.py'))['memory_document'](page)
+                memory_document(page)
             else:
                 page.goto(base)
             page.wait_for_function('!!window.ferrite')
@@ -52,6 +52,7 @@ def run():
                 page.get_by_role('textbox', name='Search Everywhere').fill('Open ' + path)
                 page.get_by_role('button', name='Open ' + path, exact=True).click()
             new_view('src/counter.ui.rs', 'counter')
+            page.locator('.document-mode[data-mode=design]').click()
             studio = page.locator('.ui-studio')
             expect(studio.locator('.studio-status')).to_have_attribute('data-kind', 'ready')
             frame = page.frame_locator('.ui-studio .studio-preview')
@@ -76,10 +77,10 @@ def run():
             expect(frame.locator('h1')).to_have_attribute('data-design', 'edited')
             assert 'data-design="edited"' in page.evaluate('Object.values(window.ferrite.getSnapshot().files).find(s=>s.includes("A little Rust"))')
             # Export the actual edited app and execute the download without network.
-            studio.locator('summary').filter(has_text='Settings / Export').click()
+            studio.get_by_role('button', name='Settings / Export', exact=True).click()
             with page.expect_download() as info:
                 studio.get_by_role('button', name='Export HTML', exact=True).click()
-            studio.locator('summary').filter(has_text='Settings / Export').click()
+            studio.get_by_role('button', name='Hide Settings / Export', exact=True).click()
             download = info.value; path = OUTPUT / 'counter.html'; download.save_as(path)
             offline = browser.new_context(viewport={'width': 900, 'height': 650}, offline=True)
             offpage = offline.new_page(); offerrors = []
@@ -160,6 +161,7 @@ def run():
             page.locator('#import-input').set_input_files({'name': 'ui.ferrite.json', 'mimeType': 'application/json', 'buffer': json.dumps({'format': 'ferrite-project-v1', 'files': project_files}).encode()})
             page.wait_for_function("!!window.ferrite.getSnapshot().files['src/card.rs']")
             open_file('src/app.rs')
+            page.locator('.document-mode[data-mode=design]').click()
             studio.get_by_role('button', name='Preview', exact=True).click()
             expect(studio.locator('.studio-status')).to_have_attribute('data-kind', 'ready')
             studio.get_by_role('button', name='Pick element', exact=True).click(); frame.locator('button').click()
@@ -188,6 +190,7 @@ def run():
             # Reload through the same public snapshot import path in both harness modes.
             page.locator('#import-input').set_input_files({'name': 'saved.ferrite.json', 'mimeType': 'application/json', 'buffer': json.dumps(saved).encode()})
             open_file('src/app.rs')
+            page.locator('.document-mode[data-mode=design]').click()
             expect(studio.get_by_label('UI backend', exact=True)).to_have_value('wasm')
             expect(studio.get_by_label('Preview width', exact=True)).to_have_value('375px')
             studio.get_by_role('button', name='Preview', exact=True).click()

@@ -65,6 +65,8 @@ jobs:
         run: |
           set -o pipefail
           npm run test:browser-agent 2>&1 | tee artifacts/browser-agent.log
+      - name: Exercise bridge-free Rust and view editor language tooling over HTTP
+        run: npm run test:editor-language
       - name: Exercise UI Studio, JSX/compiler SDK and offline exports in Chromium
         run: |
           set -o pipefail

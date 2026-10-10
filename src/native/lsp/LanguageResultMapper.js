@@ -1,3 +1,4 @@
+import {CompletionEdits} from '../../language/CompletionEdits.js';
 import {resolve,relative,isAbsolute,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {WorkspaceEditPlan as Edits} from '../../ui/model/WorkspaceEditPlan.js';
@@ -19,13 +20,8 @@ export class LanguageResultMapper {
     if(['textDocument/definition','textDocument/references'].includes(method))return {locations:this.locations(raw)};
     if(method==='textDocument/rename')return {changes:this.edits(raw)};
     if(method==='textDocument/hover')return {text:LanguageResultMapper.text(raw?.contents),span:raw?.range?Edits.span(file,this.files[file],raw.range):null};
-    if(method==='textDocument/signatureHelp')return {text:raw?.signatures?.[raw.activeSignature??0]?.label??''};
-    if(method==='textDocument/completion')return {items:(Array.isArray(raw)?raw:raw?.items??[]).slice(0,300).map(item=>{
-      const range=item.textEdit?.replace??item.textEdit?.range??{start:position,end:position};
-      const newText=item.textEdit?.newText??item.insertText??item.label;
-      const changes={[file]:[{range,newText},...(item.additionalTextEdits??[])]};
-      try{if(item.insertTextFormat===2)return null;Edits.prepare(this.files,changes);return {label:item.label,detail:item.detail??'',changes};}catch{return null;}
-    }).filter(Boolean)};
+    if(method==='textDocument/signatureHelp'){const signature=raw?.signatures?.[raw.activeSignature??0],parameter=signature?.parameters?.[signature.activeParameter??raw.activeParameter??0];return {text:signature?signature.label+(parameter?'\n\nParameter: '+(Array.isArray(parameter.label)?signature.label.slice(...parameter.label):parameter.label):''):''};}
+    if(method==='textDocument/completion')return {items:CompletionEdits.items(this.files,file,position,raw)};
     if(method==='textDocument/documentSymbol'){
       const symbols=[];const walk=(items,depth=0)=>{if(depth>32)return;for(const item of items??[]){if(symbols.length>=3000)return;const span=item.location?this.span(item.location.uri,item.location.range):Edits.span(file,this.files[file],item.selectionRange??item.range);if(span)symbols.push({name:item.name,kind:item.kind,detail:item.detail??'',span});walk(item.children,depth+1);}};walk(raw);return {symbols};
     }

@@ -2,7 +2,7 @@
 """Execute the actual rustc output, including independent offline file navigation."""
 import json
 import os
-import runpy
+from designer_browser_support import memory_document
 import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -64,7 +64,7 @@ def run():
             editor = ide.new_page(); editor.set_default_timeout(20000)
             editor.on('pageerror', lambda error: errors.append(str(error)))
             if MEMORY:
-                runpy.run_path(str(ROOT / 'tools/browser-acceptance.py'))['memory_document'](editor)
+                memory_document(editor)
             else:
                 editor.goto(f'http://127.0.0.1:{server.server_port}/')
             editor.wait_for_function('!!window.ferrite')
@@ -86,7 +86,7 @@ def run():
             assert editor.locator('.studio-preview').get_attribute('sandbox') == 'allow-scripts'
             assert editor.evaluate("document.querySelector('.studio-preview').contentDocument === null")
             checks.append('native Wasm file picker, opaque-origin preview, real click, inspection and unchanged workspace')
-            studio.locator('summary').filter(has_text='Settings / Export').click()
+            studio.get_by_role('button', name='Settings / Export', exact=True).click()
             with editor.expect_download() as info:
                 studio.get_by_role('button', name='Export HTML', exact=True).click()
             exported = OUT / 'ide-export.html'; info.value.save_as(exported)

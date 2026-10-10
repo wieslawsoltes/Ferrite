@@ -18,7 +18,7 @@
     "test:agent": "node --test tests/agent-*.test.js",
     "test:agent:browser": "python tools/agent-browser-acceptance.py",
     "test:repositories": "node tools/repository-smoke.mjs",
-    "test:browser-agent": "python tools/browser-agent-acceptance.py",
+    "test:browser-agent": "python tools/browser-agent-acceptance.py && python tools/anthropic-agent-acceptance.py",
     "test:language": "node tools/language-conformance.mjs",
     "benchmark:verifier": "node tools/benchmark-verifier.mjs",
     "test:terminal": "node --test tests/terminal-*.test.js",

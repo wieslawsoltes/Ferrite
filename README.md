@@ -23,12 +23,18 @@ Every compiler representation uses original-file UTF-16 spans: selecting a token
 
 ## Rust UI Studio and embeddable compiler
 
-Open the optional **Rust UI Studio** tool window to create typed Rust `view!` components,
-edit source-backed visual nodes, preview real DOM state/events using JavaScript, Wasm
-or MIR, inspect live hooks/state, step event callbacks and export a self-contained HTML
-application. The ordinary editor and visual editor share workspace source and revisions.
-Counter, controlled-input and typed-component examples are included. Previews execute
-in opaque-origin iframes; MCP edits retain approval, hash checks and checkpoints.
+Create a **Project → Rust UI application**, or add a **UI View** from the toolbar or
+Project context menu. Each view file is a first-class editor document with its own
+**Code / Split / Design / Preview** mode, resizable right/down split and independent
+live preview. The designer has separate Structure, Toolbox, canvas, Properties, Styles
+and Debug panels. The source editor, visual edits and MCP share workspace files and
+revision checks. Templates are selected in the New UI View dialog, not sample buttons.
+
+Projects support named browser-local recent projects, folder import, empty folders,
+recursive move/duplicate/delete, UI-sidecar-aware rename, undoable tree operations,
+pinned/preview tabs, drag reordering, reopen and bulk close. See the
+[project and document workspace guide](docs/ide-workspace.md) for workflows, shortcuts,
+persistence and the browser/native boundary.
 
 The reusable SDK is `src/sdk/Ferrite.js`; `src/sdk/ferrite.bundle.js` embeds the compiler
 and runtime as a single classic script. Explicit `Ferrite.runScripts()` executes inline

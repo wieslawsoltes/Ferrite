@@ -1,20 +1,27 @@
-import {Lexer} from '../../compiler/Lexer.js';
+import {RustDocument} from '../../language/RustDocument.js';
 import {Dom} from '../views/Dom.js';
-/** Highlighting is tolerant of unfinished edits and never injects source as markup. */
+
+/** Lossless highlighting: use source slices, never normalized compiler token values. */
 export class SyntaxHighlighter {
-  static html(text, file) {
-    if (text.length > 150_000) return Dom.escape(text);
-    if (!file?.endsWith('.rs')) return Dom.escape(text).replace(/(^|\n)(\[[^\n]*\])/g,'$1<span class="syntax-type">$2</span>');
-    try {
-      const tokens = Lexer.tokenize(text,{file,trivia:true}); let previous = '';
-      return tokens.filter(t=>t.kind!=='eof').map(token=>{
-        let kind = token.kind;
-        if (kind==='identifier') {
-          if (previous==='fn') kind='function'; else if (/^[A-Z]|^(?:[iu]\d+|[iu]size|f32|f64|bool|str)$/.test(token.value)) kind='type';
-        }
-        if (!['whitespace','comment'].includes(token.kind)) previous=token.value;
-        return ['whitespace','punctuation'].includes(kind) ? Dom.escape(token.value) : `<span class="syntax-${kind}">${Dom.escape(token.value)}</span>`;
-      }).join('');
-    } catch { return Dom.escape(text); }
+  static html(text, file, document = null, diagnostics = []) {
+    if (!file?.endsWith('.rs')) return Dom.escape(text).replace(/(^|\n)(\[[^\n]*\])/g, '$1<span class="syntax-type">$2</span>');
+    const parsed = document?.text === text && document?.file === file ? document : new RustDocument(text, file);
+    const ranges = diagnostics.map(d => ({...d.span, message:d.message, severity:d.severity})).sort((a,b) => a.start-b.start);
+    if(!ranges.length)return parsed.tokens.map(token=>{const source=Dom.escape(text.slice(token.start,token.end));return ['whitespace','punctuation','text'].includes(token.kind)?source:`<span class="syntax-${token.kind}">${source}</span>`;}).join('');
+    let cursor = 0;
+    return parsed.tokens.map(token => {
+      while(cursor<ranges.length&&ranges[cursor].end<=token.start)cursor++;
+      const pieces=[],boundaries=new Set([token.start,token.end]),active=[];
+      for(let i=cursor;i<ranges.length&&ranges[i].start<token.end;i++)if(ranges[i].end>token.start){active.push(ranges[i]);boundaries.add(Math.max(token.start,ranges[i].start));boundaries.add(Math.min(token.end,ranges[i].end));}
+      const offsets=[...boundaries].sort((a,b)=>a-b);
+      for(let i=1;i<offsets.length;i++){
+        const start=offsets[i-1],end=offsets[i],issue=active.find(d=>d.start<=start&&d.end>=end);
+        let source=Dom.escape(text.slice(start,end));
+        if(issue)source=`<span class="editor-diagnostic ${issue.severity===2?'warning':'error'}" title="${Dom.escape(issue.message)}">${source}</span>`;
+        pieces.push(source);
+      }
+      const source=pieces.join('');
+      return ['whitespace','punctuation','text'].includes(token.kind) ? source : `<span class="syntax-${token.kind}">${source}</span>`;
+    }).join('');
   }
 }

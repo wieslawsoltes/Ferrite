@@ -18,10 +18,10 @@ export class UICommandController {
   }
   cancel(){this.generation++;this.request?.abort();this.checkRequest?.abort();}
   async run(command,file,{automatic=false}={}){
-    if(command==='check')this.checkRequest?.abort();else this.cancel();const app=this.app,model=app.model,epoch=model.workspaceEpoch,revision=model.revision,generation=this.generation;
-    const controller=new AbortController();if(command==='check')this.checkRequest=controller;else this.request=controller;const live=()=>!controller.signal.aborted&&generation===this.generation&&epoch===model.workspaceEpoch;const current=()=>live()&&app.isCurrentUI(file,revision,epoch);
+    if(command==='check')this.checkRequest?.abort();else this.cancel();const app=this.app,model=app.model,epoch=model.workspaceEpoch,revision=model.revision,generation=this.generation,backend=app.backend,optimize=app.settings.optimize;
+    const controller=new AbortController();if(command==='check')this.checkRequest=controller;else this.request=controller;const live=()=>!controller.signal.aborted&&generation===this.generation&&epoch===model.workspaceEpoch&&backend===app.backend&&optimize===app.settings.optimize;const current=()=>live()&&app.isCurrentUI(file,revision,epoch);
     try{
-      const project=UIProject.load(model.files,file),options={file,entry:project.settings.entry,css:project.css,backend:app.backend==='wasm'?'wasm':project.settings.backend,maxSteps:project.settings.maxSteps??250000,optimize:app.settings.optimize,inspection:true};
+      const project=UIProject.load(model.files,file),options={file,entry:project.settings.entry,css:project.css,backend:app.backend==='wasm'?'wasm':project.settings.backend,maxSteps:project.settings.maxSteps??250000,optimize,inspection:true};
       if(command==='check'||command==='test'){
         app.status('Checking Rust UI source…','busy');
         const result=await this.compiler.compile(model.files,'ui-analyze',options,controller.signal);

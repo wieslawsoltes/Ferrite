@@ -24,10 +24,10 @@ export const StudioTools = {
       file = this.nativeAsset.name; backend = 'native-wasm'; html = exportNativeHTML(this.nativeAsset.bytes, {title: file, css: this.css.value});
     } else {
       this.saveProject(); file = this.entryFile;
-      const revision = this.model.revision, epoch = this.model.workspaceEpoch;
+      const revision = this.model.revision, epoch = this.model.workspaceEpoch, optimize = this.app.settings.optimize;
       let result;
-      try { result = await this.compiler.compile({...this.model.files}, hydrate ? 'ui-render' : 'ui-export', {file, entry: this.entry, backend: this.backend, optimize: this.app.settings.optimize, inspection: true, maxSteps: this.project?.settings.maxSteps ?? 250000, css: this.css.value}); }
-      catch (error) { if (!this.disposed) this.app.failUIBuild(error, file, revision, epoch); throw error; }
+      try { result = await this.compiler.compile({...this.model.files}, hydrate ? 'ui-render' : 'ui-export', {file, entry: this.entry, backend: this.backend, optimize, inspection: true, maxSteps: this.project?.settings.maxSteps ?? 250000, css: this.css.value}); }
+      catch (error) { if (!this.disposed) this.app.failUIBuild(error, file, revision, epoch, optimize); throw error; }
       if (this.disposed || revision !== this.model.revision || epoch !== this.model.workspaceEpoch) throw new DOMException('Stale UI export', 'AbortError');
       html = result.html;
       if (this.app.publishUIBuild(result.build, file, revision, epoch)) this.app.uiBuildOutput('build', result.build, 'Build succeeded. Standalone Rust UI HTML exported.');

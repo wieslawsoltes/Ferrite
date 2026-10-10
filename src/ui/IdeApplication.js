@@ -190,8 +190,8 @@ export class IdeApplication {
     for(const path of build.unit.modules)if(path!==file&&!path.endsWith('.ui.rs'))this.studio.sourceOwners.set(path,file);
     this.publishBuild(build,revision);return true;
   }
-  failUIBuild(error,file,revision,epoch){
-    if(error.name==='AbortError'||!this.isCurrentUI(file,revision,epoch))return;
+  failUIBuild(error,file,revision,epoch,optimize=this.settings.optimize){
+    if(error.name==='AbortError'||optimize!==this.settings.optimize||!this.isCurrentUI(file,revision,epoch))return;
     this.buildRevision=-1;this.inspector.failed(error);this.profile.invalidate();this.error(error);
   }
   uiBuildOutput(command,build,detail){

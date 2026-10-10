@@ -120,6 +120,7 @@ def run():
             frame.get_by_role('button', name='Count', exact=True).click()
             expect(frame.get_by_label('Count', exact=True)).to_have_value('1')
             page.locator('#check').click()
+            expect(page.locator('#status')).to_contain_text('preview state unchanged')
             current('rust-ui')
             expect(frame.get_by_label('Count', exact=True)).to_have_value('1')
             check('Run exposes both output and visualizations; Check preserves live UI state')

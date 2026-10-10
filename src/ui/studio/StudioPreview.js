@@ -15,13 +15,13 @@ export const StudioPreview = {
     const generation = ++this.generation, file = this.entryFile, channel = this.preview.reset();
     this.layoutMode.value = 'off'; this.layoutMode.dataset.activeMode = 'off'; this.frame.style.pointerEvents = ''; this.layoutMode.removeAttribute('aria-busy'); this.picking = false; this.pickButton.setAttribute('aria-pressed', 'false'); this.artifact = null;
     this.status.textContent = 'Compiling typed Rust UI in a worker…'; this.status.dataset.kind = 'building';
-    const revision = this.model.revision, epoch = this.model.workspaceEpoch, files = {...this.model.files};
+    const revision = this.model.revision, epoch = this.model.workspaceEpoch, files = {...this.model.files}, optimize = this.app.settings.optimize;
     let result;
     try {
       result = await this.compiler.compile(files, 'ui-compile', {file, entry: this.entry, backend: this.backend,
-        optimize: this.app.settings.optimize, inspection: true, maxSteps: this.project?.settings.maxSteps ?? 250000, css: this.css.value, channel}, combined);
+        optimize, inspection: true, maxSteps: this.project?.settings.maxSteps ?? 250000, css: this.css.value, channel}, combined);
     } catch (error) {
-      if (!combined.aborted && generation === this.generation) this.app.failUIBuild(error, file, revision, epoch);
+      if (!combined.aborted && generation === this.generation) this.app.failUIBuild(error, file, revision, epoch, optimize);
       throw error;
     }
     const {artifact, html, build} = result;

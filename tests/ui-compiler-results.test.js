@@ -47,14 +47,16 @@ test('automatic UI checks refresh results without stealing the selected tool win
   assert.equal(calls.some(call => call[0] === 'open'), false);
 });
 
-for (const [label, mutate] of [
+const contextChanges = [
   ['source revision', f => f.model.revision++],
   ['workspace epoch', f => f.model.workspaceEpoch++],
   ['active UI document', f => { f.model.active = 'src/other.ui.rs'; f.model.files[f.model.active] = source; }],
+  ['Wasm backend', f => { f.app.backend = 'wasm'; }],
   ['native backend', f => { f.app.backend = 'native'; }],
   ['optimization settings', f => { f.app.settings.optimize = false; }],
   ['explicit cancellation', f => f.commands.cancel()]
-]) test(`a late UI build cannot overwrite results after changing ${label}`, async () => {
+];
+for (const [label, mutate] of contextChanges) test(`a late UI build cannot overwrite results after changing ${label}`, async () => {
   const f = fixture(); let complete;
   f.commands.compiler.compile = () => new Promise(resolve => { complete = resolve; });
   const pending = f.commands.run('build', file);
@@ -95,4 +97,18 @@ test('designer focus never hides compiler or output tools', () => {
   let collapsed = false;
   StudioDocuments.focusDocument.call({app: {dock: {collapse() { collapsed = true; }}}});
   assert.equal(collapsed, false);
+});
+
+for (const [label, mutate] of contextChanges) test(`a late UI failure cannot overwrite results after changing ${label}`, async () => {
+  const f = fixture(); let reject;
+  f.commands.compiler.compile = () => new Promise((_resolve, fail) => { reject = fail; });
+  const pending = f.commands.run('check', file);
+  mutate(f); reject(Error('obsolete diagnostic')); await pending;
+  assert.equal(f.calls.some(call => call[0] === 'failure'), false);
+});
+
+test('preview and export failures are scoped to their original optimization settings', () => {
+  const f = fixture(); f.app.settings.optimize = false;
+  f.app.inspector = {failed() { assert.fail('obsolete diagnostic reached the inspector'); }};
+  IdeApplication.prototype.failUIBuild.call(f.app, Error('old optimization pass'), file, f.model.revision, f.model.workspaceEpoch, true);
 });

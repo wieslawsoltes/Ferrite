@@ -1,0 +1,71 @@
+name: Publish reconciled compiler increments
+on:
+  push:
+    branches: [automation/compiler-recovery-20261010]
+    paths: [.github/recovery.json]
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: compiler-recovery-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify source and publish incremental commits
+        id: publish
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os, re, subprocess, tempfile
+          from pathlib import Path
+          manifest = json.loads(Path('.github/recovery.json').read_text())
+          paths = manifest['chunks']
+          if not 1 <= len(paths) <= 64 or any(not re.fullmatch(r'\.github/recovery-[a-z0-9-]+\.b64', p) for p in paths):
+              raise SystemExit('Invalid transport file paths')
+          data = base64.b64decode(''.join(Path(p).read_text().strip() for p in paths), validate=True)
+          if hashlib.sha256(data).hexdigest() != manifest['sha256']:
+              raise SystemExit('Transport digest mismatch')
+          payload = json.loads(gzip.decompress(data))
+          target = payload['target']
+          if target not in ['feat/compiler-supertraits', 'feat/compiler-parameterized-traits', 'feat/compiler-associated-items']:
+              raise SystemExit('Unexpected target branch')
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          expected = payload['base']
+          if git('ls-remote', 'origin', 'refs/heads/' + target).split()[0] != expected:
+              raise SystemExit('Target moved; refusing to overwrite concurrent changes')
+          git('config', 'user.name', 'Wiesław Šoltés')
+          git('config', 'user.email', 'wieslawsoltes@users.noreply.github.com')
+          git('checkout', '--detach', expected)
+          for change in payload['commits']:
+              with tempfile.NamedTemporaryFile(mode='w', suffix='.patch') as patch:
+                  patch.write(change['patch']); patch.flush()
+                  git('apply', '--index', '--whitespace=error', patch.name)
+              if git('diff', '--cached', '--name-only', '--', '.github'):
+                  raise SystemExit('Source publication must not alter workflows')
+              subprocess.run(['npm', 'run', 'build:workers'], check=True)
+              subprocess.run(['npm', 'run', 'build:sdk'], check=True)
+              git('add', 'src/ui/workers', 'src/sdk/ferrite.bundle.js')
+              if git('write-tree') != change['tree']:
+                  raise SystemExit('Source tree mismatch: ' + git('write-tree'))
+              git('commit', '-m', change['message'])
+          subprocess.run(['npm', 'run', 'check'], check=True)
+          subprocess.run(['npm', 'test'], check=True)
+          git('push', 'origin', 'HEAD:refs/heads/' + target)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('target=' + target + '\n')
+          Path(os.environ['GITHUB_STEP_SUMMARY']).write_text('Published `' + git('rev-parse', 'HEAD') + '`; verified tree `' + git('write-tree') + '`.\n')
+          PY
+      - name: Dispatch all native and browser acceptance gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ steps.publish.outputs.target }}
+        run: gh workflow run test.yml --ref "$TARGET"

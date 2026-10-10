@@ -8,6 +8,7 @@ import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from workbench_browser_support import show_workspace_actions
 from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +40,7 @@ def run():
                 runpy.run_path(str(ROOT/'tools/browser-acceptance.py'))['memory_document'](page)
                 page.add_style_tag(content=(ROOT/'styles/editor-language.css').read_text())
             else: page.goto(f'http://127.0.0.1:{server.server_port}/')
-            page.wait_for_function('!!window.ferrite')
+            page.wait_for_function('!!window.ferrite');show_workspace_actions(page)
             page.locator('#auto-check').uncheck()
             def check(name): checks.append(name); print('PASS '+name,flush=True)
             def caret(editor, offset):
@@ -92,10 +93,10 @@ def run():
 
             source.fill(original); caret(source,original.index('count'))
             source.press('Control+q');expect(page.locator('.language-documentation')).to_contain_text('count: ui::State')
-            caret(source,original.index('count',original.index('on:click')));source.press('F12')
+            caret(source,original.index('count',original.index('on:click')));source.press('Control+b')
             page.wait_for_function('(offset)=>document.querySelector("#source").selectionStart===offset',arg=original.index('count'))
             source.press('Alt+F7');expect(page.locator('.language-location')).to_have_count(4)
-            check('hover, F12 and references resolve original-source state bindings including closures')
+            check('hover, Ctrl+B and references resolve original-source state bindings including closures')
 
             caret(source,original.index('count'));source.press('Shift+F6')
             page.get_by_label('New symbol name',exact=True).fill('counter')
@@ -140,7 +141,7 @@ def run():
             caret(split,files['src/other.rs'].rindex('second')+3);split.press('Control+Space')
             expect(page.get_by_role('listbox',name='Rust completions')).to_contain_text('second')
             split.press('Tab');expect(split).to_have_value(files['src/other.rs']);expect(source).to_have_value(files['src/main.rs'])
-            caret(split,files['src/other.rs'].rindex('second'));split.press('F12')
+            caret(split,files['src/other.rs'].rindex('second'));split.press('Control+b')
             page.wait_for_function('(offset)=>document.querySelector("#split-source").selectionStart===offset',arg=files['src/other.rs'].index('second'))
             expect(source).to_have_value(files['src/main.rs'])
             check('completion and definition follow the focused split document without changing the main document')
@@ -151,7 +152,7 @@ def run():
             expect(page.get_by_role('listbox',name='Rust completions')).to_contain_text('type')
             source.press('Tab');expect(source).to_have_value(normalized)
             assert page.evaluate('ferrite.getSnapshot().files["src/main.rs"]')==crlf
-            caret(source,normalized.rindex('r#type'));source.press('F12')
+            caret(source,normalized.rindex('r#type'));source.press('Control+b')
             page.wait_for_function('(offset)=>document.querySelector("#source").selectionStart===offset',arg=normalized.index('r#type'))
             assert highlight.text_content()==normalized+'\n'
             check('CRLF, Unicode and raw identifiers retain file bytes, UTF-16 navigation and overlay alignment')

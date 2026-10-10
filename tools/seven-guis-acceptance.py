@@ -4,6 +4,7 @@ import json, os, subprocess, threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from workbench_browser_support import show_workspace_actions
 from playwright.sync_api import sync_playwright, expect
 from designer_browser_support import memory_document
 ROOT=Path(__file__).resolve().parents[1]
@@ -77,7 +78,7 @@ def run():
             page=browser.new_page(viewport={'width':1440,'height':1000});page.set_default_timeout(20000);page.on('pageerror',lambda e:errors.append(str(e)))
             if MEMORY:memory_document(page);page.add_style_tag(content=(ROOT/'styles/samples.css').read_text())
             else:page.goto(f'http://127.0.0.1:{server.server_port}/')
-            page.wait_for_function('!!window.ferrite');original=page.evaluate('ferrite.getSnapshot()');page.locator('#file-samples').click();dialog=page.get_by_role('dialog',name='Samples',exact=True)
+            page.wait_for_function('!!window.ferrite');show_workspace_actions(page);original=page.evaluate('ferrite.getSnapshot()');page.locator('#file-samples').click();dialog=page.get_by_role('dialog',name='Samples',exact=True)
             expect(dialog.locator('.sample-browser-status')).to_contain_text('Live javascript');preview=dialog.frame_locator('iframe');tasks(preview,'counter')
             page.get_by_label('Sample category').select_option('7GUIs');expect(dialog.locator('[data-sample]')).to_have_count(7)
             page.get_by_label('Search samples').fill('spreadsheet');expect(dialog.locator('[data-sample]')).to_have_count(1);dialog.locator('[data-sample="7guis-cells"]').click();expect(dialog.locator('.sample-browser-status')).to_contain_text('Live javascript');expect(preview.get_by_role('gridcell')).to_have_count(2600)

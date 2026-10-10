@@ -59,6 +59,8 @@ jobs:
         run: |
           npm run test:native
           npm run test:repositories
+      - name: Exercise retained tool windows, RustRover docking gestures and layout persistence
+        run: npm run test:docking:browser
       - name: Exercise the HTTP IDE and authenticated Cargo bridge in Chromium
         env:
           FERRITE_NATIVE_TEST: '1'

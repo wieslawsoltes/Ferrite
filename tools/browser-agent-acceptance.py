@@ -13,6 +13,7 @@ import traceback
 from functools import partial
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from workbench_browser_support import resize_tool_window
 from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -144,7 +145,7 @@ def run():
             page.locator('[data-tool="terminal"]').click()
             # xterm virtualizes scrollback: make the actual visible viewport large
             # enough to inspect the whole structured status result without scrolling.
-            page.locator('.dock-layout').evaluate("node => node.style.setProperty('--bottom-size', '500px')")
+            resize_tool_window(page, 'bottom', 500)
             page.locator('#browser-terminal-input').fill('cargo run');page.locator('#browser-terminal-input').press('Enter');expect(page.locator('.terminal-screen')).to_contain_text('Before browser agent')
             page.locator('#browser-terminal-input').fill('printf "a\\nb\\n" > notes.txt; cat notes.txt | wc -l');page.locator('#browser-terminal-input').press('Enter');expect(page.locator('.terminal-screen')).to_contain_text('2');page.wait_for_function('window.ferrite.getSnapshot().files["notes.txt"] === "a\\nb\\n"')
             page.locator('#browser-terminal-input').fill('agent status');page.locator('#browser-terminal-input').press('Enter');expect(page.locator('.terminal-screen')).to_contain_text(session_id)

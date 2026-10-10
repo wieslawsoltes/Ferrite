@@ -11,6 +11,7 @@ import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from workbench_browser_support import show_workspace_actions
 from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,7 +34,7 @@ def run():
             page.on('pageerror', lambda error: errors.append(str(error)))
             if MEMORY: memory_document(page)
             else: page.goto(f'http://127.0.0.1:{server.server_port}/')
-            page.wait_for_function('!!window.ferrite')
+            page.wait_for_function('!!window.ferrite');show_workspace_actions(page)
             studio = page.locator('.ui-studio')
             frame = page.frame_locator('.ui-studio .studio-preview')
             def command(name):
@@ -139,7 +140,7 @@ def run():
             expect(page.locator('.document-workspace')).to_have_attribute('data-mode','preview')
             check('project switching restores files, folders, tabs and per-file modes')
             if not MEMORY:
-                page.reload();page.wait_for_function('!!window.ferrite');ready()
+                page.reload();page.wait_for_function('!!window.ferrite');show_workspace_actions(page);ready()
                 expect(page.locator('#project-name')).to_have_text('DesignerWorkspace')
                 expect(page.locator('.document-workspace')).to_have_attribute('data-mode','preview')
                 check('HTTP-origin browser storage survives a real page reload')

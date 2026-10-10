@@ -7,6 +7,7 @@ import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from workbench_browser_support import show_workspace_actions
 from playwright.sync_api import sync_playwright, expect
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'artifacts/native-ui'
@@ -67,7 +68,7 @@ def run():
                 memory_document(editor)
             else:
                 editor.goto(f'http://127.0.0.1:{server.server_port}/')
-            editor.wait_for_function('!!window.ferrite')
+            editor.wait_for_function('!!window.ferrite');show_workspace_actions(editor)
             editor.locator('#file-ui-view').click()
             editor.get_by_label('View file path', exact=True).fill('src/native.ui.rs')
             editor.get_by_role('button', name='Create view', exact=True).click()

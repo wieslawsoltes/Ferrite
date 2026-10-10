@@ -14,9 +14,15 @@ fn report<T: Area>(name: &str, shape: &T) {
 }
 
 fn main() {
-    let rectangle = Rect { width: 7, height: 6 };
+    let rectangle = Rect {
+        width: 7,
+        height: 6,
+    };
     report("rectangle", &rectangle);
-    let triangle = geometry::Triangle { base: 8, height: 5 };
+    let triangle = geometry::Triangle {
+        base: 8,
+        height: 5,
+    };
     report("triangle", &triangle);
 }
 `,
@@ -30,7 +36,9 @@ pub struct Rect {
 }
 
 impl Area for Rect {
-    fn area(&self) -> i32 { self.width * self.height }
+    fn area(&self) -> i32 {
+        self.width * self.height
+    }
 }
 
 pub struct Triangle {
@@ -39,12 +47,17 @@ pub struct Triangle {
 }
 
 impl Area for Triangle {
-    fn area(&self) -> i32 { self.base * self.height / 2 }
+    fn area(&self) -> i32 {
+        self.base * self.height / 2
+    }
 }
 
 #[test]
 fn rectangle_area() {
-    let r = Rect { width: 7, height: 6 };
+    let r = Rect {
+        width: 7,
+        height: 6,
+    };
     assert_eq!(r.area(), 42);
 }
 `}},
@@ -55,38 +68,73 @@ use types::Pair;
 use types::Outcome;
 use std::fmt::Display;
 
-fn first<T>(pair: Pair<T>) -> T where T: Copy { pair.0 }
-fn report<T>(value: T) where T: Display + Copy { println!("first = {}", value); }
+fn first<T>(pair: Pair<T>) -> T
+where
+    T: Copy,
+{
+    pair.0
+}
+
+fn report<T>(value: T)
+where
+    T: Display + Copy,
+{
+    println!("first = {}", value);
+}
 
 fn main() {
     let pair: Pair<u32> = (7, 8);
     report(first(pair));
     let outcome = Outcome::Ok(9);
-    let Outcome::Ok(value) = outcome else { return; };
+    let Outcome::Ok(value) = outcome else {
+        return;
+    };
     println!("payload = {}", value);
 }
 `,
       'src/types.rs':`pub type Pair<T> = (T, T);
+
 pub type Outcome = Result<u32, i32>;
 `}},
     {name:'Pattern matrix · destructuring & coverage',expected:'left 7\nright 11\nmiddle 5\n',files:{
       'Cargo.toml':manifest('pattern-matrix'),
-      'src/main.rs':`enum Event { Left(i32), Right(i32), Idle }
-struct Point { x: i32, y: i32 }
+      'src/main.rs':`enum Event {
+    Left(i32),
+    Right(i32),
+    Idle,
+}
+
+struct Point {
+    x: i32,
+    y: i32,
+}
 
 fn handle(event: Event) -> i32 {
-    let (Event::Left(value) | Event::Right(value)) = event else { return 0; };
+    let (Event::Left(value) | Event::Right(value)) = event else {
+        return 0;
+    };
     value
 }
 
 fn main() {
     println!("left {}", handle(Event::Left(7)));
     println!("right {}", handle(Event::Right(11)));
-    let point = Point { x: 5, y: 20 };
+    let point = Point {
+        x: 5,
+        y: 20,
+    };
     match point {
-        Point { x: 0..=3, .. } => println!("small"),
-        Point { x, y: 10..=30 } => println!("middle {}", x),
-        Point { .. } => println!("other"),
+        Point {
+            x: 0..=3,
+            ..
+        } => println!("small"),
+        Point {
+            x,
+            y: 10..=30,
+        } => println!("middle {}", x),
+        Point {
+            ..
+        } => println!("other"),
     }
 }
 `}},
@@ -94,7 +142,9 @@ fn main() {
       'src/main.rs':`fn main() {
     let entries = [Some(4), None, Some(8)];
     for entry in entries {
-        let Some(value) = entry else { continue; };
+        let Some(value) = entry else {
+            continue;
+        };
         println!("accepted {}", value);
     }
 }
@@ -109,7 +159,10 @@ fn main() {
     println!("scaled {}", apply(multiply, 7));
 
     let mut count = 1;
-    let mut increment = || { count += 1; count };
+    let mut increment = || {
+        count += 1;
+        count
+    };
     println!("state {} {}", increment(), increment());
 
     let payload = String::from("payload");
@@ -121,10 +174,14 @@ fn main() {
       'Cargo.toml':manifest('conditional-build')+'\n[features]\ndefault=[]\nfast=[]\n',
       'src/main.rs':`// Toggle "fast" in the Cargo tool window, then Run.
 #[cfg(feature = "fast")]
-fn mode() -> &str { "accelerated" }
+fn mode() -> &str {
+    "accelerated"
+}
 
 #[cfg(not(feature = "fast"))]
-fn mode() -> &str { "baseline" }
+fn mode() -> &str {
+    "baseline"
+}
 
 #[cfg(false)]
 mod unavailable_on_this_target;
@@ -150,7 +207,9 @@ fn main() {
 }
 `}},
     {name:'Result pipeline · early-return propagation',expected:'result 85\nerror negative input\n',files:{'Cargo.toml':manifest('result-pipeline'),'src/main.rs':`fn validate(value: i32) -> Result<i32, &str> {
-    if value < 0 { return Err("negative input"); }
+    if value < 0 {
+        return Err("negative input");
+    }
     Ok(value)
 }
 
@@ -171,24 +230,48 @@ fn main() {
     {name:'Local Cargo workspace · path dependency',expected:'from workspace: 42\n',files:{
       'Cargo.toml':'[workspace]\nmembers = ["apps/demo", "crates/math"]\n',
       'apps/demo/Cargo.toml':manifest('demo')+'\n[dependencies]\nmath = { path = "../../crates/math" }\n',
-      'apps/demo/src/main.rs':'fn main() { println!("from workspace: {}", math::multiply(6, 7)); }\n',
-      'crates/math/Cargo.toml':manifest('math'),'crates/math/src/lib.rs':'pub fn multiply(a: i32, b: i32) -> i32 { a * b }\n#[test]\nfn multiply_test() { assert_eq!(multiply(6, 7), 42); }\n'}},
-    {name:'Unit tests · ignored & expected panic',expected:'run Test to execute the harness\n',files:{'Cargo.toml':manifest('unit-tests'),'src/main.rs':`fn square(value: i32) -> i32 { value * value }
-fn main() { println!("run Test to execute the harness"); }
+      'apps/demo/src/main.rs':`fn main() {
+    println!("from workspace: {}", math::multiply(6, 7));
+}
+`,
+      'crates/math/Cargo.toml':manifest('math'),'crates/math/src/lib.rs':`pub fn multiply(a: i32, b: i32) -> i32 {
+    a * b
+}
 
 #[test]
-fn arithmetic() { assert_eq!(square(7), 49); }
+fn multiply_test() {
+    assert_eq!(multiply(6, 7), 42);
+}
+`}},
+    {name:'Unit tests · ignored & expected panic',expected:'run Test to execute the harness\n',files:{'Cargo.toml':manifest('unit-tests'),'src/main.rs':`fn square(value: i32) -> i32 {
+    value * value
+}
+
+fn main() {
+    println!("run Test to execute the harness");
+}
 
 #[test]
-fn boolean_logic() { assert!(true && !false); }
+fn arithmetic() {
+    assert_eq!(square(7), 49);
+}
+
+#[test]
+fn boolean_logic() {
+    assert!(true && !false);
+}
 
 #[test]
 #[ignore]
-fn unfinished_test() { panic!("not executed"); }
+fn unfinished_test() {
+    panic!("not executed");
+}
 
 #[test]
 #[should_panic]
-fn expected_panic() { panic!("intentional"); }
+fn expected_panic() {
+    panic!("intentional");
+}
 `}},
     {name:'Integer semantics · u128 & casts',expected:'340282366920938463463374607431768211455\nwrapped = 1\nsigned division = -3\n',files:{'Cargo.toml':manifest('integer-semantics'),'src/main.rs':`fn main() {
     let maximum = 340282366920938463463374607431768211455u128;
@@ -206,10 +289,14 @@ fn expected_panic() { panic!("intentional"); }
 `}},
     {name:'Native Rust · async, closures & macros',native:true,files:{'Cargo.toml':manifest('native-rust'),'src/main.rs':`// This sample intentionally requires the installed native Cargo toolchain.
 macro_rules! greet {
-    ($name:expr) => { format!("Hello, {}!", $name) };
+    ($name:expr) => {
+        format!("Hello, {}!", $name)
+    };
 }
 
-async fn future_value() -> u32 { 42 }
+async fn future_value() -> u32 {
+    42
+}
 
 fn main() {
     let squares: Vec<_> = (1..=5).map(|value| value * value).collect();
@@ -221,11 +308,19 @@ fn main() {
       'Cargo.toml':manifest('nominal-values'),
       'src/main.rs':`#[derive(Clone, Copy)]
 struct Port(u16);
-struct Ready;
-struct Pair<T>(T, T);
-enum Event { Value(i32) }
 
-const fn secure_port() -> Port { Port(443) }
+struct Ready;
+
+struct Pair<T>(T, T);
+
+enum Event {
+    Value(i32),
+}
+
+const fn secure_port() -> Port {
+    Port(443)
+}
+
 const HTTPS: Port = secure_port();
 
 fn main() {

@@ -1,0 +1,10 @@
+# Applied only to example sources by tools/format-samples.mjs.
+# Pin the formatter in CI; this does not change the compiler's accepted edition.
+edition = "2021"
+style_edition = "2021"
+max_width = 100
+tab_spaces = 4
+use_small_heuristics = "Off"
+reorder_imports = false
+reorder_modules = false
+newline_style = "Unix"

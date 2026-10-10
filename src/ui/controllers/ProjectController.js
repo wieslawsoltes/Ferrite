@@ -6,8 +6,25 @@ import {UIProject} from '../../ui-framework/UIProject.js';
 import {UI_SAMPLES, UI_SAMPLE_CSS} from '../../ui-framework/Samples.js';
 import {VirtualFileSystem as V} from '../../project/VirtualFileSystem.js';
 
-export const EMPTY_VIEW = 'fn app() -> ui::Node {\n    view! {\n        <main className="app">\n            <h1>New view</h1>\n        </main>\n    }\n}\n';
-export const EMPTY_CSS = 'body { margin: 0; font: 16px system-ui, sans-serif; color: #172033; background: #f5f7fb; }\n.app { padding: 32px; }\n';
+export const EMPTY_VIEW = `fn app() -> ui::Node {
+    view! {
+        <main className="app">
+            <h1>New view</h1>
+        </main>
+    }
+}
+`;
+export const EMPTY_CSS = `body {
+    margin: 0;
+    font: 16px system-ui, sans-serif;
+    color: #172033;
+    background: #f5f7fb;
+}
+
+.app {
+    padding: 32px;
+}
+`;
 
 /** Project/file commands shared by toolbar, tree, tabs and Search Everywhere. */
 export class ProjectController {
@@ -77,7 +94,13 @@ export class ProjectController {
       check();if(!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(result.name))throw Error('Project names must start with a letter and contain up to 64 letters, digits, dashes or underscores');
       this.app.editor.capture();this.store.archive();this.app.stop(false);
       const files={'Cargo.toml':`[package]\nname = "${result.name}"\nversion = "0.1.0"\nedition = "2021"\n`};
-      files[result.kind==='library'?'src/lib.rs':'src/main.rs']=result.kind==='library'?'pub fn answer() -> i64 { 42 }\n':'fn main() {\n    println!("Hello, Ferrite!");\n}\n';
+      files[result.kind==='library'?'src/lib.rs':'src/main.rs']=result.kind==='library'?`pub fn answer() -> i64 {
+    42
+}
+`:`fn main() {
+    println!("Hello, Ferrite!");
+}
+`;
       this.model.replace(files);this.model.name=result.name;this.app.options={};this.app.cargo.options={};this.app.backend='browser';this.app.$('backend-select').value='browser';
       if(result.kind==='ui')this.createView('src/app.ui.rs');this.model.save();this.store.archive();this.app.renderWorkspace();
     });

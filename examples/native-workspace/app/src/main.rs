@@ -1,4 +1,8 @@
-use std::{env, io::{self, Write}, thread};
+use std::{
+    env,
+    io::{self, Write},
+    thread,
+};
 
 include!(concat!(env!("OUT_DIR"), "/build_info.rs"));
 const ASSET: &[u8] = include_bytes!("../assets/demo.bin");

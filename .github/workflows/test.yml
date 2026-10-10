@@ -42,6 +42,10 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt --component rust-analyzer --component rust-src
           rustup default stable
           rustup target add wasm32-unknown-unknown
+      - name: Verify readable sample source formatting
+        run: |
+          rustup toolchain install 1.90.0 --profile minimal --component rustfmt
+          npm run format:samples:check
       - name: Compile and test the standard-Rust UI workspace offline
         run: |
           set -o pipefail

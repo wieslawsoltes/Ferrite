@@ -2,7 +2,7 @@ name: Materialize reviewed 7GUIs checkpoint
 on:
   push:
     branches: [feat/seven-guis-sample-browser]
-    paths: [.github/7guis-checkpoint.patch]
+    paths: [.github/7guis-checkpoint.patch, .github/workflows/materialize-7guis.yml]
 permissions:
   contents: write
 concurrency:
@@ -20,8 +20,11 @@ jobs:
       - name: Apply reviewed source changes and regenerate deterministic assets
         run: |
           test -f .github/7guis-checkpoint.patch
+          # Correct the copied unchanged context line, not the implementation.
+          sed -i 's/for (const char of value) { const code = char.codePointAt(0);/for (const c of value) { const code = c.codePointAt(0);/' .github/7guis-checkpoint.patch
           git apply --index .github/7guis-checkpoint.patch
-          git rm .github/7guis-checkpoint.patch
+          rm .github/7guis-checkpoint.patch
+          git add -u .github/7guis-checkpoint.patch
           if test -f tools/build-seven-guis.mjs; then node tools/build-seven-guis.mjs; fi
           node tools/bundle-workers.mjs
           node tools/bundle-sdk.mjs

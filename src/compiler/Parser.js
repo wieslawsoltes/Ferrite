@@ -181,13 +181,12 @@ export class Parser {
       return [this.c.node('impl', start, {target, generics, predicates, trait: forTrait, methods, attributes})];
     }
     if (this.c.match('trait')) {
-      const name = this.c.identifier(), bounds = [];
-      if (this.c.is('<')) throw new Diagnostic('F_TRAIT_GENERIC', 'Parameterized traits require the generic trait continuation', this.c.peek().span);
+      const name = this.c.identifier(), generics = this.generics(), bounds = [];
       if (this.c.match(':') && !this.c.is('{') && !this.c.is('where')) { do { bounds.push(this.bound()); } while (this.c.match('+') && !this.c.is('{') && !this.c.is('where')); }
       const predicates = this.whereClause();
       this.c.eat('{'); const methods = [];
       while (!this.c.is('}')) methods.push(...this.item('Self', name));
-      this.c.eat('}'); return [this.c.node('trait', start, {name, bounds, predicates, methods, visibility, attributes})];
+      this.c.eat('}'); return [this.c.node('trait', start, {name, generics, bounds, predicates, methods, visibility, attributes})];
     }
     if (this.c.match('const')) {
       const name = this.c.identifier(); this.c.eat(':'); const type = this.type(); this.c.eat('=');
@@ -434,6 +433,12 @@ export class Parser {
   }
   prefix(allowRecord) {
     const start = this.c.peek();
+    if (this.c.match('<')) {
+      const qualifiedSelf = this.type(); this.c.eat('as');
+      const qualifiedTrait = this.type(); this.c.eat('>'); this.c.eat('::');
+      const name = '__qualified::' + this.path();
+      return this.c.node('variable', start, {name, qualifiedSelf, qualifiedTrait});
+    }
     if (this.c.is('..=')) throw new Diagnostic('F_RANGE_VALUE', 'Range-to values are not yet implemented by the browser compiler', start.span);
     if (this.c.match('..')) return this.c.node('assigneeRest', start);
     if (['return', 'break', 'continue'].includes(start.value)) return this.controlExpression(allowRecord);

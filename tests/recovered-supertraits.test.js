@@ -79,9 +79,9 @@ test('supertrait changes invalidate declaration and call caches',()=>{
 test('cfg removes supertrait cycles before hierarchy construction',()=>{
   assert.doesNotThrow(()=>compile('#[cfg(any())]trait A:B{}#[cfg(any())]trait B:A{}fn main(){}'));
 });
-test('general trait environments remain explicit boundaries',()=>{
-  assert.throws(()=>compile('trait A<T>{}fn main(){}'),e=>e.code==='F_TRAIT_GENERIC');
-  assert.throws(()=>compile('trait A where i32:Copy{}fn main(){}'),e=>e.code==='F_TRAIT_PREDICATE');
+test('parameterized traits and concrete predicates no longer hit old boundaries',()=>{
+  assert.doesNotThrow(()=>compile('trait A<T>{}fn main(){}'));
+  assert.doesNotThrow(()=>compile('trait A where i32:Copy{}fn main(){}'));
   assert.throws(()=>compile('trait A:Fn(i32)->i32{}fn main(){}'),e=>e.code==='F_SUPERTRAIT_CALLABLE');
 });
 

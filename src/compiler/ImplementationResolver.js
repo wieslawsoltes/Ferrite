@@ -66,7 +66,7 @@ export class ImplementationResolver {
       const root = T.application(target).name, shape = this.index.structs.get(root) ?? this.index.enums.get(root);
       if (!impl.trait && (!shape || ['Option', 'Result'].includes(root) || (shape.crateRoot ?? '') !== (impl.crateRoot ?? '')))
         throw new Diagnostic('E0116', 'Inherent implementations require a nominal type defined in this crate', impl.span);
-      const used = new Set(), queue = [entry.pattern];
+      const used = new Set(), queue = [entry.pattern,...(entry.trait?[ImplTypePattern.parse(entry.traitRef,parameters,`impl${entry.id}:`)]:[])];
       while (queue.length) { const term = queue.pop(); if (term.variable) used.add(term.variable); else queue.push(...term.args); }
       for (const name of parameters) if (!used.has(`impl${entry.id}:` + name))
         throw new Diagnostic('E0207', `Implementation parameter ${name} is not constrained by its self type`, impl.span);
@@ -85,7 +85,7 @@ export class ImplementationResolver {
           if (raw.startsWith('impl ')) continue; // Existing opaque-return analysis owns this case.
           const type = this.index.type(raw, fn.module, target, all, fn);
           this.index.typeResolver.validateKnown(type, all, fn);
-          obligations.validate(type,fn);
+          obligations.validateCanonical(type,fn);
         }
       }
     }
@@ -109,26 +109,42 @@ export class ImplementationResolver {
   applicable(entry, mapping, prove=(type,bound)=>this.a.hasBound(type,bound)) {
     if ([...mapping.values()].some(type => type === null)) return true;
     const normalize = type => this.index.type(T.substitute(type, mapping), entry.impl.module, T.substitute(entry.target, mapping));
+    for (const parameter of entry.impl.generics ?? [])
+      if (!prove(mapping.get(parameter.name), 'core::marker::Sized')) return false;
     for (const parameter of entry.impl.generics ?? []) for (const bound of parameter.bounds)
       if (!prove(mapping.get(parameter.name), this.traits.hierarchy.canonical(normalize(bound), entry.impl.module, entry.impl))) return false;
     for (const predicate of entry.impl.predicates ?? []) for (const bound of predicate.bounds)
       if (!prove(normalize(predicate.type), this.traits.hierarchy.canonical(normalize(bound), entry.impl.module, entry.impl))) return false;
     return true;
   }
-  lookup(type, method, module, node, context=null, boundTraits=null) {
+  lookup(type, method, module, node, context=null, boundTraits=null, requiredTrait=null) {
     this.lookups++;
     const candidates = [...(this.byOwner.get(this.head(type))?.get(method) ?? []),...(this.byOwner.get('*')?.get(method) ?? [])], matches = [];
     let boundFailure = false;
     const query = ImplTypePattern.parse(type, new Set(), 'query:');
     for (const entry of candidates) {
       this.candidatesExamined++;
-      const mapping = this.match(entry, type, query);
+      if(requiredTrait && entry.trait?.name!==T.application(requiredTrait).name)continue;
+      let mapping = this.match(entry, type, query);
       if (!mapping) continue;
-      if(entry.trait && entry.trait.name!==context?.implementedTrait && !boundTraits?.has(entry.trait.name) && !this.inScope(entry.trait,module))continue;
+      if(entry.trait) {
+        const scoped=[...(requiredTrait?[requiredTrait]:boundTraits??[])].filter(bound=>T.application(bound).name===entry.trait.name);
+        if(scoped.length) {
+          const matched=scoped.map(bound=>this.traits.match(entry,type,bound)).filter(Boolean);
+          if(!matched.length)continue;
+          if(matched.length>1)throw new Diagnostic('E0283',`Multiple trait applications select ${method}`,node.span);
+          mapping=matched[0];
+        } else if(entry.trait.name!==T.application(context?.implementedTrait??'').name && !this.inScope(entry.trait,module))continue;
+      }
       if (!this.applicable(entry, mapping)) { boundFailure = true; continue; }
-      matches.push({fn: entry.methods.get(method), mapping});
+      const fn=entry.methods.get(method);
+      for(const [name,raw] of fn.defaultArguments??[]) {
+        const unresolved=[...entry.parameters].some(parameter=>mapping.get(parameter)===null&&T.substitute(raw,new Map([[parameter,'_']]))!==raw);
+        mapping.set(name,unresolved?null:T.substitute(raw,mapping));
+      }
+      matches.push({fn,mapping});
     }
-    const defaults=boundTraits?matches.filter(candidate=>boundTraits.has(candidate.fn.implementedTrait)):context?.defaultTrait?matches.filter(candidate=>candidate.fn.implementedTrait===context.defaultTrait):[];
+    const defaults=boundTraits?matches.filter(candidate=>boundTraits.has(T.substitute(candidate.fn.implementedTrait??'',candidate.mapping))):context?.defaultTrait?matches.filter(candidate=>candidate.fn.implementedTrait===context.defaultTrait):[];
     const inherent = matches.filter(candidate => !candidate.fn.implementedTrait), selected = defaults.length?defaults:inherent.length ? inherent : matches;
     if (selected.length > 1) throw new Diagnostic('E0034', `Multiple applicable methods named ${method} for ${type}`, node.span);
     if (!selected.length) {
@@ -145,6 +161,16 @@ export class ImplementationResolver {
     return false;
   }
   associated(node, context) {
+    if(node.qualifiedTrait) {
+      const type=this.a.normalize(node.qualifiedSelf,context,node);
+      const module=context.instance.fn.module;
+      const trait=this.traits.hierarchy.canonical(node.qualifiedTrait,module,node,new Set(context.instance.substitution.keys()),type);
+      const bound=T.substitute(trait,context.instance.substitution);
+      const method=node.name.slice(node.name.lastIndexOf('::')+2);
+      const result=this.lookup(type,method,module,node,context.instance.fn,null,bound);
+      if(!result)throw new Diagnostic('E0277',`No implementation of ${bound} for ${type} supplies ${method}`,node.span);
+      return result;
+    }
     const separator = node.name.lastIndexOf('::'); if (separator < 0) return null;
     let owner = node.name.slice(0, separator);
     const boundTraits = context.methodScope?.traits(owner);

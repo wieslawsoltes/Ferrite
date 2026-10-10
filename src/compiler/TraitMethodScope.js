@@ -6,16 +6,17 @@ import {ImplTypePattern as Pattern} from './ImplTypePattern.js';
  * privileges. Origins follow bindings/projections and are kept in side tables,
  * never embedded in immutable syntax, replayed HIR or runtime values. */
 export class TraitMethodScope {
-  constructor(analyzer, declaration) {
+  constructor(analyzer, declaration, substitution = new Map()) {
+    this.substitution=substitution;
     this.a = analyzer; this.fn = declaration;
     this.graph = analyzer.implementations.traits.hierarchy;
     this.bindings = new WeakMap(); this.expressions = new WeakMap(); this.bounds = new Map();
     this.parameters = new Set(declaration.generics.map(g => g.name));
     if (declaration.defaultTrait) this.parameters.add('Self');
     const assume = (type, raw) => {
-      const subject = this.normalize(type), trait = this.graph.canonical(raw, declaration.module, declaration);
+      const subject = this.normalize(type), trait = this.graph.canonical(raw, declaration.module, declaration, this.parameters, 'Self');
       if (!this.bounds.has(subject)) this.bounds.set(subject, new Set());
-      for (const parent of this.graph.closure(trait)) this.bounds.get(subject).add(parent);
+      for (const parent of this.graph.closure(trait,subject)) this.bounds.get(subject).add(parent);
     };
     for (const parameter of declaration.generics) for (const bound of parameter.bounds) assume(parameter.name, bound);
     for (const predicate of declaration.predicates ?? []) for (const bound of predicate.bounds) assume(predicate.type, bound);
@@ -23,6 +24,7 @@ export class TraitMethodScope {
     this.closure = declaration.generatedClosure ? analyzer.closures.get(declaration.owner) : null;
     const inherited = this.closure?.ctx.methodScope;
     if (inherited) {
+      this.substitution = new Map([...inherited.substitution, ...substitution]);
       for (const parameter of inherited.parameters) this.parameters.add(parameter);
       for (const [subject, traits] of inherited.bounds) {
         if (!this.bounds.has(subject)) this.bounds.set(subject, new Set());
@@ -36,7 +38,8 @@ export class TraitMethodScope {
   }
   traits(origin) {
     while (T.reference(origin)) origin = T.target(origin);
-    return this.bounds.get(origin) ?? null;
+    const traits=this.bounds.get(origin);
+    return traits?new Set([...traits].map(trait=>T.substitute(trait,this.substitution))):null;
   }
   remember(node, origin) { if (this.active && node && origin) this.expressions.set(node, origin); }
   bind(binding, origin) { if (this.active && binding && origin) this.bindings.set(binding, origin); }

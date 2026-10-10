@@ -1,3 +1,4 @@
+import {parameterizedTraitCases,parameterizedTraitCompileFailCases} from './parameterized-traits.js';
 import {supertraitCases as recoveredSupertraitCases, supertraitCompileFailCases as recoveredSupertraitCompileFailCases} from './recovered-supertraits.js';
 import {supertraitCases, supertraitCompileFailCases} from './supertraits.js';
 import {receiverReborrowCases,receiverReborrowCompileFailCases,receiverReborrowPanicCases} from './receiver-reborrows.js';
@@ -143,3 +144,6 @@ languageCases.push(...traitHardeningCases.map(([name,source,output])=>({name,sou
 languageCases.push(...receiverReborrowCases.map(([name,source,output])=>({name,source,output,kind:'run'})),...receiverReborrowCompileFailCases.map(([name,source])=>({name,source,kind:'compile-fail'})));
 
 languageCases.push(...receiverReborrowPanicCases.map(([name,source,code,output])=>({name,source,code,output,kind:'panic'})));
+
+languageCases.push(...parameterizedTraitCases.map(([name, source, output]) => ({name, source, output, kind:'run'})),
+  ...parameterizedTraitCompileFailCases.map(([name, source]) => ({name, source, kind:'compile-fail'})));

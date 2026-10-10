@@ -34,12 +34,13 @@ export class TraitHierarchy {
     this.membership = new WeakMap(); this.ancestorLists = new WeakMap();
     this.edges = 0; this.visits = 0; this.hits = 0; this.characters = 0;
     for (const trait of index.traits.values()) {
-      const parents = new Set();
-      for (const bound of trait.bounds ?? []) parents.add(this.canonical(bound, trait.module, trait));
+      const parents = new Set(), parameters = new Set((trait.generics ?? []).map(g => g.name));
+      if (parameters.has('Self') || parameters.size !== (trait.generics ?? []).length)
+        throw new Diagnostic('E0403', 'Duplicate trait type parameter', trait.span);
+      for (const bound of trait.bounds ?? []) parents.add(this.canonical(bound, trait.module, trait, parameters));
       for (const predicate of trait.predicates ?? []) {
-        if (predicate.type !== 'Self') throw new Diagnostic('F_TRAIT_PREDICATE',
-          'Trait-level predicates currently require Self as their subject', predicate.span);
-        for (const bound of predicate.bounds) parents.add(this.canonical(bound, trait.module, predicate));
+        if (predicate.type === 'Self') for (const bound of predicate.bounds)
+          parents.add(this.canonical(bound, trait.module, predicate, parameters));
       }
       for (const parent of parents) if (/^(Fn|FnMut|FnOnce)\(/.test(parent)) throw new Diagnostic('F_SUPERTRAIT_CALLABLE',
         'Callable supertraits require their associated output-type contract', trait.span);
@@ -51,12 +52,14 @@ export class TraitHierarchy {
   }
   limit(node) { throw new Diagnostic('F_TRAIT_HIERARCHY_LIMIT', 'Supertrait graph or elaboration budget exceeded', node?.span); }
   tick(node) { if (++this.visits > this.maxVisits) this.limit(node); }
-  canonical(raw, module = '', node = null) {
+  canonical(raw, module = '', node = null, parameters = new Set(), self = 'Self') {
     const app = T.application(raw);
     const declaration = this.index.typeResolver.find(this.index.traits, app.name, module, node);
     if (declaration) {
-      if (app.args.length) throw new Diagnostic('E0107', `Trait ${declaration.name} has no type arguments`, node?.span);
-      return declaration.name;
+      const arity = declaration.generics?.length ?? 0;
+      if (app.args.length !== arity) throw new Diagnostic('E0107', `Trait ${declaration.name} expects ${arity} type argument(s)`, node?.span);
+      const args = app.args.map(type => this.index.type(type, module, self, parameters, node));
+      return declaration.name + (args.length ? `<${args.join(',')}>` : '');
     }
     const name = raw.split('::').at(-1);
     if (Object.hasOwn(paths, name) && (raw === name || raw === paths[name] || raw === paths[name].replace(/^core::/, 'std::'))) return paths[name];
@@ -66,17 +69,27 @@ export class TraitHierarchy {
   builtinName(identity) {
     return builtins.has(identity) ? identity.split('::').at(-1) : null;
   }
-  parents(identity) { return this.direct.get(identity) ?? builtinParents.get(identity) ?? empty; }
+  parents(identity, self = 'Self') {
+    const {name, args} = T.application(identity), raw = this.direct.get(name);
+    if (!raw) return builtinParents.get(identity) ?? empty;
+    const generics = this.index.traits.get(name)?.generics ?? [];
+    if (generics.length !== args.length) throw new Diagnostic('E0107', `Trait ${name} expects ${generics.length} type argument(s)`);
+    if (!generics.length && self === 'Self') return raw;
+    const map = new Map([['Self', self], ...generics.map((g, i) => [g.name, args[i]])]);
+    const result = raw.map(parent => T.substitute(parent, map));
+    if (result.some(parent => parent.length > 65536)) this.limit(this.index.traits.get(name));
+    return result;
+  }
   validateCycles() {
     const color = new Map();
     for (const root of this.direct.keys()) {
       if (color.get(root) === 2) continue;
       const stack = [{id: root, next: 0}]; color.set(root, 1);
       while (stack.length) {
-        const frame = stack.at(-1), parents = this.parents(frame.id);
+        const frame = stack.at(-1), parents = this.direct.get(frame.id) ?? builtinParents.get(frame.id) ?? empty;
         this.tick(this.index.traits.get(frame.id));
         if (frame.next === parents.length) { color.set(frame.id, 2); stack.pop(); continue; }
-        const parent = parents[frame.next++];
+        const parent = T.application(parents[frame.next++]).name;
         if (color.get(parent) === 1) {
           const cycle = [...stack.slice(stack.findIndex(entry => entry.id === parent)).map(entry => entry.id), parent];
           throw new Diagnostic('E0391', `Cycle in supertraits: ${cycle.join(' -> ')}`, this.index.traits.get(frame.id)?.span);
@@ -86,28 +99,30 @@ export class TraitHierarchy {
     }
   }
   /** Includes the trait itself; deterministic preorder deduplicates diamonds. */
-  closure(identity) {
-    if (this.cache.has(identity)) {
-      this.hits++; const value = this.cache.get(identity);
-      this.cache.delete(identity); this.cache.set(identity, value); return value;
+  closure(identity, self = 'Self') {
+    const key = self === 'Self' ? identity : JSON.stringify([identity, self]);
+    if (this.cache.has(key)) {
+      this.hits++; const value = this.cache.get(key);
+      this.cache.delete(key); this.cache.set(key, value); return value;
     }
     const seen = new Set(), pending = [identity], result = [];
-    let queryVisits = 0;
+    let queryVisits = 0, queryCharacters = 0;
     while (pending.length) {
       if (++queryVisits > this.maxQueryVisits || ++this.queryVisits > this.maxTotalVisits) this.limit(this.index.traits.get(identity));
       const next = pending.pop(); this.tick(this.index.traits.get(identity));
       if (seen.has(next)) continue;
+      if ((queryCharacters += next.length) > 4000000) this.limit(this.index.traits.get(T.application(identity).name));
       seen.add(next); result.push(next);
-      const parents = this.parents(next);
+      const parents = this.parents(next, self);
       for (let i = parents.length - 1; i >= 0; i--) pending.push(parents[i]);
     }
-    const value = Object.freeze(result), cost = identity.length + result.reduce((sum, item) => sum + item.length, 0);
+    const value = Object.freeze(result), cost = key.length + result.reduce((sum, item) => sum + item.length, 0);
     if (this.maxEntries > 0 && cost <= this.maxCharacters) {
       while (this.cache.size && (this.cache.size >= this.maxEntries || this.characters + cost > this.maxCharacters)) {
         const first = this.cache.keys().next().value, old = this.cache.get(first);
         this.characters -= first.length + old.reduce((sum, item) => sum + item.length, 0); this.cache.delete(first);
       }
-      this.cache.set(identity, value); this.characters += cost;
+      this.cache.set(key, value); this.characters += cost;
     }
     return value;
   }

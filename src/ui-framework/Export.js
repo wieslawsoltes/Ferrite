@@ -20,7 +20,7 @@ export function exportHTML(artifact, {backend = 'javascript', title = 'Ferrite R
   if (channel !== null && !/^[a-f0-9]{32,128}$/.test(channel)) throw Error('Invalid preview channel');
   props = artifact.entryPropsType ? new OwnedValues(artifact.ownedSchemas).encode(artifact.entryPropsType, new OwnedValues(artifact.ownedSchemas).decode(artifact.entryPropsType, props)) : null;
   const compact = {format: artifact.format, abi: artifact.abi, entry: artifact.entry, maxSteps: artifact.maxSteps, file: artifact.file, source: artifact.source,
-    entryPropsType: artifact.entryPropsType, ownedSchemas: artifact.ownedSchemas, files: artifact.files, optimizedMir: artifact.optimizedMir, ...(backend === 'javascript' ? {js: artifact.js} : {}), ...(backend === 'wasm' ? {wasm: {bytes: artifact.wasm.bytes}} : {})};
+    entryPropsType: artifact.entryPropsType, ownedSchemas: artifact.ownedSchemas, files: artifact.files, mir: artifact.mir, optimizedMir: artifact.optimizedMir, ...(backend === 'javascript' ? {js: artifact.js} : {}), ...(backend === 'wasm' ? {wasm: {bytes: artifact.wasm.bytes}} : {})};
   const bootstrap = `
 'use strict';
 const createUIRuntime = ${createUIRuntime.toString()};
@@ -46,6 +46,13 @@ session.subscribe(event => {
   } else send({event:event.type,detail:event});
 });
 if(channel){
+  // Keyboard events cannot bubble across the opaque preview boundary. Only the
+  // active owning IDE session may act on this capability-scoped intent.
+  document.addEventListener('keydown',event=>{
+    if(event.altKey||event.ctrlKey||event.metaKey||event.repeat)return;
+    const command=event.key==='F5'?(event.shiftKey?'stop':'continue'):event.key==='F10'?(event.shiftKey?'back-line':'step-over'):event.key==='F11'?(event.shiftKey?'step-out':'step-line'):null;
+    if(command){event.preventDefault();event.stopImmediatePropagation();send({event:'debug-command',command});}
+  },true);
   document.addEventListener('click',event=>{if(!picking)return;const node=event.target.closest?.('[data-ferrite-source]');if(node){event.preventDefault();event.stopImmediatePropagation();send({event:'select',id:node.getAttribute('data-ferrite-source')});}},true);
   window.addEventListener('message',event=>{
     const message=event.data;
@@ -55,15 +62,16 @@ if(channel){
       if(message.command==='inspect')result=session.inspect();
       else if(message.command==='layout')result=canvas.configure(message);
       else if(message.command==='pick'){picking=!!message.value;result={picking};}
-      else if(message.command==='debug.arm')result=session.armDebugger({breakpoints:message.breakpoints??[]});
-      else if(['debug.step','debug.step-line','debug.back','debug.back-line','debug.restart','debug.continue','debug.stop'].includes(message.command))result=session.debug(message.command.slice(6));
+      else if(message.command==='debug.arm')result=session.armDebugger({breakpoints:message.breakpoints??[],pauseOnEntry:message.pauseOnEntry??true});
+      else if(message.command==='debug.breakpoints')result=session.setBreakpoints(message.breakpoints??[]);
+      else if(['debug.pause','debug.step','debug.step-line','debug.step-over','debug.step-out','debug.back','debug.back-line','debug.restart','debug.continue','debug.stop'].includes(message.command))result=session.debug(message.command.slice(6));
       else if(message.command==='state.set')result=session.setState(message.handle,message.value);
       else throw Error('Unknown preview command');
       send({reply:message.id,result});
     }catch(error){send({reply:message.id,error:{message:error.message,code:error.code,span:error.span}});}
   });
 }
-Object.defineProperty(window,'ferriteUI',{value:Object.freeze({version:'0.1.0',inspect:()=>session.inspect(),armDebugger:options=>session.armDebugger(options),debug:command=>session.debug(command),setState:(handle,value)=>session.setState(handle,value),dispose:()=>session.dispose()}),configurable:false});
+Object.defineProperty(window,'ferriteUI',{value:Object.freeze({version:'0.1.0',inspect:()=>session.inspect(),armDebugger:options=>session.armDebugger(options),setBreakpoints:points=>session.setBreakpoints(points),debug:command=>session.debug(command),setState:(handle,value)=>session.setState(handle,value),dispose:()=>session.dispose()}),configurable:false});
 try{session.mount(document.getElementById('app'),{hydrate:${scriptJSON(hydrate)},identifierPrefix:${scriptJSON(identifierPrefix)}});send({event:'ready',snapshot:session.inspect()});}catch(error){showError(error);}
 window.addEventListener('pagehide',()=>{canvas?.dispose();session.dispose();},{once:true});
 `;

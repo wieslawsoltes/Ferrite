@@ -35,7 +35,7 @@ export class UIStudioSession {
     return node;
   }
   view() { createDesignerView(this); }
-  dispose() { this.disposed=true; this.dock?.dispose(); clearTimeout(this.buildTimer); this.active?.abort(); this.unsubscribe(); this.unselect(); this.preview.dispose(); void this.compiler.close(); }
+  dispose() { this.debugRequest?.abort(); this.debugView?.dispose(); this.disposed=true; this.dock?.dispose(); clearTimeout(this.buildTimer); this.active?.abort(); this.unsubscribe(); this.unselect(); this.preview.dispose(); void this.compiler.close(); }
 }
 
 Object.assign(UIStudioSession.prototype, StudioProject, StudioPreview, StudioEditing, StudioTools);

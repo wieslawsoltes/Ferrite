@@ -22,7 +22,23 @@ export interface UICompileOptions extends CompileOptions { maxSteps?: number; fi
 export interface UIOptions extends Omit<UICompileOptions, 'runtime'> { backend?: Backend; runtime?: RuntimeAPI; maxHandles?: number; maxTrace?: number; onError?: (error: Error & Partial<Diagnostic>) => void; hydrate?: boolean; identifierPrefix?: string; onRecoverableError?: (error: Error) => void; props?: unknown; onEvent?: (name: string, value: JsonValue) => void; components?: Record<string, unknown> }
 export interface ExportOptions { backend?: Backend; title?: string; css?: string; channel?: string | null; hydrate?: boolean; identifierPrefix?: string; props?: unknown }
 export interface UIState { handle: number; type: string; value: JsonValue }
-export interface UISnapshot { states: UIState[]; calls: number; handles: number; debugger: Record<string, unknown>; [name: string]: unknown }
+export interface UIBreakpoint { file: string; line: number }
+export type UIDebugCommand = 'pause' | 'step' | 'step-line' | 'step-over' | 'step-out' | 'back' | 'back-line' | 'restart' | 'continue' | 'stop';
+export interface UIDebugLocal { slot: number; name?: string; type: string; value: string; span?: SourceSpan }
+export interface UIDebugFrame { function: string; block: string; span?: SourceSpan; locals: UIDebugLocal[] }
+export interface UIDebugState {
+  done: boolean; steps: number; output: string; result: string | null; next: SourceSpan | null;
+  last: {function: string; block: string; instruction: number; operation: string; span?: SourceSpan} | null;
+  frames: UIDebugFrame[]; history: {available: number; bytes: number; dropped: number; boundary: string; work: number} | null;
+}
+export interface UIDebugSnapshot {
+  armed: boolean; status: 'disarmed' | 'waiting' | 'running' | 'paused' | 'completed' | 'error'; reason: string | null;
+  error: {message: string; code: string; span?: SourceSpan} | null; queued: number; event?: string;
+  state: UIDebugState | null; trace: Record<string, unknown>[]; breakpoints: UIBreakpoint[];
+  breakpointBindings: (UIBreakpoint & {verified: boolean; message: string})[]; stagedStates: UIState[]; boundary: string;
+  [name: string]: unknown;
+}
+export interface UISnapshot { states: UIState[]; calls: number; handles: number; debugger: UIDebugSnapshot; [name: string]: unknown }
 export function compileRust(source: string, options?: CompileOptions): RustArtifact;
 export function compileUI(source: string, options?: UICompileOptions): UIArtifact;
 /** Compiled artifacts contain executable JavaScript; accept only trusted artifacts. */
@@ -39,9 +55,10 @@ export class UISession {
   constructor(artifact: UIArtifact, options?: UIOptions);
   readonly artifact: UIArtifact; readonly backend: Backend; readonly root: Root | null; readonly disposed: boolean;
   updateProps(props: unknown, bindings?: {onEvent?: (name: string, value: JsonValue) => void; components?: Record<string, unknown>}): this;
-  mount(container: Element, options?: {hydrate?: boolean; identifierPrefix?: string; onRecoverableError?: (error: Error) => void}): this; inspect(): UISnapshot; inspectDebugger(): Record<string, unknown>;
-  armDebugger(options?: {breakpoints?: {file: string; line: number}[]}): Record<string, unknown>;
-  debug(command?: 'step' | 'step-line' | 'back' | 'back-line' | 'restart' | 'continue' | 'stop'): Record<string, unknown>;
+  mount(container: Element, options?: {hydrate?: boolean; identifierPrefix?: string; onRecoverableError?: (error: Error) => void}): this; inspect(): UISnapshot; inspectDebugger(): UIDebugSnapshot;
+  armDebugger(options?: {breakpoints?: UIBreakpoint[]; pauseOnEntry?: boolean}): UIDebugSnapshot;
+  setBreakpoints(breakpoints: UIBreakpoint[]): UIDebugSnapshot;
+  debug(command?: UIDebugCommand): UIDebugSnapshot;
   setState(handle: number, value: JsonValue): UISnapshot;
   subscribe(listener: (event: Record<string, unknown>) => void): () => void; dispose(): void;
 }
@@ -73,7 +90,7 @@ export class UIProject {
   changes(settings?: Partial<UIProjectSettings>, css?: string): Record<string, string>;
 }
 
-export interface RustReactHandle { inspect(): UISnapshot; setState(handle: number, value: JsonValue): UISnapshot; armDebugger(options?: {breakpoints?: {file: string; line: number}[]}): Record<string, unknown>; debug(command?: 'step' | 'step-line' | 'back' | 'back-line' | 'restart' | 'continue' | 'stop'): Record<string, unknown> }
+export interface RustReactHandle { inspect(): UISnapshot; setState(handle: number, value: JsonValue): UISnapshot; armDebugger(options?: {breakpoints?: UIBreakpoint[]; pauseOnEntry?: boolean}): UIDebugSnapshot; debug(command?: 'pause' | 'step' | 'step-line' | 'step-over' | 'step-out' | 'back' | 'back-line' | 'restart' | 'continue' | 'stop'): Record<string, unknown> }
 export interface RustReactProps<T> { value?: T; onEvent?: (name: string, value: JsonValue) => void; components?: Record<string, unknown>; ref?: {current: RustReactHandle | null} | ((handle: RustReactHandle | null) => void) | null }
 /** The return element type is inferred from the injected React installation. */
 export function createReactAdapter<R extends {createElement: (...args: never[]) => unknown}>(dependencies: {React: R; ReactDOMClient?: object; ReactDOM?: object; ReactDOMServer?: object}): {

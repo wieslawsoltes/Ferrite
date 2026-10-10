@@ -23,7 +23,13 @@ createRoot(node).render(<Fragment>{app}{memoElement}{refElement}</Fragment>);
 const source = 'fn app() -> ui::Node { view! { <h1>Hello</h1> } }';
 const artifact = compileUI(source, {maxSteps: 100000});
 const session = mountUI(artifact, document.createElement('div'), {backend: 'wasm', runtime: Ferrite.createUIRuntime()});
-session.armDebugger({breakpoints: [{file: 'src/ui.rs', line: 1}]}); session.dispose();
+session.armDebugger({breakpoints: [{file: 'src/ui.rs', line: 1}], pauseOnEntry: false});
+const debugStatus: string = session.debug('step-over').status;
+const debugFrames = session.inspectDebugger().state?.frames;
+session.setBreakpoints([]); session.debug('pause'); session.debug('step-out'); session.debug('stop');
+// @ts-expect-error debug commands are a closed, typed protocol.
+session.debug('arbitrary-eval');
+void debugStatus; void debugFrames; session.dispose();
 const html: string = exportHTML(artifact);
 const designer = new SourceDesigner(source);
 designer.apply({op: 'setTag', node: designer.nodes[0].id, value: 'h2'}, designer.revision);

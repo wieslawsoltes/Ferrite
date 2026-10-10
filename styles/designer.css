@@ -107,3 +107,16 @@
   .ui-session .studio-main-toolbar>select { max-width:86px; }
 }
 @media (pointer:coarse) { .dock-panel-tab { padding:10px; } .dock-icon { width:28px; height:32px; } .dock-float-resize { width:30px; height:30px; } .studio-outline-row { min-height:34px; } }
+
+/* Retained UI and main debugger inspectors share keyboard-accessible controls. */
+.debug-toolbar { flex-wrap:wrap; height:auto; min-height:34px; flex-shrink:0; gap:3px; }
+.debug-toolbar button { min-height:28px; }
+.debug-body { min-width:0; overflow:auto; }
+.debug-body details { padding:5px 10px; }
+.debug-body summary { cursor:pointer; font-size:11px; }
+.debug-body .debug-summary { overflow-wrap:anywhere; }
+.debug-body .stack-frames,.debug-body .stack-locals { min-width:0; overflow:auto; }
+.debug-body .stack-frame { max-width:100%; overflow:hidden; text-overflow:ellipsis; justify-content:flex-start; }
+.studio-debug-inspector { container-type:inline-size; }
+.studio-debug-inspector .debug-toolbar button { font-size:10px; padding:4px; }
+@container (max-width:380px) { .studio-debug-inspector .debug-split { display:flex; flex-direction:column; } .studio-debug-inspector .stack-frames { max-height:140px; } }

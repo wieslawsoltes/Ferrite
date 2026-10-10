@@ -16,6 +16,14 @@ export class UICommandController {
     }
     return null;
   }
+  async debug(command) {
+    const file = this.entry(); if (!file) return false;
+    const session = this.app.studio.sessions.get(file);
+    if (command === 'stop') { this.cancel(); session?.stopDebugging(); return true; }
+    if (command === 'continue' && (!session?.artifact || !session.preview.ready || !session.snapshot?.debugger?.armed)) await this.run('debug', file);
+    else if (session) await session.debug(command);
+    return true;
+  }
   cancel(){this.generation++;this.request?.abort();this.checkRequest?.abort();}
   async run(command,file,{automatic=false}={}){
     if(command==='check')this.checkRequest?.abort();else this.cancel();const app=this.app,model=app.model,epoch=model.workspaceEpoch,revision=model.revision,generation=this.generation,backend=app.backend,optimize=app.settings.optimize;
@@ -35,13 +43,28 @@ export class UICommandController {
         const result=await this.compiler.compile(model.files,'ui-export',options,controller.signal);
         if(current()&&app.publishUIBuild(result.build,file,revision,epoch)){app.download(file.split('/').pop().replace(/\.rs$/,'.html'),result.html,'text/html;charset=utf-8');app.uiBuildOutput(command,result.build,'Build succeeded. Standalone Rust UI HTML exported.');app.status('Standalone Rust UI HTML exported','success');}
       }else{
+        // A stale CLI completion cannot take over the UI debugger or source selection.
+        app.execution?.stop(false); app.compiler?.cancel(); app.requestSerial = (app.requestSerial ?? 0) + 1;
         const session=app.studio.session(file);session.backend=options.backend;session.backendSelect.value=options.backend;
         // Avoid a second queued automatic preview; this command owns the build.
-        session.armOnReady=command==='debug';session.startQueued=true;try{app.studio.showSession(session);await session.build({signal:controller.signal});}finally{session.startQueued=false;}
-        if(live()&&this.entry()===file&&session.inspection&&app.buildRevision===model.revision){
-          if(command==='debug')session.dock.open('debug');
-          app.uiBuildOutput(command,session.inspection,'Build succeeded. The UI runs in its isolated live preview; no terminal stdout is expected.');
-          app.status(session.preview.ready?'Rust UI preview running':'Rust UI preview loading','success');
+        session.startQueued=true;
+        try {
+          app.studio.showSession(session);
+          const reusable = command === 'debug' && session.artifact && session.preview.ready && session.compiledGeneration === session.generation && !session.nativeAsset && session.compiledBackend === options.backend && session.compiledOptimize === optimize;
+          if (!reusable) await session.build({signal:controller.signal});
+          await session.preview.waitUntilReady({signal:controller.signal});
+          controller.signal.throwIfAborted();
+          if (!live() || this.entry() !== file) return;
+          if (command === 'debug') await session.debug(session.snapshot?.debugger?.armed ? 'continue' : 'arm', controller.signal);
+        } finally { session.startQueued=false; }
+        if(live()&&this.entry()===file){
+          if(session.inspection && app.buildRevision === model.revision) app.uiBuildOutput(command,session.inspection,'Build succeeded. The UI runs in its isolated live preview; no terminal stdout is expected.');
+          if(command==='debug') {
+            // The main debugger owns inspection when the retained designer is compact.
+            // Keep Canvas as its single-panel fallback instead of hiding the app to debug.
+            session.dock.open('debug'); session.dock.open('canvas'); app.dock.open('debugger');
+          }
+          app.status(command === 'debug' ? 'Rust UI debugger attached · interact with the preview to hit breakpoints' : 'Rust UI preview ready','success');
         }
       }
     }catch(error){if(current()&&error.name!=='AbortError')app.failUIBuild(error,file,revision,epoch);}

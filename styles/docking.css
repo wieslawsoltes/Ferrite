@@ -1,0 +1,70 @@
+/* The workbench owns geometry; tool content keeps a stable DOM parent. */
+body{display:flex;flex-direction:column}
+.main-toolbar{height:48px;min-height:48px;padding:0 8px;gap:6px;flex:none}
+.main-toolbar .main-menu-button,.main-toolbar .layout-menu-button{width:32px;height:32px;flex:none}
+.main-toolbar .project-switch{max-width:200px}
+.main-toolbar .toolbar-search{gap:10px}
+.main-toolbar #backend-select{max-width:270px;border-color:transparent;background:transparent;font-size:12px}
+.main-toolbar #run-actions button{width:30px;padding:0}
+.main-toolbar #run-actions button>span{display:none}
+.workspace-toolbar{flex:none;height:auto;min-height:37px;padding:4px 9px;overflow:auto}
+.ide-body{height:auto;flex:1;min-height:0;overflow:hidden}
+.statusbar{flex:none;min-height:25px}
+.tool-rail{width:40px;padding:5px 3px;gap:0;overflow:auto;scrollbar-width:none}
+.rail-stack,.rail-group{display:flex;flex-direction:column;align-items:center;width:100%;gap:3px;flex:none}
+.rail-stack{gap:8px}.rail-stack-bottom{padding-top:8px}.rail-spacer{flex:1;min-height:18px}
+.rail-group+.rail-group{padding-top:5px;border-top:1px solid #3b3d43}
+.rail-button{height:33px;width:32px;border-radius:5px;position:relative;touch-action:none;flex:none}
+.rail-button .icon{width:20px;height:20px;stroke-width:1.35}
+.rail-button.active{background:#364765;color:#cedcff}
+.rail-button.rail-floating::after{content:'';width:4px;height:4px;border-radius:50%;position:absolute;right:3px;bottom:3px;background:var(--accent)}
+.rail-more{margin-top:3px}.rail-more .icon{width:17px}
+.rustrover-dock{position:relative;display:block;flex:1;min-width:0;height:100%;overflow:hidden;background:var(--bg)}
+.rustrover-dock>.editor-region,.rustrover-dock>.dock-region{position:absolute;display:flex;margin:0;grid-area:auto;min-width:0;min-height:0}
+.rustrover-dock>.dock-region{pointer-events:none;background:var(--panel)}
+.rustrover-dock>.editor-region{background:var(--bg)}
+.rustrover-dock .document-tabs{height:37px;background:var(--panel)}
+.rustrover-dock .document-tab>button:first-child{height:34px}
+.rustrover-dock>.tool-window{position:absolute;display:flex;flex-direction:column;min-width:0;min-height:0;max-width:none;max-height:none;padding:0;margin:0;border:0;border-radius:0;background:var(--panel);color:var(--text);overflow:hidden;contain:layout style;outline:none}
+.tool-window-header{height:34px;min-height:34px;display:flex;align-items:center;justify-content:space-between;gap:2px;padding:0 5px 0 7px;background:var(--panel);border-bottom:1px solid var(--line);touch-action:none;user-select:none;cursor:grab}
+.tool-window:focus-within>.tool-window-header{background:#303238}
+.tool-window-header>.tool-window-title{display:flex;flex:1;min-width:0;gap:6px;padding:3px 5px;height:27px;color:#d4d6dd;font-size:12px;font-weight:600;border:0;border-radius:3px;cursor:grab;overflow:hidden}
+.tool-window-title>span{overflow:hidden;text-overflow:ellipsis}.tool-window-title>.icon{width:12px;height:12px;margin-right:auto;opacity:.65}
+.tool-window-actions{display:flex;align-items:center;flex:none;gap:1px}
+.tool-window-actions .icon-button{width:23px;height:24px;color:#a8acb5}.tool-window-actions .icon{width:15px;height:15px}
+.tool-window-actions .tool-redock{height:24px;font-size:11px;padding:0 5px}
+.tool-window-body{display:flex;flex:1;min-width:0;min-height:0;overflow:hidden;background:var(--bg)}
+.tool-window-body>.tool-panel{width:100%;min-width:0;flex:1}
+.tool-window[data-tool-window=project]>.tool-window-body{background:var(--panel)}
+.tool-window .project-heading{padding-top:8px}.tool-window .project-footer{padding:6px 12px}
+.rustrover-dock>.tool-window.tool-overlay{z-index:12;box-shadow:0 5px 30px #0008;border:1px solid #50545d}
+.rustrover-dock>.tool-window.floating-tool{position:fixed;z-index:45;border:1px solid #616672;border-radius:7px;resize:none;box-shadow:0 15px 60px #0009;overflow:hidden}
+.tool-window.floating-tool::backdrop{background:transparent;pointer-events:none}
+.tool-window.floating-tool>.tool-window-header{background:#36383e;cursor:move}
+.tool-window-float-resize{position:absolute;bottom:1px;right:1px;width:16px;height:16px;z-index:3;border-radius:0;cursor:nwse-resize;touch-action:none}
+.tool-window-float-resize::after{content:'';width:9px;height:9px;border-right:2px solid #9095a1;border-bottom:2px solid #9095a1;transform:skew(-12deg,-12deg)}
+.tool-window-float-resize>.icon{display:none}
+.rustrover-dock>.tool-window-divider{position:absolute;grid-area:auto;background:var(--line);z-index:8;touch-action:none;outline-offset:0}
+.tool-window-divider[data-axis=x]{cursor:col-resize}.tool-window-divider[data-axis=y]{cursor:row-resize}
+.tool-window-divider::after{content:'';position:absolute;inset:-3px;background:transparent}
+.tool-window-divider:hover,.tool-window-divider:focus-visible{background:var(--accent)}
+.tool-window-divider:focus-visible::after{outline:1px solid var(--accent)}
+.tool-dragging,.tool-resizing{user-select:none!important}.tool-dragging *{cursor:grabbing!important}.tool-resizing iframe,.tool-dragging iframe{pointer-events:none!important}
+.tool-drag-overlay{position:fixed;inset:0;width:100vw;height:100dvh;margin:0;padding:0;border:0;background:transparent;pointer-events:none!important;overflow:hidden;z-index:10000;color:var(--text)}
+.tool-drag-overlay *,.tool-drag-overlay::backdrop{pointer-events:none!important}.tool-drag-overlay::backdrop{background:transparent}
+.tool-drop-preview{position:absolute;border:2px solid #76a0f7;background:#548af72b;border-radius:3px}
+.tool-drop-target{position:absolute;display:flex;align-items:center;justify-content:center;border:1px solid #7195d5;background:#252d3df2;border-radius:5px;font-size:11px;color:#cadbfa;box-shadow:0 2px 10px #0008}
+.tool-drop-target.active{background:#426dc4;border-color:#c3d6ff;color:white}
+.tool-drag-label{position:absolute;display:flex;align-items:center;padding:0 10px;font-size:11px;background:#303641f5;border:1px solid #616d84;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tool-window-announcement{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.context-menu{max-height:calc(100dvh - 8px);max-width:calc(100vw - 8px);overflow:auto}
+@media(max-width:1100px){.main-toolbar .toolbar-search{font-size:0;gap:0;width:31px;padding:5px}.main-toolbar .toolbar-search kbd{display:none}.main-toolbar .toolbar-search::before{content:'⌕';font-size:24px}.main-toolbar .project-switch{max-width:170px}.main-toolbar #backend-select{max-width:210px}}
+@media(max-width:700px){.main-toolbar{gap:3px}.main-toolbar .product-mark{display:none}.main-toolbar .project-switch{max-width:130px;font-size:11px;padding:7px 4px}.main-toolbar #backend-select{max-width:135px;font-size:10px}.main-toolbar #run-actions{gap:0}.main-toolbar #run-actions button{width:26px}.main-toolbar #check,.main-toolbar #build,.main-toolbar #test{display:none}.main-toolbar .toolbar-spacer{min-width:0}.main-toolbar .layout-menu-button{width:25px}.tool-rail{width:36px;padding:4px 2px}.rail-button{width:30px;height:33px}.tool-window-header{padding-left:4px}.workspace-toolbar{min-height:36px}.statusbar{font-size:10px}}
+@media(max-width:440px){.main-toolbar #backend-select{max-width:100px}.main-toolbar .project-switch{max-width:95px}.main-toolbar .toolbar-search{display:none}.main-toolbar #debug{display:none}}
+@media(prefers-reduced-motion:reduce){.rustrover-dock *{scroll-behavior:auto}}
+
+.tool-window-header>.tool-window-title{flex:0 1 auto;max-width:calc(100% - 98px)}
+.tool-window-header>.tool-window-selector{width:19px;height:23px;margin-right:auto;flex:none}.tool-window-selector .icon{width:12px;height:12px;opacity:.7}
+.context-menu[popover]{margin:0;inset:auto}.context-menu[popover]::backdrop{background:transparent;pointer-events:none}
+
+.rustrover-dock>.tool-window-divider{display:block}.main-toolbar .project-switch{display:inline-flex}.tool-rail{display:flex}

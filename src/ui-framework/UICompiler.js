@@ -7,8 +7,8 @@ import {WebAssemblyEmitter} from '../compiler/wasm/WebAssemblyEmitter.js';
 import {prepareUIProject} from './UIProjectCompiler.js';
 import {UI_ABI_VERSION, UI_ABI_FILE, UI_INTRINSICS} from './RustAbi.js';
 
-const callbackArguments = {component: [0], on_click: [1], on: [2], effect: [0, 1], memo: [0], update: [1], modify: [1], memo_value: [0], memo_with: [0], effect_with: [0, 1], on_event: [2]};
-const retainedCallbacks = new Set(['component', 'on_click', 'on', 'effect', 'effect_with', 'on_event']);
+const callbackArguments = {component: [0], on_click: [1], on: [2], effect: [0, 1], memo: [0], update: [1], modify: [1], memo_value: [0], memo_with: [0], effect_with: [0, 1], on_event: [2], interval: [1], state_with: [0]};
+const retainedCallbacks = new Set(['component', 'on_click', 'on', 'effect', 'effect_with', 'on_event', 'interval']);
 const scalar = type => T.numeric(type) || ['String', '&str', 'bool', 'char', '()'].includes(type);
 
 /** Typed Rust -> verified MIR -> checked UI imports, with original-source spans. */
@@ -65,7 +65,7 @@ export class UICompiler {
           }
           callbacks[index] = {instance: closure.instance, type: closure.type, params: closure.params, span: closure.span};
         }
-        const stateType = ['read', 'write', 'modify'].includes(name) ? T.application(types[0]).args[0] : name === 'state' ? types[0] : null;
+        const stateType = ['read', 'write', 'modify'].includes(name) ? T.application(types[0]).args[0] : name === 'state' ? types[0] : name === 'state_with' ? T.application(target.returnType).args[0] : null;
         const valueType = name === 'emit' ? types[1] : ['memo_value', 'memo_with'].includes(name) ? target.returnType : null;
         const dependencyType = name === 'memo_with' ? types[1] : name === 'effect_with' ? types[2] : null;
         for (const type of [stateType, valueType, dependencyType]) if (type) schema(type);

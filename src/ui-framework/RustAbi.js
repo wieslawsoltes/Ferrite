@@ -1,7 +1,7 @@
 /** Compiler-owned declarations for the checked Ferrite UI host ABI, not a Rust stdlib. */
 export const UI_ABI_VERSION = 1;
 export const UI_ABI_FILE = 'ferrite:ui-abi';
-export const UI_INTRINSICS = Object.freeze(['element', 'fragment', 'text', 'value', 'child', 'attr', 'key', 'source', 'component', 'on_click', 'on', 'use_state', 'get', 'set', 'update', 'use_string', 'get_string', 'set_string', 'use_bool', 'get_bool', 'set_bool', 'use_ref', 'node_ref', 'focus', 'ref_value', 'effect', 'memo', 'prevent_default', 'stop_propagation', 'state', 'read', 'write', 'modify', 'memo_value', 'memo_with', 'effect_with', 'on_event', 'emit', 'external']);
+export const UI_INTRINSICS = Object.freeze(['element', 'fragment', 'text', 'value', 'child', 'attr', 'key', 'source', 'component', 'on_click', 'on', 'use_state', 'get', 'set', 'update', 'use_string', 'get_string', 'set_string', 'use_bool', 'get_bool', 'set_bool', 'use_ref', 'node_ref', 'focus', 'ref_value', 'effect', 'memo', 'prevent_default', 'stop_propagation', 'state', 'read', 'write', 'modify', 'memo_value', 'memo_with', 'effect_with', 'on_event', 'emit', 'external', 'interval', 'state_with']);
 // Trap bodies make an unlinked artifact fail. Only declarations from UI_ABI_FILE
 // may be linked; a similarly-named user function cannot become a host intrinsic.
 export const UI_DECLARATIONS = `
@@ -14,10 +14,12 @@ mod ui {
     pub event_type: String, pub value: String, pub key: String, pub code: String,
     pub checked: bool, pub repeat: bool, pub alt_key: bool, pub ctrl_key: bool,
     pub meta_key: bool, pub shift_key: bool, pub button: i32, pub buttons: u32,
-    pub client_x: f64, pub client_y: f64, pub pointer_id: i32, pub pressure: f64,
+    pub offset_x: f64, pub offset_y: f64, pub client_x: f64, pub client_y: f64, pub pointer_id: i32, pub pressure: f64,
     pub delta_x: f64, pub delta_y: f64, pub delta_z: f64,
     pub input_type: String, pub data: String, pub time_stamp: f64
   }
+  pub fn interval<F: Fn(f64) -> ()>(milliseconds: u32, callback: F) { panic!("UI ABI must be linked") }
+  pub fn state_with<T: Clone, F: Fn() -> T>(factory: F) -> Signal<T> { panic!("UI ABI must be linked") }
   pub fn state<T: Clone>(initial: T) -> Signal<T> { panic!("UI ABI must be linked") }
   pub fn read<T: Clone>(state: Signal<T>) -> T { panic!("UI ABI must be linked") }
   pub fn write<T: Clone>(state: Signal<T>, value: T) { panic!("UI ABI must be linked") }

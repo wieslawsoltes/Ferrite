@@ -1,3 +1,4 @@
+import {inferDataMethod} from './DataMethods.js';
 import {TraitMethodScope} from './TraitMethodScope.js';
 import {ImplementationResolver} from './ImplementationResolver.js';
 import {FunctionValueAnalyzer} from './FunctionValueAnalyzer.js';
@@ -52,11 +53,17 @@ export class SemanticAnalyzer {
     this.closures.finish();this.functionValues.finish();
     this.discriminants.annotate(this.instances.values());
     return {traitResolution:this.implementations.traits.snapshot(),implementations: this.implementations.snapshot(), discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
-      symbols: this.index.symbols, structures: [...this.index.structs.values()].filter(shape => !shape.builtin),
-      enums: [...this.index.enums.values()], warnings: this.warnings, entry: this.entryKey,
+      symbols: this.index.symbols, structures: this.canonicalShapes(this.index.structs).filter(shape => !shape.builtin),
+      enums: this.canonicalShapes(this.index.enums), warnings: this.warnings, entry: this.entryKey,
       capabilities: {ownership: 'conservative whole-local analysis', traits: 'generic declared-trait impls and built-in bounds'}};
   }
   annotate(node, type) { node.type = type; return type; }
+  canonicalShapes(shapes) {
+    return [...shapes.values()].map(shape=>{
+      const normalize=type=>this.index.type(type,shape.module??'',null,new Set((shape.generics??[]).map(p=>p.name)),shape);
+      return {...shape,...(shape.fields?{fields:shape.fields.map(field=>({...field,type:normalize(field.type)}))}:{}),...(shape.variants?{variants:shape.variants.map(variant=>({...variant,fields:variant.fields.map(normalize)}))}:{})};
+    });
+  }
   normalize(type, ctx, node = null) { return this.formal(ctx.instance.fn, type, ctx.instance.substitution ?? new Map(Object.entries(ctx.instance.typeArguments)), node ?? ctx.instance.fn); }
   hasBound(type,bound) {
     const declared=this.implementations?.traits.has(type,bound);
@@ -89,11 +96,12 @@ export class SemanticAnalyzer {
     if (name === 'Vec') return bound !== 'Copy' && ['Clone', 'Debug', 'PartialEq', 'Eq'].includes(bound) && this.hasTrait(args[0], bound, depth + 1);
     if (['Option', 'Result'].includes(name)) return ['Copy', 'Clone', 'Debug', 'PartialEq', 'Eq'].includes(bound) && args.every(t => t !== '_' && this.hasTrait(t, bound, depth + 1));
     const shape = this.index.structs.get(name) ?? this.index.enums.get(name);
+    if (shape?.builtin === 'parse-error') return ['Clone','Debug','PartialEq','Eq'].includes(bound);
     if (shape?.builtin === 'phantom') return ['Copy', 'Clone', 'Debug', 'PartialEq', 'Eq', 'Default'].includes(bound);
     if (shape?.attributes?.some(a => a.name === 'derive' && a.args.includes(bound))) {
       const substitution = new Map(shape.generics.map((g, i) => [g.name, args[i]]));
       const fields = shape.fields?.map(f => f.type) ?? shape.variants.flatMap(v => v.fields);
-      return fields.every(t => this.hasTrait(T.substitute(t, substitution), bound, depth + 1));
+      return fields.every(t => this.hasTrait(T.substitute(this.index.type(t, shape.module, null, new Set(substitution.keys()), shape), substitution), bound, depth + 1));
     }
     return false;
   }
@@ -338,7 +346,7 @@ export class SemanticAnalyzer {
         const left = this.infer(node.left, ctx, logical ? 'bool' : expected && (T.numeric(expected) || bitwise && expected === 'bool') ? expected : null);
         // Shift RHS has its own integer type; unlike arithmetic, u64 << u8 is legal.
         const right = this.infer(node.right, ctx, shift ? null : left);
-        if (!shift) T.unify(left, right, new Map(), node);
+        if (!shift && !(['==','!='].includes(node.op) && ['String','&str'].includes(left) && ['String','&str'].includes(right))) T.unify(left, right, new Map(), node);
         if (logical) { T.unify('bool', left, new Map(), node); type = 'bool'; }
         else if (['==', '!=', '<', '>', '<=', '>='].includes(node.op)) {
           if (!T.numeric(left) && !['bool', 'char', '&str', 'String'].includes(left) && !(T.function(left)&&['==','!='].includes(node.op)))
@@ -583,6 +591,7 @@ export class SemanticAnalyzer {
     const original = this.infer(receiver, ctx), base = T.reference(original) && original !== '&str' ? T.target(original) : original;
     const app = T.application(base), array = /^\[(.+);\d+\]$/.exec(base);
     const resolved = this.implementations.lookup(base, method, ctx.instance.fn.module, node,ctx.instance.fn,ctx.methodScope.traits(ctx.methodScope.of(receiver)));
+    if(!resolved){const dataType=inferDataMethod(this,node,ctx,original,base,expected);if(dataType)return dataType;}
     const builtins = ['len', 'clone', 'push', 'pop', 'push_str', 'to_string', 'unwrap', 'is_some', 'is_none', 'is_ok', 'is_err'];
     if (!resolved && builtins.includes(method)) {
       node.receiver = receiver; node.receiverDeref = base !== original; node.builtin = `method::${method}`;

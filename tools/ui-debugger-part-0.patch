@@ -1,0 +1,236 @@
+diff --git a/docs/rust-ui.md b/docs/rust-ui.md
+index df9cb4e..64fe44a 100644
+--- a/docs/rust-ui.md
++++ b/docs/rust-ui.md
+@@ -282 +282 @@ compatibility tools (`ui_project_inspect`, `ui_project_set`, `ui_render_html`,
+-| `ui_debug` | Execute approval; arm/step/step-line/continue/stop |
++| `ui_debug` | Execute approval; arm/pause, instruction/source/over/out stepping, reverse/restart, continue/stop |
+@@ -291,0 +292,10 @@ wait for readiness before inspecting. No fake browser session is returned.
++## Debug UI projects
++
++The main Debug action, F5, the main Debugger tool window, the designer Debug panel
++and `ui_debug` operate on the same retained view session. F5 attaches to an existing
++preview without resetting application state and resumes paused callbacks. F10 steps
++over; F11 steps into a source line; Shift+F11 steps out; Shift+F10 reverses a source
++line; Shift+F5 stops. These shortcuts also work with keyboard focus inside the isolated
++preview. The [debugger guide](ui-debugger.md) describes source breakpoints, helper-file
++navigation, live locals, timer callbacks, staged state and explicit execution boundaries.
++
+diff --git a/docs/ui-debugger.md b/docs/ui-debugger.md
+new file mode 100644
+index 0000000..673b73f
+--- /dev/null
++++ b/docs/ui-debugger.md
+@@ -0,0 +1,108 @@
++# Debugging Rust UI projects
++
++## Launch and controls
++
++Open a `.ui.rs` view (or a helper currently owned by that view), then select **Debug**
++or press **F5**. A live matching preview is reused: attaching does not recreate its
++DOM, hooks or application state. A stale preview is compiled before attachment. The
++IDE waits for the isolated frame's readiness acknowledgement; Stop, a superseding
++launch, source replacement or workspace replacement cancels that wait. An older CLI
++worker cannot publish a late pause into this UI session.
++
++With editor breakpoints present, callbacks run until one is reached. With no
++breakpoints, attachment pauses at the next event's entry. **Pause** while waiting
++requests the next event; while a callback is executing it stops at the next scheduling
++boundary. **Continue** commits a completed callback and stays attached for later events.
++
++| Action | Shortcut | Behavior |
++| --- | --- | --- |
++| Start / Continue | F5 | Attach, resume, or commit staged results without rebuilding a live preview |
++| Step over | F10 | Advance the source line without entering callees; explicit breakpoints still apply |
++| Step into source | F11 | Advance to a different source line or call frame |
++| Step out | Shift+F11 | Finish the current call frame |
++| Reverse source line | Shift+F10 | Restore a prior source location within retained history |
++| Stop | Shift+F5 | Cancel execution, discard queued callbacks and uncommitted state, disarm |
++
++Both Debug panels also expose instruction stepping, reverse instruction stepping,
++restart of retained history, and pause. Controls reflect waiting/running/paused/
++completed/error state; reverse controls remain usable after the final instruction.
++These keyboard actions work while the preview iframe has focus, not just in the code
++editor. The frame sends only whitelisted command intentions over its existing capability
++channel. Standalone exports do not intercept browser shortcuts.
++
++## Source, frames and breakpoints
++
++Breakpoint changes in the editor gutter are synchronized to an attached session,
++including when it is paused. Source location bindings report whether an instruction
++exists on that line; a binding does not promise that a particular callback reaches it.
++Blank/comment-only lines remain unbound instead of silently moving to unrelated code.
++Debug execution uses the checked **unoptimized MIR** to retain local variables and
++source instructions even when the normal JavaScript/Wasm build is optimized.
++
++The main Debugger and designer Debug panel display the same live call stack, typed
++locals/registers, staged state, breakpoint bindings, bounded instruction trace and
++reverse-history boundary. Selecting a frame or local navigates to its original Rust
++source. A breakpoint in a helper module opens that file while preserving the owning
++view and its live iframe. A stop in Code-only mode reveals the source/designer split.
++Background retained views do not steal the selected document or another view's controls.
++
++Nested `ui::update` and owned-state `ui::modify` callbacks are real frames on the same
++MIR stack. Their returns use data-only host continuations, so snapshots can restore
++both call frames and staged state, including across the updater return.
++
++## Execution and lifetime
++
++Callbacks execute cooperatively in batches of at most 512 instructions or about 8 ms
++between yield checks. Expensive individual instructions remain bounded by the existing
++runtime budgets; this is not preemptive JavaScript thread suspension. Pause and Stop
++can run between batches. Cancellation generations invalidate previously scheduled
++continuations. Instruction work is monotonic: reversing cannot refund execution fuel.
++
++Events arriving during a pause queue in order, up to 100 pending callbacks. Continue
++drains them using freshly committed state. Timer callbacks are debugged rather than
++silently disabled, and pending ticks for the same captured timer are coalesced. Stop
++discards pending work; normal application events/timers subsequently use the selected
++non-debug backend. Closing a view or replacing the workspace disposes its session.
++
++State mutations are staged until Continue. Stepping to the callback's end deliberately
++keeps the completed VM and its bounded history so Back still works. A runtime panic
++retains the failing frames and history, and forward execution is rejected until the
++failed instruction is reversed, retained history is restarted, or debugging is stopped.
++History defaults to at most 256 snapshots and 16 MiB. Restart rewinds retained history,
++not necessarily event entry after eviction or an irreversible host effect.
++
++## Boundaries
++
++This is the browser compiler's Rust **event/timer callback debugger**, including
++ordinary helper calls and nested functional state updaters. The original application
++may render through JavaScript, Wasm or MIR; paused Rust callbacks use MIR in every case.
++It is not a debugger for arbitrary generated JavaScript, native rustc machine code,
++Wasm instructions, or native heaps. Native Cargo binary previews continue to expose
++inspection/export, not source-level MIR stepping.
++
++Rendering, effects and browser default actions remain synchronous and are not
++source-steppable. A paused event cannot retroactively cancel a default browser action.
++Irreversible host operations and committed rendering establish history barriers. Back
++never claims to undo emitted external events, DOM effects or another callback's commit.
++
++## SDK and MCP
++
++`UISession.armDebugger({breakpoints, pauseOnEntry})`, `setBreakpoints(points)`,
++`debug(command)` and `inspectDebugger()` expose the same state machine. `pauseOnEntry`
++defaults to true for SDK compatibility. Debug returns a typed `UIDebugSnapshot`;
++long-running operations can initially return `status: "running"`, followed by
++`debug-running`, `debug-paused`, `debug-complete` or `debug-error` notifications through
++`subscribe`. `ui_debug` adds pause, step-over and step-out to the existing approved
++MCP execute operations. No arbitrary evaluation or approval downgrade is introduced.
++
++## Regression gates
++
++`npm test` covers all three rendering backends, helper and updater breakpoints,
++source/over/out/reverse stepping, terminal reverse state, timers, event queues, errors,
++cooperative cancellation, stale replies and launch ownership. `npm run test:ui:debugger`
++uses real Chromium over HTTP to exercise project import, controls, the editor gutter,
++opaque iframe shortcuts, multiple retained views and source invalidation. The normal
++validation workflow runs this alongside the existing IDE/UI/native/SDK checks and
++retains screenshots plus machine-readable results under `artifacts/ui-debugger/`.
++`FERRITE_MEMORY_TEST=1` uses the existing restricted-container delivery harness instead
++of HTTP; it is not evidence of HTTP module delivery.
+diff --git a/package.json b/package.json
+index 71b2d75..3b769d0 100644
+--- a/package.json
++++ b/package.json
+@@ -40 +40,2 @@
+-    "format:samples:check": "node tools/format-samples.mjs --check"
++    "format:samples:check": "node tools/format-samples.mjs --check",
++    "test:ui:debugger": "python tools/ui-debugger-acceptance.py"
+diff --git a/src/agent/tools/UITools.js b/src/agent/tools/UITools.js
+index 3168ba0..c76aced 100644
+--- a/src/agent/tools/UITools.js
++++ b/src/agent/tools/UITools.js
+@@ -84 +84 @@ export function registerUITools(registry, {workspace, compiler, ide}) {
+-    object({action: {enum: ['arm', 'step', 'step-line', 'back', 'back-line', 'restart', 'continue', 'stop']}, expectedRevision: integer(0, Number.MAX_SAFE_INTEGER)}, ['action']), 'execute',
++    object({action: {enum: ['arm', 'pause', 'step', 'step-line', 'step-over', 'step-out', 'back', 'back-line', 'restart', 'continue', 'stop']}, expectedRevision: integer(0, Number.MAX_SAFE_INTEGER)}, ['action']), 'execute',
+diff --git a/src/runtime/MirVirtualMachine.js b/src/runtime/MirVirtualMachine.js
+index b4dfd7d..87066f7 100644
+--- a/src/runtime/MirVirtualMachine.js
++++ b/src/runtime/MirVirtualMachine.js
+@@ -120 +120,5 @@ export class MirVirtualMachine {
+-      else {
++      else if (instruction.op === 'builtin' && this.interceptCall) {
++        const call = this.interceptCall(instruction, frame);
++        if (call) this.push(call.instance, call.args, {...call.continuation, destination: instruction.dest});
++        else { const result = this.evaluate(instruction, frame); if (instruction.dest != null) frame.cells[instruction.dest].value = result; }
++      } else {
+@@ -131 +135,4 @@ export class MirVirtualMachine {
+-        else this.frames.at(-1).cells[destination].value = value;
++        else if (destination && typeof destination === 'object') {
++          const result = this.completeCall(value, destination);
++          if (destination.destination != null) this.frames.at(-1).cells[destination.destination].value = result;
++        } else if (destination != null) this.frames.at(-1).cells[destination].value = value;
+@@ -165,0 +173,11 @@ export class MirVirtualMachine {
++  stepOver() {
++    const frame = this.frames.at(-1), initial = this.nextSpan();
++    do { this.step({capture: false}); }
++    while (!this.done && this.frames.includes(frame) && (this.frames.at(-1) !== frame || this.nextSpan()?.file === initial?.file && this.nextSpan()?.line === initial?.line));
++    return this.snapshot();
++  }
++  stepOut() {
++    const frame = this.frames.at(-1);
++    while (!this.done && this.frames.includes(frame)) this.step({capture: false});
++    return this.snapshot();
++  }
+@@ -170,0 +189 @@ export class MirVirtualMachine {
++        span: (frame.blocks.get(frame.block).instructions[frame.ip] ?? frame.blocks.get(frame.block).terminator).span,
+diff --git a/src/sdk/Ferrite.d.ts b/src/sdk/Ferrite.d.ts
+index 704a54a..2110252 100644
+--- a/src/sdk/Ferrite.d.ts
++++ b/src/sdk/Ferrite.d.ts
+@@ -25 +25,17 @@ export interface UIState { handle: number; type: string; value: JsonValue }
+-export interface UISnapshot { states: UIState[]; calls: number; handles: number; debugger: Record<string, unknown>; [name: string]: unknown }
++export interface UIBreakpoint { file: string; line: number }
++export type UIDebugCommand = 'pause' | 'step' | 'step-line' | 'step-over' | 'step-out' | 'back' | 'back-line' | 'restart' | 'continue' | 'stop';
++export interface UIDebugLocal { slot: number; name?: string; type: string; value: string; span?: SourceSpan }
++export interface UIDebugFrame { function: string; block: string; span?: SourceSpan; locals: UIDebugLocal[] }
++export interface UIDebugState {
++  done: boolean; steps: number; output: string; result: string | null; next: SourceSpan | null;
++  last: {function: string; block: string; instruction: number; operation: string; span?: SourceSpan} | null;
++  frames: UIDebugFrame[]; history: {available: number; bytes: number; dropped: number; boundary: string; work: number} | null;
++}
++export interface UIDebugSnapshot {
++  armed: boolean; status: 'disarmed' | 'waiting' | 'running' | 'paused' | 'completed' | 'error'; reason: string | null;
++  error: {message: string; code: string; span?: SourceSpan} | null; queued: number; event?: string;
++  state: UIDebugState | null; trace: Record<string, unknown>[]; breakpoints: UIBreakpoint[];
++  breakpointBindings: (UIBreakpoint & {verified: boolean; message: string})[]; stagedStates: UIState[]; boundary: string;
++  [name: string]: unknown;
++}
++export interface UISnapshot { states: UIState[]; calls: number; handles: number; debugger: UIDebugSnapshot; [name: string]: unknown }
+@@ -42,3 +58,4 @@ export class UISession {
+-  mount(container: Element, options?: {hydrate?: boolean; identifierPrefix?: string; onRecoverableError?: (error: Error) => void}): this; inspect(): UISnapshot; inspectDebugger(): Record<string, unknown>;
+-  armDebugger(options?: {breakpoints?: {file: string; line: number}[]}): Record<string, unknown>;
+-  debug(command?: 'step' | 'step-line' | 'back' | 'back-line' | 'restart' | 'continue' | 'stop'): Record<string, unknown>;
++  mount(container: Element, options?: {hydrate?: boolean; identifierPrefix?: string; onRecoverableError?: (error: Error) => void}): this; inspect(): UISnapshot; inspectDebugger(): UIDebugSnapshot;
++  armDebugger(options?: {breakpoints?: UIBreakpoint[]; pauseOnEntry?: boolean}): UIDebugSnapshot;
++  setBreakpoints(breakpoints: UIBreakpoint[]): UIDebugSnapshot;
++  debug(command?: UIDebugCommand): UIDebugSnapshot;
+@@ -76 +93 @@ export class UIProject {
+-export interface RustReactHandle { inspect(): UISnapshot; setState(handle: number, value: JsonValue): UISnapshot; armDebugger(options?: {breakpoints?: {file: string; line: number}[]}): Record<string, unknown>; debug(command?: 'step' | 'step-line' | 'back' | 'back-line' | 'restart' | 'continue' | 'stop'): Record<string, unknown> }
++export interface RustReactHandle { inspect(): UISnapshot; setState(handle: number, value: JsonValue): UISnapshot; armDebugger(options?: {breakpoints?: UIBreakpoint[]; pauseOnEntry?: boolean}): UIDebugSnapshot; debug(command?: 'pause' | 'step' | 'step-line' | 'step-over' | 'step-out' | 'back' | 'back-line' | 'restart' | 'continue' | 'stop'): Record<string, unknown> }
+diff --git a/src/ui-framework/Export.js b/src/ui-framework/Export.js
+index 5c0a583..61b9523 100644
+--- a/src/ui-framework/Export.js
++++ b/src/ui-framework/Export.js
+@@ -23 +23 @@ export function exportHTML(artifact, {backend = 'javascript', title = 'Ferrite R
+-    entryPropsType: artifact.entryPropsType, ownedSchemas: artifact.ownedSchemas, files: artifact.files, optimizedMir: artifact.optimizedMir, ...(backend === 'javascript' ? {js: artifact.js} : {}), ...(backend === 'wasm' ? {wasm: {bytes: artifact.wasm.bytes}} : {})};
++    entryPropsType: artifact.entryPropsType, ownedSchemas: artifact.ownedSchemas, files: artifact.files, mir: artifact.mir, optimizedMir: artifact.optimizedMir, ...(backend === 'javascript' ? {js: artifact.js} : {}), ...(backend === 'wasm' ? {wasm: {bytes: artifact.wasm.bytes}} : {})};
+@@ -48,0 +49,7 @@ if(channel){
++  // Keyboard events cannot bubble across the opaque preview boundary. Only the
++  // active owning IDE session may act on this capability-scoped intent.
++  document.addEventListener('keydown',event=>{
++    if(event.altKey||event.ctrlKey||event.metaKey||event.repeat)return;
++    const command=event.key==='F5'?(event.shiftKey?'stop':'continue'):event.key==='F10'?(event.shiftKey?'back-line':'step-over'):event.key==='F11'?(event.shiftKey?'step-out':'step-line'):null;
++    if(command){event.preventDefault();event.stopImmediatePropagation();send({event:'debug-command',command});}
++  },true);
+@@ -58,2 +65,3 @@ if(channel){
+-      else if(message.command==='debug.arm')result=session.armDebugger({breakpoints:message.breakpoints??[]});
+-      else if(['debug.step','debug.step-line','debug.back','debug.back-line','debug.restart','debug.continue','debug.stop'].includes(message.command))result=session.debug(message.command.slice(6));
++      else if(message.command==='debug.arm')result=session.armDebugger({breakpoints:message.breakpoints??[],pauseOnEntry:message.pauseOnEntry??true});
++      else if(message.command==='debug.breakpoints')result=session.setBreakpoints(message.breakpoints??[]);
++      else if(['debug.pause','debug.step','debug.step-line','debug.step-over','debug.step-out','debug.back','debug.back-line','debug.restart','debug.continue','debug.stop'].includes(message.command))result=session.debug(message.command.slice(6));
+@@ -66 +74 @@ if(channel){
+-Object.defineProperty(window,'ferriteUI',{value:Object.freeze({version:'0.1.0',inspect:()=>session.inspect(),armDebugger:options=>session.armDebugger(options),debug:command=>session.debug(command),setState:(handle,value)=>session.setState(handle,value),dispose:()=>session.dispose()}),configurable:false});
++Object.defineProperty(window,'ferriteUI',{value:Object.freeze({version:'0.1.0',inspect:()=>session.inspect(),armDebugger:options=>session.armDebugger(options),setBreakpoints:points=>session.setBreakpoints(points),debug:command=>session.debug(command),setState:(handle,value)=>session.setState(handle,value),dispose:()=>session.dispose()}),configurable:false});

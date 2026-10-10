@@ -22,7 +22,7 @@ export class ImplObligations {
     return this.index.type(type,this.declaration.module,this.entry.target,this.parameters,node);
   }
   trait(raw,module=this.declaration.module,node=this.declaration) {
-    return this.a.implementations.traits.hierarchy.canonical(raw,module,node);
+    return this.a.implementations.traits.hierarchy.canonical(raw,module,node,this.parameters,this.entry.target);
   }
   symbolic(type) {
     if(this.parameters.has(type))return true;
@@ -33,12 +33,16 @@ export class ImplObligations {
     return T.application(type).args.some(t=>this.symbolic(t));
   }
   assume(rawType,rawBound,node) {
-    const type=this.normalize(rawType,node),bound=this.trait(rawBound,this.declaration.module,node);
-    if((!this.index.traits.has(bound) && type.startsWith('&mut ') && ['Copy','Clone'].includes(this.a.implementations.traits.hierarchy.builtinName(bound))) || !this.symbolic(type) && !this.prove(type,bound))
+    const type=this.normalize(rawType,node),bound=this.trait(this.normalize(rawBound,node),this.declaration.module,node);
+    if(this.index.traits.has(T.application(bound).name))for(const argument of T.application(bound).args)this.index.typeResolver.validateKnown(argument,this.parameters,{...this.declaration,span:node.span??this.declaration.span});
+    if((!this.index.traits.has(T.application(bound).name) && type.startsWith('&mut ') && ['Copy','Clone'].includes(this.a.implementations.traits.hierarchy.builtinName(bound))) || !this.symbolic(type) && !this.symbolic(bound) && !this.prove(type,bound))
       throw new Diagnostic('E0277',`Implementation has an unsatisfied bound: ${type}: ${bound}`,node.span??this.declaration.span);
     if(!this.assumptions.has(type))this.assumptions.set(type,new Set());
     const set=this.assumptions.get(type);
-    for(const implied of this.a.implementations.traits.hierarchy.closure(bound))set.add(implied);
+    for(const implied of this.a.implementations.traits.hierarchy.closure(bound,type)) {
+      if(this.index.traits.has(T.application(implied).name))for(const argument of T.application(implied).args)this.index.typeResolver.validateKnown(argument,this.parameters,{...this.declaration,span:node.span??this.declaration.span});
+      set.add(implied);
+    }
   }
   prove(type,bound,depth=0) {
     if(++this.visits>65536 || depth>64)throw new Diagnostic('F_IMPL_BOUND_LIMIT','Implementation obligation budget exceeded',this.declaration.span);
@@ -47,7 +51,7 @@ export class ImplObligations {
     const short=graph.builtinName(bound);
     if(this.assumptions.get(type)?.has(bound))return true;
     // Ordinary parameters are implicitly Sized, unlike Self in a trait.
-    if(this.index.traits.has(bound))return this.symbolic(type)?this.a.implementations.traits.prove(type,bound,this,depth):this.a.hasBound(type,bound);
+    if(this.index.traits.has(T.application(bound).name))return (this.symbolic(type)||this.symbolic(bound))?this.a.implementations.traits.prove(type,bound,this,depth):this.a.hasBound(type,bound);
     if(bound==='Sized'||bound==='core::marker::Sized'||bound==='std::marker::Sized') {
       if(this.parameters.has(type))return !(type==='Self'&&this.declaration.unsizedSelf);
       if(T.reference(type)||T.function(type))return true;
@@ -84,20 +88,22 @@ export class ImplObligations {
       `The size of ${type} is not known in this declaration; add a Sized bound`,node.span??this.declaration.span);
   }
   validate(raw,node=this.declaration) {
-    const type=this.normalize(raw,node);
+    return this.validateCanonical(this.normalize(raw,node),node);
+  }
+  validateCanonical(type,node=this.declaration) {
     if(this.checked.has(type))return;
     this.checked.add(type);
     if(++this.visits>65536)throw new Diagnostic('F_IMPL_BOUND_LIMIT','Implementation obligation budget exceeded',node.span);
-    if(T.reference(type))return this.validate(T.target(type),node);
-    const fn=T.function(type);if(fn){[...fn.params,fn.result].forEach(t=>this.validate(t,node));return;}
+    if(T.reference(type))return this.validateCanonical(T.target(type),node);
+    const fn=T.function(type);if(fn){[...fn.params,fn.result].forEach(t=>this.validateCanonical(t,node));return;}
     const tuple=T.tuple(type);if(tuple){
       tuple.slice(0,-1).forEach(t=>this.requireSized(t,node));
-      tuple.forEach(t=>this.validate(t,node));return;
+      tuple.forEach(t=>this.validateCanonical(t,node));return;
     }
-    const array=T.array(type);if(array){this.requireSized(array.element,node);return this.validate(array.element,node);}
+    const array=T.array(type);if(array){this.requireSized(array.element,node);return this.validateCanonical(array.element,node);}
     const {name,args}=T.application(type),shape=this.index.structs.get(name)??this.index.enums.get(name);
     if(this.parameters.has(name)&&args.length)throw new Diagnostic('E0109',`Type parameter ${name} does not accept type arguments`,node.span);
-    args.forEach(t=>this.validate(t,node));
+    args.forEach(t=>this.validateCanonical(t,node));
     if(shape||name==='Vec')args.forEach(t=>this.requireSized(t,node));
     if(!shape)return;
     const substitution=new Map(shape.generics.map((g,i)=>[g.name,args[i]]));

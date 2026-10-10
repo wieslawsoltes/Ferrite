@@ -57,13 +57,13 @@ export class SemanticAnalyzer {
       capabilities: {ownership: 'conservative whole-local analysis', traits: 'generic declared-trait impls and built-in bounds'}};
   }
   annotate(node, type) { node.type = type; return type; }
-  normalize(type, ctx, node = null) { return this.index.type(T.substitute(type, ctx.instance.substitution ?? new Map(Object.entries(ctx.instance.typeArguments))), ctx.instance.fn.module, ctx.instance.fn.owner, new Set(), node); }
+  normalize(type, ctx, node = null) { return this.formal(ctx.instance.fn, type, ctx.instance.substitution ?? new Map(Object.entries(ctx.instance.typeArguments)), node ?? ctx.instance.fn); }
   hasBound(type,bound) {
     const declared=this.implementations?.traits.has(type,bound);
     return declared??this.hasTrait(type,bound);
   }
   hasTrait(type, bound, depth = 0) {
-    if (depth > 32) return false;
+    if (depth > 128) return false;
     bound=this.implementations?.traits.hierarchy.builtinName(bound)??bound;
     const closure=this.closures.get(type);
     if(['Sized','core::marker::Sized','std::marker::Sized'].includes(bound)) {
@@ -99,13 +99,24 @@ export class SemanticAnalyzer {
   }
   formal(fn, type, substitution = new Map(), node = fn) {
     const parameters = new Set(substitution.keys());
-    const owner = fn.owner ? this.index.type(fn.owner, fn.module, null, parameters, node) : null;
+    const owner = fn.defaultTrait ? fn.owner : fn.owner ? this.index.type(fn.owner, fn.module, null, parameters, node) : null;
     const expanded = this.index.type(type, fn.module, owner, parameters, node);
     // Resolve declaration names at the definition site before substituting types
     // inferred at the call site. Those types are already canonical: re-resolving
     // them here would incorrectly require the callee to name a private closure
     // or nominal from the caller's module.
     return this.index.typeResolver.substitute(expanded, substitution, node);
+  }
+  solveDefaultArguments(fn, substitution, node = fn) {
+    for (let pass = 0; pass <= (fn.defaultArguments?.length ?? 0); pass++) {
+      for (const [name, raw] of fn.defaultArguments ?? []) {
+        const actual = substitution.get(name);
+        if (actual) T.unify(raw, actual, substitution, node);
+        const value = T.substitute(raw, substitution);
+        const unresolved = [...substitution].some(([parameter, type]) => !type && T.substitute(value, new Map([[parameter, '_']])) !== value);
+        if (!unresolved) substitution.set(name, value);
+      }
+    }
   }
   instantiate(fn, argumentTypes, explicit = [], node = fn) {
     if (fn.params.length !== argumentTypes.length) throw new Diagnostic('E0061', `${fn.name} expects ${fn.params.length} argument(s), got ${argumentTypes.length}`, node.span);
@@ -133,6 +144,7 @@ export class SemanticAnalyzer {
       }
       if ([...substitution.values()].filter(Boolean).length === before) break;
     }
+    this.solveDefaultArguments(fn, substitution, node);
     for (const parameter of fn.generics) {
       const type = substitution.get(parameter.name);
       if (!type || /\b_\b/.test(type)) throw new Diagnostic('E0282', `Cannot infer ${parameter.name} in ${fn.name}`, node.span);
@@ -172,8 +184,8 @@ export class SemanticAnalyzer {
       returnType: this.formal(fn, fn.returnType, substitution, fn), calls: [], locals: []};
     this.instances.set(key, instance);
     const ctx = new FunctionContext(instance);
-    ctx.methodScope = new TraitMethodScope(this, fn);
-    copy.owner = fn.owner ? this.index.type(T.substitute(fn.owner, substitution), fn.module, null, new Set(), fn) : null;
+    ctx.methodScope = new TraitMethodScope(this, fn, substitution);
+    copy.owner = fn.owner ? this.formal(fn, 'Self', substitution, fn) : null;
     copy.params.forEach((p, i) => { p.type = argumentTypes[i]; p.binding = ctx.declare(p.name, p.type, p.mutable, p, true); ctx.methodScope.bind(p.binding, ctx.methodScope.normalize(fn.params[i].type)); });
     ctx.inferredReturns=[];
     const abstractReturn=instance.returnType.startsWith('impl ')?instance.returnType.slice(5):null;

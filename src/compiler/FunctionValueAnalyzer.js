@@ -61,6 +61,7 @@ export class FunctionValueAnalyzer {
     const normalize=type=>record.constructor ? this.index.type(T.substitute(type,record.mapping),record.owner.module,record.owner.owner,parameters,record.node) : this.a.formal(record.owner,type,record.mapping,record.node);
     formals.forEach((type,i)=>{if(hints[i])T.unify(normalize(type),hints[i],record.mapping,node??record.node);});
     if(resultHint)T.unify(normalize(this.result(record)),resultHint,record.mapping,node??record.node);
+    if(!record.constructor)this.a.solveDefaultArguments(record.owner,record.mapping,node??record.node);
     if([...record.mapping.values()].some(type=>!type||/\b_\b/.test(type))){
       if(node)throw new Diagnostic('E0282','Cannot infer function-item specialization; provide type arguments or callable context',node.span);
       return null;

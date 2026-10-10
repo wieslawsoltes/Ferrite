@@ -28,7 +28,7 @@ export class SymbolIndex {
     }
     // Trait methods inherit the trait's visibility, not an absent `pub` on impl methods.
     for (const method of this.functions.values()) if (method.implementedTrait) {
-      const trait = this.resolve(this.traits, method.implementedTrait, method.module, method, false);
+      const trait = this.resolve(this.traits, T.application(method.implementedTrait).name, method.module, method, false);
       method.visibility = trait?.visibility ?? method.visibility;
     }
   }

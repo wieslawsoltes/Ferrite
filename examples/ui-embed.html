@@ -1,8 +1,9 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Embedded Ferrite · Rust scripts</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Embedded Ferrite · Rust scripts</title>
 <style>
 body {
     max-width: 720px;
@@ -45,7 +46,12 @@ h1 {
 </style>
 </head>
 <body>
-<main><h1>Rust, embedded in your application.</h1><p>One JavaScript library. A typed UI. No local bridge.</p><div id="counter"></div><pre id="log"></pre></main>
+    <main>
+        <h1>Rust, embedded in your application.</h1>
+        <p>One JavaScript library. A typed UI. No local bridge.</p>
+        <div id="counter"></div>
+        <pre id="log"></pre>
+    </main>
 <script src="../src/sdk/ferrite.bundle.js"></script>
 <script type="text/rust" data-target="counter" data-backend="javascript">
 fn app() -> ui::Node {
@@ -60,7 +66,11 @@ fn app() -> ui::Node {
 </script>
 <script>
 // Script execution is explicit; importing the library does not run page scripts.
-Ferrite.runScripts({onError: error => { document.getElementById('log').textContent = error.message; }});
+Ferrite.runScripts({
+    onError: error => {
+        document.getElementById('log').textContent = error.message;
+    }
+});
 const result = Ferrite.runRust(`fn main() -> i64 {
     6 * 7
 }

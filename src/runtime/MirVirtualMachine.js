@@ -30,7 +30,7 @@ export class MirVirtualMachine {
       case 'function':return r.functionPointer(instruction.callee,instruction.signature);
       case 'const': return r.literal(instruction.value, instruction.type);
       case 'read': return r.read(this.reference(frame, instruction.place), instruction.copy);
-      case 'borrow': return this.reference(frame, instruction.place);
+      case 'borrow': return r.borrow(this.reference(frame, instruction.place));
       case 'write': r.write(this.reference(frame, instruction.place), value(instruction.value)); return null;
       case 'copy': cells[instruction.target].value = instruction.copy ? r.clone(value(instruction.value)) : value(instruction.value); return null;
       case 'binary': return r.binary(instruction.operator, value(instruction.left), value(instruction.right), instruction.operandType);

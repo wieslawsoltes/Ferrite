@@ -63,7 +63,7 @@ export const genericImplCompileFailCases = [
   ['wrong method generic arity is rejected', `${tuple}impl<T> Cell<T>{fn map<U>(self,v:U)->U{v}}fn main(){let _=Cell(1).map::<i32,bool>(2);}`, 'E0107'],
   ['explicit owner type is not overwritten by an argument', `${tuple}impl<T> Cell<T>{fn new(v:T)->Self{Self(v)}}fn main(){let _=Cell::<bool>::new(1);}`, 'E0308'],
   ['mutable method rejects immutable receiver storage', `${tuple}impl<T> Cell<T>{fn set(&mut self,v:T){self.0=v;}}fn main(){let c=Cell(1);c.set(2);}`, 'E0596'],
-  ['mutable method rejects a shared reference receiver', `${tuple}impl<T> Cell<T>{fn set(&mut self,v:T){self.0=v;}}fn main(){let c=Cell(1);let r=&c;r.set(2);}`, 'E0308'],
+  ['mutable method rejects a shared reference receiver', `${tuple}impl<T> Cell<T>{fn set(&mut self,v:T){self.0=v;}}fn main(){let c=Cell(1);let r=&c;r.set(2);}`, 'E0596'],
   ['associated function without self is not a method', `${tuple}impl<T> Cell<T>{fn create(v:T)->Self{Self(v)}}fn main(){let c=Cell(1);let _=c.create(2);}`, 'E0599'],
   ['missing generic method remains an error', `${tuple}impl<T> Cell<T>{}fn main(){let c=Cell(1);c.absent();}`, 'E0599'],
   ['private method remains private on a generic target', 'mod m{pub struct Cell<T>(pub T);impl<T> Cell<T>{fn hidden(&self){}}}fn main(){let c=m::Cell(1);c.hidden();}', 'E0603'],

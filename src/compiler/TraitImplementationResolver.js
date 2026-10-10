@@ -2,6 +2,7 @@ import {Diagnostic} from './Diagnostic.js';
 import {TypeSystem as T} from './TypeSystem.js';
 import {ImplTypePattern} from './ImplTypePattern.js';
 import {ImplObligations} from './ImplObligations.js';
+import {TraitHierarchy} from './TraitHierarchy.js';
 
 /** Per-analysis, bounded solver for declared (non-parameterized) user traits.
  * Trait identities are canonical declaration names, not their last path segment.
@@ -9,6 +10,7 @@ import {ImplObligations} from './ImplObligations.js';
 export class TraitImplementationResolver {
   constructor(owner) {
     this.owner=owner;this.a=owner.a;this.index=owner.index;
+    this.hierarchy=new TraitHierarchy(this.index);
     this.byTrait=new Map();this.byRoot=new Map();this.memo=new Map();this.memoCharacters=0;this.active=new Set();this.queries=0;this.hits=0;this.candidatesExamined=0;
   }
   declaration(name,module,node,required=true) {
@@ -65,6 +67,13 @@ export class TraitImplementationResolver {
   }
   validate(entry) {
     const {impl,trait,parameters,target}=entry;
+    const parents = this.hierarchy.parents(trait.name);
+    if (parents.length) {
+      const environment = new ImplObligations(this.a, entry);
+      for (const parent of parents) if (!environment.prove(target, parent))
+        throw new Diagnostic('E0277', `Implementing ${trait.name} requires ${target}: ${parent}`, impl.span,
+          [{message: 'Supertrait is required here', span: trait.span}]);
+    }
     const root=T.application(target).name,shape=this.index.structs.get(root)??this.index.enums.get(root);
     if((trait.crateRoot??'')!==(impl.crateRoot??'') && (!shape||(shape.crateRoot??'')!==(impl.crateRoot??'')))
       throw new Diagnostic('E0117','A trait implementation needs a local trait or local implementing type',impl.span);
@@ -173,7 +182,7 @@ export class TraitImplementationResolver {
       const oldest=this.memo.keys().next().value;this.memoCharacters-=oldest.length;this.memo.delete(oldest);
     }
   }
-  snapshot() {return {queries:this.queries,cacheHits:this.hits,cacheEntries:this.memo.size,cacheCharacters:this.memoCharacters,candidatesExamined:this.candidatesExamined};}
+  snapshot() {return {hierarchy:this.hierarchy.snapshot(),queries:this.queries,cacheHits:this.hits,cacheEntries:this.memo.size,cacheCharacters:this.memoCharacters,candidatesExamined:this.candidatesExamined};}
   prove(type,bound,environment,depth) {
     const active=environment.traitActive??=new Set(),key=JSON.stringify([type,bound]);
     if(active.has(key))return false;

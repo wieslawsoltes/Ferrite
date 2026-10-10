@@ -144,9 +144,18 @@ export class Runtime {
   }
   cells(count) { return Array.from({length: count}, () => ({value: undefined})); }
   reference(cells, slot, path = []) { return {__ref: true, cell: cells[slot], path}; }
+  borrow(reference) {
+    // A borrow evaluates its place now. Resolve indices/dereferences before
+    // later call arguments, and capture the selected location rather than a
+    // path through a mutable reference-holding register that can be replaced.
+    const {holder, key} = this.resolve(reference);
+    if (holder[key] === undefined) this.fail('Borrow before initialization', 'R_UNINITIALIZED');
+    return Object.freeze({__ref:true, cell:holder, key, path:Object.freeze([])});
+  }
   resolve(reference, depth = 0) {
     if (depth > 128 || !reference || reference.__ref !== true) this.fail('Invalid reference', 'R_REFERENCE');
-    let holder = reference.cell, key = 'value';
+    let holder = reference.cell, key = reference.key ?? 'value';
+    if (!holder || typeof holder !== 'object' || !Array.isArray(reference.path)) this.fail('Invalid reference location', 'R_REFERENCE');
     for (const part of reference.path) {
       const value = holder[key];
       if (part.kind === 'deref') { ({holder, key} = this.resolve(value, depth + 1)); continue; }

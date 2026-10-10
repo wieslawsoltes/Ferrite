@@ -1,3 +1,7 @@
+import {supertraitCases as recoveredSupertraitCases, supertraitCompileFailCases as recoveredSupertraitCompileFailCases} from './recovered-supertraits.js';
+import {supertraitCases, supertraitCompileFailCases} from './supertraits.js';
+import {receiverReborrowCases,receiverReborrowCompileFailCases,receiverReborrowPanicCases} from './receiver-reborrows.js';
+import {traitHardeningCases,traitHardeningCompileFailCases} from './trait-hardening.js';
 import {genericTraitCases,genericTraitCompileFailCases} from './generic-traits.js';
 import {uiGenericCases, uiGenericCompileFailCases} from './ui-generic-integration.js';
 import {genericImplCases, genericImplCompileFailCases} from './generic-impls.js';
@@ -126,10 +130,16 @@ export const runtimePanicCases = [
   ['explicit panic', 'fn main(){panic!("expected");}', 'R_PANIC'],
 ];
 export const languageCases = [
-  ...uiGenericCases, ...genericImplCases, ...primitiveCases, ...sequenceCases, ...constantCases, ...controlCases, ...floatCases, ...destructuringCases, ...nominalCases, ...enumRecordCases, ...callableCases, ...discriminantCases,
+  ...recoveredSupertraitCases, ...supertraitCases, ...uiGenericCases, ...genericImplCases, ...primitiveCases, ...sequenceCases, ...constantCases, ...controlCases, ...floatCases, ...destructuringCases, ...nominalCases, ...enumRecordCases, ...callableCases, ...discriminantCases,
 ].map(([name,source,output])=>({name,source,output,kind:'run'})).concat(
-  [...uiGenericCompileFailCases, ...genericImplCompileFailCases, ...compileFailCases, ...floatCompileFailCases, ...destructuringCompileFailCases, ...nominalCompileFailCases, ...enumRecordCompileFailCases, ...callableCompileFailCases, ...discriminantCompileFailCases].map(([name,source])=>({name,source,kind:'compile-fail'})),
+  [...recoveredSupertraitCompileFailCases, ...supertraitCompileFailCases, ...uiGenericCompileFailCases, ...genericImplCompileFailCases, ...compileFailCases, ...floatCompileFailCases, ...destructuringCompileFailCases, ...nominalCompileFailCases, ...enumRecordCompileFailCases, ...callableCompileFailCases, ...discriminantCompileFailCases].map(([name,source])=>({name,source,kind:'compile-fail'})),
   [...runtimePanicCases, ...floatPanicCases, ...destructuringPanicCases, ...nominalPanicCases, ...enumRecordPanicCases, ...callablePanicCases].map(([name,source,code,output])=>({name,source,code,output,kind:'panic'})),
 );
 
 languageCases.push(...genericTraitCases.map(([name,source,output])=>({name,source,output,kind:'run'})),...genericTraitCompileFailCases.map(([name,source])=>({name,source,kind:'compile-fail'})));
+
+languageCases.push(...traitHardeningCases.map(([name,source,output])=>({name,source,output,kind:'run'})),...traitHardeningCompileFailCases.map(([name,source])=>({name,source,kind:'compile-fail'})));
+
+languageCases.push(...receiverReborrowCases.map(([name,source,output])=>({name,source,output,kind:'run'})),...receiverReborrowCompileFailCases.map(([name,source])=>({name,source,kind:'compile-fail'})));
+
+languageCases.push(...receiverReborrowPanicCases.map(([name,source,code,output])=>({name,source,code,output,kind:'panic'})));

@@ -59,3 +59,12 @@ method substitutions, structural head matching and declaration well-formedness.
 [Generic user-trait implementations](generic-traits.md) add blanket/structural
 impl targets, checked method contracts, inherited defaults and bounded inductive
 obligations. These do not claim full parametric body or trait/lifetime solving.
+
+## Receiver reborrows
+
+User method calls reborrow existing reference receivers. Compiler-inserted mutable
+receivers reserve a loan before arguments and activate it at invocation, allowing
+shared reads during reservation but rejecting conflicting writes and live aliases.
+Borrow instructions validate and capture the storage location before evaluating
+arguments. See [Receiver reborrows](receiver-reborrows.md) for supported origins,
+evaluation ordering and the conservative reference-result boundary.

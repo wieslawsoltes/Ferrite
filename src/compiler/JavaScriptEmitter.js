@@ -31,7 +31,7 @@ export class JavaScriptEmitter {
       case 'callIndirect':return `r.invokeFunction(functions,${v(i.value)},${j(i.signature)},[${i.args.map(v)}])`;
       case 'const': return `r.literal(${j(LiteralValue.encode(i.value))},${j(i.type)})`;
       case 'read': return `r.read(${this.place(i.place)},${!!i.copy})`;
-      case 'borrow': return this.place(i.place);
+      case 'borrow': return `r.borrow(${this.place(i.place)})`;
       case 'binary': return `r.binary(${j(i.operator)},${v(i.left)},${v(i.right)},${j(i.operandType)})`;
       case 'unary': return `r.unary(${j(i.operator)},${v(i.value)},${j(i.type)})`;
       case 'discriminant': return `r.discriminant(${v(i.value)},${this.discriminants.get(i.table)})`;

@@ -87,3 +87,12 @@ inference, trait/default-method and alias semantics, bounded query isolation and
 concrete cross-backend layouts. The shared fixtures include the native discovery
 probes for repeated/contradictory bounds, alias non-enforcement and explicit-method
 body evidence. The normal native-rustc and HTTP/browser gates remain unchanged.
+
+
+[Associated-type bound arguments](associated-bounds.md) extend the same binding
+service with declaration-local predicates, nested bound/equality elaboration and
+symbolic `Copy` ownership proofs. The shared corpus covers native discovery
+cases, trait method contracts, projected callables, closures and constants.
+Dedicated tests also enforce proof/cache isolation, frozen ASTs, bounded
+elaboration and concrete executable MIR. The documented uninstantiated generic
+body discrepancy is not represented as a passing native compatibility case.

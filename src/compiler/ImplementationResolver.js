@@ -222,7 +222,15 @@ export class ImplementationResolver {
     }
     const separator = node.name.lastIndexOf('::'); if (separator < 0) return null;
     let owner = node.name.slice(0, separator);
-    const scope = context.methodScope?.selection(owner === 'Self' ? context.methodScope.normalize('Self') : owner);
+    // Owner turbofish belongs to the symbolic method-selection origin too.
+    // A generic nominal with omitted arguments is inferred below; unlike a
+    // parameter, its bare spelling does not provide abstract-bound privileges.
+    const symbolicOwner = node.ownerTypeArguments?.length ? `${owner}<${node.ownerTypeArguments.join(',')}>` : owner;
+    const originShape = !node.ownerTypeArguments?.length && !context.methodScope?.parameters.has(owner) && (
+      this.index.typeResolver.find(this.index.structs, owner, context.instance.fn.module, node) ??
+      this.index.typeResolver.find(this.index.enums, owner, context.instance.fn.module, node) ??
+      this.index.typeResolver.find(this.index.aliases, owner, context.instance.fn.module, node));
+    const scope = originShape?.generics?.length ? null : context.methodScope?.selection(symbolicOwner);
     const method = node.name.slice(separator + 2), module = context.instance.fn.module;
     if (owner === 'Self') owner = context.instance.fn.owner;
     else owner = T.substitute(owner, context.instance.substitution ?? new Map(Object.entries(context.instance.typeArguments)));

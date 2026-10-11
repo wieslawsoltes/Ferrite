@@ -2,7 +2,7 @@ import {Diagnostic} from './Diagnostic.js';
 import {TypeSystem as T} from './TypeSystem.js';
 import {ImplTypePattern} from './ImplTypePattern.js';
 
-/** Declaration-local equations for non-generic associated type bindings.
+/** Declaration-local equations and obligations for associated type constraints.
  *
  * Trait selection uses only the self type and positional trait arguments. The
  * equations are independently checked after selection, or used as explicit
@@ -18,8 +18,13 @@ export class AssociatedTypeBindings {
     this.enabled = [...declarations, ...members].some(declaration => [
       ...(declaration.bounds ?? []), ...(declaration.generics ?? []).flatMap(g => g.bounds),
       ...(declaration.predicates ?? []).flatMap(p => p.bounds), declaration.returnType ?? ''
-    ].some(bound => bound.includes('=')));
+    ].some(bound => bound.includes('=') || /[<,][_\p{ID_Start}][_\p{ID_Continue}]*:(?!:)/u.test(bound)));
     this.environments = new WeakMap();
+    // Keep the public equation-table shape stable. Predicate tables share the
+    // same lifetime and declaration/parameter key, but are never type equations.
+    this.predicateTables = new WeakMap();
+    this.inheritedDepth = 0;
+    this.predicateCount = 0;
     this.building = 0;
     this.queries = 0;
     this.environmentBuilds = 0;
@@ -52,8 +57,49 @@ export class AssociatedTypeBindings {
       ).map(identity => T.traitIdentity(identity)));
       if (!owners.size) throw new Diagnostic('E0220', `Trait ${app.name} has no associated type ${binding.name}`, node?.span);
       if (owners.size > 1) throw new Diagnostic('E0222', `Associated type ${binding.name} is ambiguous in ${app.name}`, node?.span);
-      return {projection: T.projectionName(subject, [...owners][0], binding.name), type: binding.type};
+      const projection = T.projectionName(subject, [...owners][0], binding.name);
+      return binding.bounds ? {projection, bounds: binding.bounds} : {projection, type: binding.type};
     });
+  }
+
+  /** Elaborate finite syntax only. A recursive declaration such as
+   * `type Item: Node` is not eagerly expanded into an infinite projection tree. */
+  requirements(subject, bound, node) {
+    const pending = [{subject, bound, depth: 0}], seen = new Set(), result = [];
+    while (pending.length) {
+      const next = pending.pop(); this.tick(node);
+      if (next.depth > 64) throw new Diagnostic('F_ASSOC_BINDING_LIMIT', 'Associated bound elaboration depth exceeded', node?.span);
+      const key = JSON.stringify([next.subject, next.bound]);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      for (const implied of this.graph?.closure(next.bound, next.subject) ?? [next.bound]) {
+        for (const requirement of this.constraints(next.subject, implied, node)) {
+          result.push(requirement);
+          for (const required of requirement.bounds ?? [])
+            pending.push({subject: requirement.projection, bound: required, depth: next.depth + 1});
+        }
+      }
+    }
+    return result;
+  }
+
+  /** Check argument types without treating a bound's trait name as a type. */
+  validateArguments(bound, parameters, node, depth = 0) {
+    this.tick(node);
+    if (depth > 64) throw new Diagnostic('F_ASSOC_BINDING_LIMIT', 'Associated bound argument depth exceeded', node?.span);
+    const callable = /^(Fn|FnMut|FnOnce)(?=\()/.exec(bound);
+    if (callable) {
+      const signature = T.function('fn' + bound.slice(callable[1].length));
+      if (signature) for (const type of [...signature.params, signature.result])
+        this.index.typeResolver.validateKnown(type, parameters, node);
+      return;
+    }
+    const app = T.traitApplication(bound);
+    for (const type of app.args) this.index.typeResolver.validateKnown(type, parameters, node);
+    for (const binding of app.bindings) {
+      if (binding.bounds) for (const required of binding.bounds) this.validateArguments(required, parameters, node, depth + 1);
+      else this.index.typeResolver.validateKnown(binding.type, parameters, node);
+    }
   }
 
   environment(parameters, node) {
@@ -64,14 +110,14 @@ export class AssociatedTypeBindings {
     let variants = this.environments.get(context);
     if (variants?.has(key)) return variants.get(key);
     this.tick(node);
-    const equations = new Map();
+    const equations = new Map(), boundsTable = new Map();
     let characters = 0;
-    const add = (projection, type) => {
-      if (!equations.has(projection)) equations.set(projection, new Set());
-      const set = equations.get(projection);
+    const add = (table, projection, type) => {
+      if (!table.has(projection)) table.set(projection, new Set());
+      const set = table.get(projection);
       if (set.has(type)) return;
       set.add(type); characters += projection.length + type.length;
-      if (equations.size > this.maxEquations || characters > this.maxCharacters)
+      if (equations.size + boundsTable.size > this.maxEquations || characters > this.maxCharacters)
         throw new Diagnostic('F_ASSOC_BINDING_LIMIT', 'Associated-type equation environment exceeds its budget', node?.span);
     };
     // Suppressed queries have a distinct TypeResolver cache key. Building the
@@ -89,17 +135,38 @@ export class AssociatedTypeBindings {
       for (const [rawSubject, rawBound] of pairs) {
         // Builtin marker/callable bounds cannot carry associated equations. Leave
         // their validation to their existing owner rather than changing diagnostics.
-        if (!rawBound.includes('=') && !this.index.typeResolver.find(this.index.traits, T.application(rawBound).name, module, context)) continue;
+        if (!T.traitApplication(rawBound).bindings.length && !this.index.typeResolver.find(this.index.traits, T.application(rawBound).name, module, context)) continue;
         const subject = this.index.type(rawSubject, module, self, parameters, context);
         const bound = this.graph.canonical(rawBound, module, context, parameters, self);
-        for (const implied of this.graph.closure(bound, subject))
-          for (const equation of this.constraints(subject, implied, context)) add(equation.projection, equation.type);
+        add(boundsTable, subject, bound);
+        for (const requirement of this.requirements(subject, bound, context)) {
+          if (requirement.bounds) for (const required of requirement.bounds) add(boundsTable, requirement.projection, required);
+          else add(equations, requirement.projection, requirement.type);
+        }
+      }
+      // Transfer obligations along declared output equalities, never from a
+      // concrete implementation or by reversing trait selection. This gives
+      // `U: Copy` from `T: Source<Item = U, Item: Copy>`. Conflicting equations
+      // stay lazy; merely declaring an uninhabited generic context is legal.
+      const pending = [];
+      for (const [projection, values] of equations) if (values.size === 1)
+        for (const bound of boundsTable.get(projection) ?? []) pending.push([projection, bound]);
+      while (pending.length) {
+        this.tick(node);
+        const [projection, bound] = pending.pop(), values = equations.get(projection);
+        if (values?.size !== 1) continue;
+        const target = values.values().next().value;
+        if (!boundsTable.get(target)?.has(bound)) {
+          add(boundsTable, target, bound); pending.push([target, bound]);
+        }
       }
     } finally { this.building--; }
     if (!variants) { variants = new Map(); this.environments.set(context, variants); }
     // Each key is declaration-local; retain a bounded number of synthetic contexts.
     if (variants.size >= 32) variants.delete(variants.keys().next().value);
     variants.set(key, equations); this.environmentBuilds++;
+    this.predicateTables.set(equations, boundsTable);
+    this.predicateCount += [...boundsTable.values()].reduce((count, bounds) => count + bounds.size, 0);
     return equations;
   }
 
@@ -108,10 +175,52 @@ export class AssociatedTypeBindings {
     // Bounds on free type aliases are not enforced by Rust and must not rewrite
     // the alias's actual associated output. Member spellings are still validated.
     if (context?.kind === 'typeAlias' && !context.owner) return null;
-    const equations = this.environment(parameters, node), values = equations?.get(projection);
-    if (!values) return null;
+    const equations = this.environment(parameters, node);
+    const values = new Set(equations?.get(projection) ?? []);
+    for (const inherited of this.inheritedRequirements(projection, parameters, node))
+      if (!inherited.bounds) values.add(inherited.type);
+    if (!values.size) return null;
     if (values.size > 1) throw new Diagnostic('E0284', `Conflicting associated-type equalities for ${projection}`, node?.span);
     return values.values().next().value;
+  }
+
+  parametersFor(node) {
+    const context = this.index.associatedTypes.context(node);
+    const trait = context.kind === 'trait' ? context : this.index.traits.get(context.traitContext);
+    return new Set([...(trait?.generics ?? []).map(g => g.name), ...(context.generics ?? []).map(g => g.name),
+      ...(trait || context.defaultTrait ? ['Self'] : [])]);
+  }
+
+  boundsFor(projection, parameters, node) {
+    if (!this.enabled || this.building) return [];
+    const context = this.index.associatedTypes.context(node);
+    if (context?.kind === 'typeAlias' && !context.owner) return [];
+    const equations = this.environment(parameters, node);
+    const bounds = new Set(this.predicateTables.get(equations)?.get(projection) ?? []);
+    for (const inherited of this.inheritedRequirements(projection, parameters, node))
+      for (const bound of inherited.bounds ?? []) bounds.add(bound);
+    return [...bounds];
+  }
+
+  /** Demand-driven evidence from the receiver's declaration. This also handles
+   * `type Item: Source<Output: Copy>` without expanding recursive associated
+   * declarations eagerly or using a monomorphized value as symbolic evidence. */
+  inheritedRequirements(projection, parameters, node) {
+    if (!this.enabled || this.building || !this.graph) return [];
+    const outer = T.projection(projection), receiver = outer && T.projection(outer.self);
+    if (!receiver) return [];
+    this.tick(node);
+    if (++this.inheritedDepth > 64) {
+      this.inheritedDepth--;
+      throw new Diagnostic('F_ASSOC_BINDING_LIMIT', 'Associated bound evidence depth exceeded', node?.span);
+    }
+    try {
+      const result = [];
+      for (const bound of this.index.associatedTypes.declaredBounds(receiver, node, parameters))
+        for (const requirement of this.requirements(outer.self, bound, node))
+          if (requirement.projection === projection) result.push(requirement);
+      return result;
+    } finally { this.inheritedDepth--; }
   }
 
   /** Outputs can constrain impl parameters once every projection input is
@@ -202,43 +311,60 @@ export class AssociatedTypeBindings {
     } finally { active.delete(key); }
   }
 
-  satisfies(subject, bound, parameters, node) {
-    const constraints = this.constraints(subject, bound, node);
-    for (const equation of constraints) {
-      const actual = this.index.associatedTypes.normalize(equation.projection, parameters, node);
-      const expected = this.index.associatedTypes.normalize(equation.type, parameters, node);
-      if (actual !== expected) return false;
+  satisfies(subject, bound, parameters, node, prove = null) {
+    const requirements = this.requirements(subject, bound, node);
+    prove ??= (type, required) => this.index.associatedTypes.implementations.a.hasBound(type, required);
+    for (const requirement of requirements) {
+      const actual = this.index.associatedTypes.normalize(requirement.projection, parameters, node);
+      if (requirement.bounds) {
+        for (const required of requirement.bounds) if (!prove(actual, required)) return false;
+      } else {
+        const expected = this.index.associatedTypes.normalize(requirement.type, parameters, node);
+        if (actual !== expected) return false;
+      }
     }
     return true;
   }
 
   snapshot() {
     return {enabled: this.enabled, queries: this.queries, environmentBuilds: this.environmentBuilds,
-      inferredArguments: this.inferredArguments};
+      inferredArguments: this.inferredArguments, predicates: this.predicateCount};
   }
 
   /** Validate binding syntax/member names even when unused. Contradictory
    * generic assumptions are diagnosed only when a projection needs their value. */
   validateUses() {
     const index = this.index;
-    for (const declaration of [...index.functions.values(), ...index.structs.values(), ...index.enums.values(),
-      ...index.aliases.values(), ...index.traits.values(), ...index.impls]) {
+    const declarations = [...index.functions.values(), ...index.structs.values(), ...index.enums.values(),
+      ...index.aliases.values(), ...index.traits.values(), ...index.impls];
+    for (const trait of index.traits.values()) {
+      declarations.push(...trait.methods);
+      declarations.push(...trait.associatedTypes.map(item => ({...item, traitContext: trait.name, typeContext: trait})));
+    }
+    for (const declaration of new Set(declarations)) {
       if (declaration.builtin) continue;
-      const parameters = new Set((declaration.generics ?? []).map(g => g.name));
-      if (declaration.kind === 'trait' || declaration.traitContext) parameters.add('Self');
+      const parameters = this.parametersFor(declaration);
+      const context = index.associatedTypes.context(declaration);
+      const self = context.kind === 'impl' ? context.target : context.owner ?? 'Self';
       const bounds = [...(declaration.bounds ?? []), ...(declaration.generics ?? []).flatMap(g => g.bounds),
-        ...(declaration.predicates ?? []).flatMap(p => p.bounds)];
+        ...(declaration.predicates ?? []).flatMap(p => p.bounds),
+        ...(declaration.returnType?.startsWith('impl ') ? [declaration.returnType.slice(5)] : [])];
       for (const raw of bounds) {
         const app = T.traitApplication(raw);
         const trait = index.typeResolver.find(index.traits, app.name, declaration.module, declaration);
         if (trait && app.args.length !== trait.generics.length)
           throw new Diagnostic('E0107', `Trait ${trait.name} expects ${trait.generics.length} type argument(s)`, declaration.span);
+        if (!this.enabled) continue;
+        const bound = this.graph.canonical(raw, declaration.module ?? context.module, declaration, parameters, self);
+        this.validateArguments(bound, parameters, declaration);
+        this.requirements('_', bound, declaration); // includes member validation for an empty `Item:` bound
       }
       const equations = this.environment(parameters, declaration);
       if (!equations) continue;
-      for (const [projection, values] of equations) {
-        for (const value of values) index.typeResolver.validateKnown(value, parameters, declaration);
-      }
+      for (const values of equations.values()) for (const value of values)
+        index.typeResolver.validateKnown(value, parameters, declaration);
+      for (const values of this.predicateTables.get(equations)?.values() ?? []) for (const bound of values)
+        this.validateArguments(bound, parameters, declaration);
     }
   }
 }

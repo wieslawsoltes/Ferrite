@@ -65,13 +65,19 @@ export class TypeSystem {
     const i = type.indexOf('<');
     return i < 0 ? {name: type, args: []} : {name: type.slice(0, i), args: this.split(type.slice(i + 1, -1))};
   }
-  /** Equality constraints are not positional trait arguments. Keep them out of
-   * implementation identity, but retain their labels and RHS type identities. */
+  /** Associated constraints are not positional trait arguments. A binding is
+   * either an output equation ({name, type}) or projection bounds ({name, bounds}).
+   * Both forms preserve their associated-item labels across substitution. */
   static traitApplication(type) {
     const application = this.application(type), args = [], bindings = [];
     for (const value of application.args) {
       const equal = this.split(value, '=');
       if (equal.length === 1) {
+        const bounded = /^([_\p{ID_Start}][_\p{ID_Continue}]*):(?!:)(.*)$/u.exec(value);
+        if (bounded) {
+          bindings.push({name: bounded[1], bounds: this.split(bounded[2], '+')});
+          continue;
+        }
         if (bindings.length) throw new Diagnostic('E0229', 'Type arguments must precede associated type bindings');
         args.push(value); continue;
       }
@@ -85,8 +91,19 @@ export class TypeSystem {
     return {name: application.name, args, bindings};
   }
   static traitName(name, args = [], bindings = []) {
-    const parts = [...args, ...bindings.map(binding => `${binding.name}=${binding.type}`)];
+    const parts = [...args, ...bindings.map(binding => binding.bounds
+      ? `${binding.name}:${binding.bounds.join('+')}` : `${binding.name}=${binding.type}`)];
     return name + (parts.length ? `<${parts.join(',')}>` : '');
+  }
+  /** Type RHSs and bound RHSs are different namespaces. A caller that resolves
+   * traits can provide a separate bound mapper; structural substitution uses one. */
+  static mapBindings(bindings, type, bound = type) {
+    return bindings.map(binding => binding.bounds
+      ? {...binding, bounds: binding.bounds.map(bound)}
+      : {...binding, type: type(binding.type)});
+  }
+  static bindingTypes(bindings) {
+    return bindings.flatMap(binding => binding.bounds ?? [binding.type]);
   }
   static traitIdentity(type) {
     const {name, args} = this.traitApplication(type);
@@ -100,7 +117,7 @@ export class TypeSystem {
       if (token.kind !== 'identifier' && token.value !== 'Self') continue;
       // An equality label belongs to the associated-item namespace, not to the
       // generic binder namespace (e.g. Trait<Item=Item> substitutes only RHS).
-      if (tokens[i + 1]?.value === '=' || tokens[i - 1]?.value === '::') continue;
+      if (['=', ':'].includes(tokens[i + 1]?.value) || tokens[i - 1]?.value === '::') continue;
       const root = token.value;
       let name = root, end = token.span.end;
       while (tokens[i + 1]?.value === '::' && tokens[i + 2]?.kind === 'identifier') { i += 2; name += '::' + tokens[i].value; end = tokens[i].span.end; }

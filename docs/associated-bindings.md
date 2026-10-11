@@ -140,7 +140,9 @@ full native/HTTP/browser CI run constitutes that broader validation.
 
 ## Remaining boundaries
 
-This continuation does not implement GATs, `Source<Item: Copy>` shorthand,
+[Associated-type bound arguments](associated-bounds.md), including `Source<Item: Copy>` and nested predicates, are supported by the bound-elaboration continuation.
+
+The compiler does not yet implement GATs,
 associated bindings on `dyn` objects, higher-ranked/lifetime bindings, conditional
 associated-item where clauses, trait type-parameter defaults, or general symbolic
 projection equations in impl heads. Forward output inference is not inverse

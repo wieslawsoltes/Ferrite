@@ -59,11 +59,11 @@ export class TraitHierarchy {
       const arity = declaration.generics?.length ?? 0;
       if (app.args.length !== arity) throw new Diagnostic('E0107', `Trait ${declaration.name} expects ${arity} type argument(s)`, node?.span);
       const args = app.args.map(type => this.index.type(type, module, self, parameters, node));
-      return T.traitName(declaration.name, args, app.bindings.map(binding => ({...binding, type: this.index.type(binding.type, module, self, parameters, node)})));
+      return T.traitName(declaration.name, args, T.mapBindings(app.bindings, type => this.index.type(type, module, self, parameters, node), bound => this.canonical(bound, module, node, parameters, self)));
     }
     const name = raw.split('::').at(-1);
     if (Object.hasOwn(paths, name) && (raw === name || raw === paths[name] || raw === paths[name].replace(/^core::/, 'std::'))) return paths[name];
-    if (/^(Fn|FnMut|FnOnce)\(/.test(raw)) return this.index.type(raw, module, null, new Set(), node);
+    if (/^(Fn|FnMut|FnOnce)\(/.test(raw)) return this.index.type(raw, module, self, parameters, node);
     throw new Diagnostic('E0405', `Unknown trait '${raw}'`, node?.span);
   }
   builtinName(identity) {
@@ -139,8 +139,11 @@ export class TraitHierarchy {
     const expected = T.traitApplication(parent), identity = T.traitIdentity(parent);
     return value.some(candidate => {
       if (T.traitIdentity(candidate) !== identity) return false;
-      const available = new Map(T.traitApplication(candidate).bindings.map(binding => [binding.name, binding.type]));
-      return expected.bindings.every(binding => available.get(binding.name) === binding.type);
+      const available = T.traitApplication(candidate).bindings;
+      return expected.bindings.every(binding => binding.bounds
+        ? binding.bounds.every(required => available.some(actual => actual.name === binding.name &&
+          actual.bounds?.some(bound => this.implies(bound, required))))
+        : available.some(actual => actual.name === binding.name && actual.type === binding.type));
     });
   }
   snapshot() { return {traits: this.direct.size, edges: this.edges, visits: this.visits, cacheHits: this.hits, cacheEntries: this.cache.size, cacheCharacters: this.characters}; }

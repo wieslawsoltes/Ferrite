@@ -39,7 +39,7 @@ export class TypeResolver {
           const trait = this.find(this.index.traits, constrained.name, module, node);
           if (!trait) throw new Diagnostic('E0229', 'Associated type bindings require a declared trait', node?.span);
           if (constrained.args.length !== trait.generics.length) throw new Diagnostic('E0107', `Trait ${trait.name} expects ${trait.generics.length} type argument(s)`, node?.span);
-          const result = T.traitName(trait.name, constrained.args.map(next), constrained.bindings.map(binding => ({...binding, type: next(binding.type)})));
+          const result = T.traitName(trait.name, constrained.args.map(next), T.mapBindings(constrained.bindings, next));
           return this.remember(key, result);
         }
         const {name, args} = T.application(type), arguments_ = args.map(next);

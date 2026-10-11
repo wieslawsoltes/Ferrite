@@ -1,3 +1,4 @@
+import {ImplObligations} from './ImplObligations.js';
 import {TypeSystem as T} from './TypeSystem.js';
 import {ImplTypePattern as Pattern} from './ImplTypePattern.js';
 
@@ -32,7 +33,7 @@ export class TraitMethodScope {
         for (const trait of traits) this.bounds.get(subject).add(trait);
       }
     }
-    this.active = this.bounds.size > 0;
+    this.active = this.bounds.size > 0 || this.parameters.size > 0;
   }
   normalize(type) {
     return this.a.index.type(type, this.fn.module, this.fn.defaultTrait ? 'Self' : this.fn.owner, this.parameters, this.fn);
@@ -71,6 +72,39 @@ export class TraitMethodScope {
       this.a.index.associatedTypes.symbolic(origin, this.parameters);
     const traits = this.traits(origin);
     return abstract || traits ? {traits: traits ?? new Set(), parameter, abstract} : null;
+  }
+  /** A concrete Copy instantiation cannot grant Copy to an abstract origin.
+   * Reuse declaration obligation proofs and the existing ownership pass rather
+   * than inferring privileges from the selected runtime layout. */
+  copyOf(node) {
+    if (!this.active) return null;
+    return this.copyOrigin(this.of(node));
+  }
+  copyOrigin(origin) {
+    if (!this.active || !this.a.index.associatedTypes.symbolic(origin, this.parameters)) return null;
+    const inherited = this.closure?.ctx.methodScope;
+    if (inherited && inherited !== this) {
+      const proof = inherited.copyOrigin(origin);
+      if (proof !== null) return proof;
+    }
+    const memo = this.copyProofs ??= new Map();
+    if (memo.has(origin)) return memo.get(origin);
+    if (!this.copyEnvironment) {
+      const declaration = this.fn.defaultTrait ? {...this.fn, unsizedSelf: true,
+        generics: [...this.fn.generics, {name: 'Self', bounds: [this.fn.defaultTrait]}]} : this.fn;
+      this.copyEnvironment = new ImplObligations(this.a,
+        {target: this.fn.defaultTrait ? 'Self' : this.fn.owner, impl: declaration}, declaration);
+    }
+    const environment = this.copyEnvironment;
+    const copy = environment.prove(origin, 'core::marker::Copy');
+    if (origin.length <= 32768) {
+      while (memo.size && (memo.size >= 1024 || (this.copyProofCharacters ?? 0) + origin.length > 1000000)) {
+        const oldest = memo.keys().next().value;
+        this.copyProofCharacters -= oldest.length; memo.delete(oldest);
+      }
+      memo.set(origin, copy); this.copyProofCharacters = (this.copyProofCharacters ?? 0) + origin.length;
+    }
+    return copy;
   }
   remember(node, origin) { if (this.active && node && origin) this.expressions.set(node, origin); }
   bind(binding, origin) { if (this.active && binding && origin) this.bindings.set(binding, origin); }
@@ -143,6 +177,42 @@ export class TraitMethodScope {
       pattern.items.forEach(item => this.bindPattern(item, element ?? item.type));
       if (pattern.restBinding && element) this.bindPattern(pattern.restBinding.binder, `[${element};${pattern.restBinding.length}]`);
     }
+  }
+  /** Constant values are materialized concretely, but a local initialized from
+   * T::VALUE still has the trait contract's abstract output, not its chosen
+   * implementation's privileges. No const-body identity enters this scope. */
+  constantResult(node, resolved) {
+    if (!this.active) return;
+    let owner = node.qualifiedSelf ?? node.name.slice(0, node.name.lastIndexOf('::'));
+    if (node.ownerTypeArguments?.length) owner += `<${node.ownerTypeArguments.join(',')}>`;
+    owner = this.normalize(owner);
+    if (!this.a.index.associatedTypes.symbolic(owner, this.parameters)) return;
+    const fn = resolved.fn;
+    if (fn.implementedTrait) {
+      const actual = T.substitute(fn.implementedTrait, resolved.mapping);
+      const identity = node.qualifiedTrait ? this.graph.canonical(node.qualifiedTrait, this.fn.module,
+        this.fn, this.parameters, owner) : [...(this.declaredTraits(owner) ?? [])].find(bound =>
+        T.substitute(bound, this.substitution) === actual);
+      const application = identity && T.traitApplication(identity), trait = application && this.a.index.traits.get(application.name);
+      const member = trait?.methods.find(item => item.localName === fn.localName && item.associatedConstant);
+      if (member) {
+        const parameters = new Set(['Self', ...trait.generics.map(g => g.name)]);
+        const type = this.a.index.type(member.returnType, trait.module, 'Self', parameters, member);
+        this.remember(node, T.substitute(type, new Map([['Self', owner],
+          ...trait.generics.map((g, i) => [g.name, application.args[i]])])));
+        return;
+      }
+    } else {
+      const entry = this.a.implementations.entries[fn.implIndex];
+      const mapping = entry && this.a.implementations.match(entry, owner);
+      if (mapping) {
+        this.remember(node, T.substitute(this.a.index.type(fn.returnType, fn.module,
+          entry.target, entry.parameters, fn), mapping));
+        return;
+      }
+    }
+    // Do not claim a concrete proof when an unsupported symbolic origin remains.
+    this.remember(node, '_');
   }
   /** Reconstruct the result's symbolic arguments with independently named callee
    * variables. Concrete fallback never invents a caller bound from equality. */

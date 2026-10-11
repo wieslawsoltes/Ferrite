@@ -93,7 +93,7 @@ export class SemanticAnalyzer {
     if(T.function(type))return ['Copy','Clone','Send','Sync','PartialEq','Eq'].includes(bound);
     if(closure&&['Copy','Clone'].includes(bound))return this.closures.copy(closure);
     bound = bound.split('::').at(-1);
-    if (bound === 'Display') return T.numeric(type) || ['bool', 'char', '&str', 'String'].includes(type);
+    if (bound === 'Display') return T.numeric(type) || ['bool', 'char', 'str', '&str', 'String'].includes(type);
     if (bound === 'Copy' && T.primitiveCopy(type)) return true;
     if (['Clone', 'Debug', 'PartialEq', 'Eq'].includes(bound) && (T.primitiveCopy(type) || type === 'String')) return bound !== 'Eq' || !type.startsWith('f');
     const array = /^\[(.+);\d+\]$/.exec(type);
@@ -275,6 +275,7 @@ export class SemanticAnalyzer {
         if(fn?.implIndex!==undefined&&!associated)throw new Diagnostic('E0599',`No applicable in-scope method '${node.name}'`,node.span);
         if(fn?.associatedConstant) {
           const result = AssociatedConstant.evaluate(this, associated, node, ctx, expected);
+          ctx.methodScope.constantResult(node, associated);
           node.constant = structuredClone(result.expression); type = result.type; break;
         }
         if(fn){type=this.functionValues.create(node,fn,ctx,expected,associated ? this.implementations.explicit(associated, node, ctx) : null);break;}
@@ -304,7 +305,7 @@ export class SemanticAnalyzer {
         const count = Number(node.count.value);
         if (!Number.isSafeInteger(count) || count < 0 || count > 100000) throw new Diagnostic('F0202', 'Array length exceeds the budget', node.span);
         const element = this.infer(node.value, ctx, T.array(expected ?? '')?.element);
-        if (count > 1 && !this.hasTrait(element, 'Copy')) throw new Diagnostic('E0277', 'Repeated array element must implement Copy', node.span);
+        if (count > 1 && !(ctx.methodScope.copyOf(node.value) ?? this.hasTrait(element, 'Copy'))) throw new Diagnostic('E0277', 'Repeated array element must implement Copy', node.span);
         node.length = count; type = `[${element};${count}]`; break;
       }
       case 'assigneeRest': throw new Diagnostic('F_RANGE_VALUE', 'Full range values are not yet implemented; rest is supported inside destructuring assignees', node.span);
@@ -452,7 +453,8 @@ export class SemanticAnalyzer {
       default: throw new Diagnostic('F0203', `No type rule for '${node.kind}'`, node.span);
     }
     type=this.functionValues.coerce(node,type,expected,ctx);
-    node.copy = this.hasTrait(type, 'Copy');
+    this.annotate(node, type);
+    node.copy = ctx.methodScope.copyOf(node) ?? this.hasTrait(type, 'Copy');
     if(this.closures.get(type)?.node.borrowCarrier)node.borrowCarrier=true;
     return this.annotate(node, type);
   }

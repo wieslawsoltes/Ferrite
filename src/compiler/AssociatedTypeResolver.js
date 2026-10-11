@@ -55,7 +55,7 @@ export class AssociatedTypeResolver {
     if (trait.generics.length !== app.args.length)
       throw new Diagnostic('E0107', `Trait ${trait.name} expects ${trait.generics.length} type argument(s)`, node?.span);
     const args = app.args.map(type => this.index.type(type, module, self, parameters, node));
-    return T.traitName(trait.name, args, app.bindings.map(binding => ({...binding, type: this.index.type(binding.type, module, self, parameters, node)})));
+    return T.traitName(trait.name, args, T.mapBindings(app.bindings, type => this.index.type(type, module, self, parameters, node)));
   }
 
   member(traitName, name, node) {
@@ -131,7 +131,7 @@ export class AssociatedTypeResolver {
     const projection = T.projection(type);
     if (projection) return this.symbolic(projection.self, parameters) || this.symbolic(projection.trait, parameters);
     const app = T.traitApplication(type);
-    return [...app.args, ...app.bindings.map(binding => binding.type)].some(t => this.symbolic(t, parameters));
+    return [...app.args, ...T.bindingTypes(app.bindings)].some(t => this.symbolic(t, parameters));
   }
 
   currentEntry(node) {
@@ -210,7 +210,7 @@ export class AssociatedTypeResolver {
     const projection = T.projection(type);
     if (projection) return this.reduce(next(projection.self), next(projection.trait), projection.member, parameters, node);
     const app = T.traitApplication(type);
-    return T.traitName(app.name, app.args.map(next), app.bindings.map(binding => ({...binding, type: next(binding.type)})));
+    return T.traitName(app.name, app.args.map(next), T.mapBindings(app.bindings, next));
   }
 
   remember(key, value) {
@@ -238,13 +238,17 @@ export class AssociatedTypeResolver {
     args.forEach(type => this.index.typeResolver.validateKnown(type, parameters, node));
   }
 
-  declaredBounds(projection, node) {
+  declaredBounds(projection, node, callerParameters = null) {
     const {trait, item} = this.member(projection.trait, projection.member, node);
     const args = T.application(projection.trait).args;
     const mapping = new Map([['Self', projection.self], ...trait.generics.map((g, i) => [g.name, args[i]])]);
     const parameters = new Set(['Self', ...trait.generics.map(g => g.name)]);
-    return [...(item.relaxedSized ? [] : ['core::marker::Sized']), ...item.bounds].map(bound =>
+    const declared = [...(item.relaxedSized ? [] : ['core::marker::Sized']), ...item.bounds].map(bound =>
       T.substitute(this.index.type(bound, trait.module, 'Self', parameters, {...item, typeContext: trait}), mapping));
+    const name = T.projectionName(projection.self, projection.trait, projection.member);
+    const contextual = this.index.associatedBindings.boundsFor(name,
+      callerParameters ?? this.index.associatedBindings.parametersFor(node), node);
+    return [...new Set([...declared, ...contextual])];
   }
 
   validateDeclarations() {

@@ -51,6 +51,11 @@ export class Parser {
     return predicates;
   }
   bound() {
+    if (++this.typeDepth > 128) throw new Diagnostic('F_TYPE_DEPTH', 'Bound nesting limit exceeded', this.c.peek().span);
+    try { return this.parseBound(); } finally { this.typeDepth--; }
+  }
+  parseBound() {
+    if (this.c.match('(')) { const bound = this.bound(); this.c.eat(')'); return bound; }
     const name=this.path();
     if(['Fn','FnMut','FnOnce'].includes(name)&&this.c.match('(')) {
       const params=this.list(')',()=>this.type());
@@ -76,15 +81,24 @@ export class Parser {
   }
   typeArgument(allowBinding = false) {
     const start = this.c.peek();
-    if (start.kind === 'identifier' && this.c.peek(1).value === '=') {
+    if (start.kind === 'identifier' && ['=', ':'].includes(this.c.peek(1).value)) {
       if (!allowBinding) throw new Diagnostic('E0229', 'Associated type bindings are only allowed in trait bounds', start.span);
-      const name = this.c.identifier(); this.c.eat('=');
-      return `${name}=${this.type()}`;
+      const name = this.c.identifier();
+      if (this.c.match('=')) return `${name}=${this.type()}`;
+      this.c.eat(':');
+      const bounds = [];
+      while (!this.c.is('>') && !this.c.is(',')) {
+        if (this.c.is('?')) throw new Diagnostic('E0229', 'A relaxed bound is not permitted in an associated bound argument', this.c.peek().span);
+        if (this.c.peek().kind === 'lifetime' || this.c.is('for'))
+          throw new Diagnostic('F_ASSOC_LIFETIME', 'Associated lifetime and higher-ranked bounds require lifetime analysis', this.c.peek().span);
+        bounds.push(this.bound());
+        if (!this.c.match('+')) break;
+      }
+      return `${name}:${bounds.join('+')}`;
     }
     const type = this.type();
     if (this.c.is('=')) throw new Diagnostic('E0229', 'An associated type binding needs a simple member name in a trait bound', start.span);
-    if (this.c.is(':')) throw new Diagnostic('F_ASSOC_BINDING',
-      'Associated-type bound arguments require their bound-elaboration continuation', this.c.peek().span);
+    if (this.c.is(':')) throw new Diagnostic('E0229', 'An associated bound needs a simple member name in a trait bound', this.c.peek().span);
     return type;
   }
   type() {

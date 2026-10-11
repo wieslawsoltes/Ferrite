@@ -32,18 +32,18 @@ export class ImplObligations {
     const tuple=T.tuple(type);if(tuple)return tuple.some(t=>this.symbolic(t));
     const array=T.array(type);if(array)return this.symbolic(array.element);
     const app=T.traitApplication(type);
-    return [...app.args,...app.bindings.map(binding=>binding.type)].some(t=>this.symbolic(t));
+    return [...app.args,...T.bindingTypes(app.bindings)].some(t=>this.symbolic(t));
   }
   assume(rawType,rawBound,node) {
     const type=this.normalize(rawType,node),bound=this.trait(this.normalize(rawBound,node),this.declaration.module,node);
-    if(this.index.traits.has(T.application(bound).name))for(const argument of [...T.traitApplication(bound).args,...T.traitApplication(bound).bindings.map(binding=>binding.type)])this.index.typeResolver.validateKnown(argument,this.parameters,{...this.declaration,span:node.span??this.declaration.span});
+    if(this.index.traits.has(T.application(bound).name))this.index.associatedBindings.validateArguments(bound,this.parameters,{...this.declaration,span:node.span??this.declaration.span});
     this.index.associatedBindings.constraints(type,bound,node);
     if((!this.index.traits.has(T.application(bound).name) && type.startsWith('&mut ') && ['Copy','Clone'].includes(this.a.implementations.traits.hierarchy.builtinName(bound))) || !this.symbolic(type) && !this.symbolic(bound) && !this.prove(type,bound))
       throw new Diagnostic('E0277',`Implementation has an unsatisfied bound: ${type}: ${bound}`,node.span??this.declaration.span);
     if(!this.assumptions.has(type))this.assumptions.set(type,new Set());
     const set=this.assumptions.get(type);
     for(const implied of this.a.implementations.traits.hierarchy.closure(bound,type)) {
-      if(this.index.traits.has(T.application(implied).name))for(const argument of [...T.traitApplication(implied).args,...T.traitApplication(implied).bindings.map(binding=>binding.type)])this.index.typeResolver.validateKnown(argument,this.parameters,{...this.declaration,span:node.span??this.declaration.span});
+      if(this.index.traits.has(T.application(implied).name))this.index.associatedBindings.validateArguments(implied,this.parameters,{...this.declaration,span:node.span??this.declaration.span});
       this.index.associatedBindings.constraints(type,implied,node);
       set.add(implied); set.add(T.traitIdentity(implied));
     }
@@ -55,14 +55,15 @@ export class ImplObligations {
     const short=graph.builtinName(bound);
     if(T.traitApplication(bound).bindings.length) {
       return this.prove(type,T.traitIdentity(bound),depth+1) &&
-        this.index.associatedBindings.satisfies(type,bound,this.parameters,this.declaration);
+        this.index.associatedBindings.satisfies(type,bound,this.parameters,this.declaration,(type,required)=>this.prove(type,required,depth+1));
     }
     if(this.assumptions.get(type)?.has(bound))return true;
+    if(this.index.associatedBindings.boundsFor(type,this.parameters,this.declaration).some(required=>graph.implies(required,bound)))return true;
     const projection=T.projection(type);
     if(projection) {
       const normalized=this.index.associatedTypes.normalize(type,this.parameters,{typeContext:this.declaration});
       if(normalized!==type)return this.prove(normalized,bound,depth+1);
-      return this.index.associatedTypes.declaredBounds(projection,this.declaration).some(required=>
+      return this.index.associatedTypes.declaredBounds(projection,this.declaration,this.parameters).some(required=>
         graph.implies(graph.canonical(required,this.declaration.module,this.declaration,this.parameters,this.entry.target),bound));
     }
     // Ordinary parameters are implicitly Sized, unlike Self in a trait.

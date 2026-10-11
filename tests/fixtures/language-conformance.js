@@ -1,3 +1,4 @@
+import {associatedBoundCases, associatedBoundCompileFailCases} from './associated-bounds.js';
 import {associatedBindingCases, associatedBindingCompileFailCases} from './associated-bindings.js';
 import {associatedTypeCases, associatedTypeCompileFailCases} from './associated-types.js';
 import {associatedConstantCases, associatedConstantCompileFailCases} from './associated-constants.js';
@@ -159,3 +160,6 @@ languageCases.push(...associatedTypeCases.map(([name, source, output]) => ({name
 
 languageCases.push(...associatedBindingCases.map(([name, source, output]) => ({name, source, output, kind: 'run'})),
   ...associatedBindingCompileFailCases.map(([name, source]) => ({name, source, kind: 'compile-fail'})));
+
+languageCases.push(...associatedBoundCases.map(([name, source, output]) => ({name, source, output, kind: 'run'})),
+  ...associatedBoundCompileFailCases.map(([name, source]) => ({name, source, kind: 'compile-fail'})));

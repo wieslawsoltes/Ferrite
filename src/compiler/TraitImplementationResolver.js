@@ -115,11 +115,11 @@ export class TraitImplementationResolver {
       // does not repeat its equalities. Do not use its extra requirements as
       // evidence while checking that very contract.
       const outer={...fn,generics:impl.generics??[],predicates:impl.predicates??[]};
-      const inheritedType=raw=>this.index.typeResolver.substitute(this.index.type(raw,trait.module,'Self',expectedNames,expected),rename,{...fn,typeContext:outer});
+      const inheritedType=raw=>this.index.typeResolver.substitute(this.index.type(raw,trait.module,'Self',expectedNames,expected),rename,{...fn,typeContext:outer},actualNames);
       const environment={...fn,generics:[...(impl.generics??[]),...expected.generics.map((g,i)=>({...g,name:actual[i].name,
         bounds:g.bounds.map(inheritedType)}))],
         predicates:[...(impl.predicates??[]),...(expected.predicates??[]).map(p=>({...p,type:inheritedType(p.type),bounds:p.bounds.map(inheritedType)}))]};
-      const expectedType=raw=>this.index.typeResolver.substitute(this.index.type(raw,trait.module,'Self',expectedNames,expected),rename,{...fn,typeContext:environment});
+      const expectedType=raw=>this.index.typeResolver.substitute(this.index.type(raw,trait.module,'Self',expectedNames,expected),rename,{...fn,typeContext:environment},actualNames);
       const declaredBody={...fn};
       const declaredType=raw=>this.index.type(raw,fn.module,target,actualNames,declaredBody);
       const actualType=raw=>this.index.associatedTypes.normalize(declaredType(raw),actualNames,{...fn,typeContext:environment});
@@ -139,7 +139,7 @@ export class TraitImplementationResolver {
       // only gets evidence stated on that implementation. Keeping the two
       // environments separate avoids monomorphization lending an omitted
       // equality (or an out-of-scope trait) to the body.
-      if ([...expected.generics.flatMap(g=>g.bounds),...(expected.predicates??[]).flatMap(p=>p.bounds)].some(bound=>bound.includes('='))) {
+      if ([...expected.generics.flatMap(g=>g.bounds),...(expected.predicates??[]).flatMap(p=>p.bounds)].some(bound=>T.traitApplication(bound).bindings.length)) {
         fn.bodyGenerics=fn.generics;fn.bodyPredicates=fn.predicates??[];
       }
       fn.generics=environment.generics;fn.predicates=environment.predicates;fn.implementedTrait=entry.traitRef;
@@ -246,7 +246,7 @@ export class TraitImplementationResolver {
     const constraints=T.traitApplication(bound).bindings;
     if(constraints.length) {
       if(!environment.prove(type,T.traitIdentity(bound),depth+1))return false;
-      return this.index.associatedBindings.satisfies(type,bound,environment.parameters,environment.declaration);
+      return this.index.associatedBindings.satisfies(type,bound,environment.parameters,environment.declaration,(type,required)=>environment.prove(type,required,depth+1));
     }
     const active=environment.traitActive??=new Set(),key=JSON.stringify([type,bound]);
     if(active.has(key))return false;

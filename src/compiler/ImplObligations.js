@@ -17,6 +17,9 @@ export class ImplObligations {
       this.index.typeResolver.validateKnown(type,this.parameters,{...declaration,span:predicate.span});
       for(const bound of predicate.bounds) this.assume(type,bound,predicate);
     }
+    // All explicit evidence is available before checking implicit trait-input
+    // Sized obligations; a later T: Copy may restore the relaxed bound.
+    for(const bounds of this.assumptions.values())for(const bound of bounds)this.validateTraitArguments(bound,declaration);
   }
   normalize(type,node=this.declaration) {
     return this.index.type(type,this.declaration.module,this.entry.target,this.parameters,{...node,typeContext:this.declaration});
@@ -48,6 +51,14 @@ export class ImplObligations {
       set.add(implied); set.add(T.traitIdentity(implied));
     }
   }
+  /** Check trait input well-formedness after the complete local evidence exists. */
+  validateTraitArguments(bound,node=this.declaration) {
+    const {name,args}=T.traitApplication(bound),trait=this.index.traits.get(name);
+    for(const [i,type] of args.entries()) {
+      this.validateCanonical(type,node);
+      if(trait && this.index.sizedTypes.requiresParameter(trait,trait.generics[i]?.name))this.requireSized(type,node);
+    }
+  }
   prove(type,bound,depth=0) {
     if(++this.visits>65536 || depth>64)throw new Diagnostic('F_IMPL_BOUND_LIMIT','Implementation obligation budget exceeded',this.declaration.span);
     const graph=this.a.implementations.traits.hierarchy;
@@ -70,14 +81,8 @@ export class ImplObligations {
     // Ordinary parameters are implicitly Sized, unlike Self in a trait.
     if(this.index.traits.has(T.application(bound).name))return (this.symbolic(type)||this.symbolic(bound))?this.a.implementations.traits.prove(type,bound,this,depth):this.a.hasBound(type,bound);
     if(bound==='Sized'||bound==='core::marker::Sized'||bound==='std::marker::Sized') {
-      if(this.parameters.has(type))return !(type==='Self'&&this.declaration.unsizedSelf);
-      if(T.reference(type)||T.function(type))return true;
-      const tuple=T.tuple(type),array=T.array(type);
-      if(tuple||array)return (tuple??[array.element]).every(t=>this.prove(t,'core::marker::Sized',depth+1));
-      const {name,args}=T.application(type);
-      if(name==='Vec'||this.index.structs.has(name)||this.index.enums.has(name))
-        return args.every(t=>this.prove(t,'core::marker::Sized',depth+1));
-      return this.a.hasTrait(type,'core::marker::Sized');
+      if(this.parameters.has(type))return !(type==='Self'&&this.declaration.unsizedSelf) && this.index.sizedTypes.requiresParameter(this.declaration,type);
+      return this.index.sizedTypes.structural(type, t=>this.prove(t,'core::marker::Sized',depth+1), this.parameters, this.declaration);
     }
     if(!this.symbolic(type))return this.a.hasTrait(type,bound);
     const identity=bound;bound=short??bound;
@@ -92,6 +97,7 @@ export class ImplObligations {
       (tuple??[array.element]).every(t=>this.prove(t,identity,depth+1));
     const {name,args}=T.application(type),shape=this.index.structs.get(name)??this.index.enums.get(name);
     if(['Option','Result','Vec'].includes(name))return ['Clone','Debug','PartialEq','Eq','PartialOrd','Ord',...(name==='Vec'?[]:['Copy'])].includes(bound) && args.every(t=>this.prove(t,identity,depth+1));
+    if(shape?.builtin==='phantom')return ['Copy','Clone','Debug','PartialEq','Eq','Default'].includes(bound);
     if(shape?.attributes?.some(attribute=>attribute.name==='derive'&&attribute.args.includes(bound))) {
       if(!args.every(t=>this.prove(t,identity,depth+1)))return false;
       const map=new Map(shape.generics.map((g,i)=>[g.name,args[i]]));
@@ -128,8 +134,10 @@ export class ImplObligations {
     const array=T.array(type);if(array){this.requireSized(array.element,node);return this.validateCanonical(array.element,node);}
     const {name,args}=T.application(type),shape=this.index.structs.get(name)??this.index.enums.get(name);
     if(this.parameters.has(name)&&args.length)throw new Diagnostic('E0109',`Type parameter ${name} does not accept type arguments`,node.span);
+    if(this.parameters.has(name))return; // A type binder shadows nominal names in this environment.
     args.forEach(t=>this.validateCanonical(t,node));
-    if(shape||name==='Vec')args.forEach(t=>this.requireSized(t,node));
+    if(name==='Vec')args.forEach(t=>this.requireSized(t,node));
+    if(shape)args.forEach((t,i)=>{if(this.index.sizedTypes.requiresParameter(shape,shape.generics[i]?.name))this.requireSized(t,node);});
     if(!shape)return;
     const substitution=new Map(shape.generics.map((g,i)=>[g.name,args[i]]));
     const required=[];

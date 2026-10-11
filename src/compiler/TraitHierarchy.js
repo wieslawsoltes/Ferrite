@@ -61,8 +61,8 @@ export class TraitHierarchy {
       const args = this.defaults.expand(declaration, supplied, {node, parameters, self: subject ?? 'Self', module});
       return T.traitName(declaration.name, args, T.mapBindings(app.bindings, type => this.index.type(type, module, self, parameters, node), bound => this.canonicalSyntax(bound, module, node, parameters, self)));
     }
-    const name = raw.split('::').at(-1);
-    if (Object.hasOwn(paths, name) && (raw === name || raw === paths[name] || raw === paths[name].replace(/^core::/, 'std::'))) return paths[name];
+    const builtin = this.builtinIdentity(raw, module);
+    if (builtin) return builtin;
     if (/^(Fn|FnMut|FnOnce)\(/.test(raw)) return this.index.type(raw, module, self, parameters, node);
     throw new Diagnostic('E0405', `Unknown trait '${raw}'`, node?.span);
   }
@@ -86,6 +86,16 @@ export class TraitHierarchy {
     const type = value => this.index.type(value, module, self, parameters, node);
     return T.traitName(declaration.name, app.args.map(type),
       T.mapBindings(app.bindings, type, bound => this.canonicalSyntax(bound, module, node, parameters, self)));
+  }
+  /** Resolve renamed builtin imports by their full identity, never their tail. */
+  builtinIdentity(raw, module = '', resolveImports = true) {
+    const candidates=resolveImports && this.index.candidates ? this.index.candidates(raw, module) : [raw];
+    for (const candidate of candidates) {
+      const name = candidate.split('::').at(-1);
+      if (Object.hasOwn(paths, name) && (candidate === name || candidate === paths[name] ||
+          candidate === paths[name].replace(/^core::/, 'std::'))) return paths[name];
+    }
+    return null;
   }
   builtinName(identity) {
     return builtins.has(identity) ? identity.split('::').at(-1) : null;

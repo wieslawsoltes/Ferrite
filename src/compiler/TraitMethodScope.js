@@ -1,3 +1,4 @@
+import {Diagnostic} from './Diagnostic.js';
 import {ImplObligations} from './ImplObligations.js';
 import {TypeSystem as T} from './TypeSystem.js';
 import {ImplTypePattern as Pattern} from './ImplTypePattern.js';
@@ -89,13 +90,7 @@ export class TraitMethodScope {
     }
     const memo = this.copyProofs ??= new Map();
     if (memo.has(origin)) return memo.get(origin);
-    if (!this.copyEnvironment) {
-      const declaration = this.fn.defaultTrait ? {...this.fn, unsizedSelf: true,
-        generics: [...this.fn.generics, {name: 'Self', bounds: [this.fn.defaultTrait]}]} : this.fn;
-      this.copyEnvironment = new ImplObligations(this.a,
-        {target: this.fn.defaultTrait ? 'Self' : this.fn.owner, impl: declaration}, declaration);
-    }
-    const environment = this.copyEnvironment;
+    const environment = this.declarationProofs();
     const copy = environment.prove(origin, 'core::marker::Copy');
     if (origin.length <= 32768) {
       while (memo.size && (memo.size >= 1024 || (this.copyProofCharacters ?? 0) + origin.length > 1000000)) {
@@ -105,6 +100,21 @@ export class TraitMethodScope {
       memo.set(origin, copy); this.copyProofCharacters = (this.copyProofCharacters ?? 0) + origin.length;
     }
     return copy;
+  }
+  declarationProofs() {
+    if (!this.copyEnvironment) {
+      const declaration = this.fn.defaultTrait ? {...this.fn, unsizedSelf: true,
+        generics: [...this.fn.generics, {name:'Self',bounds:[this.fn.defaultTrait]}]} : this.fn;
+      this.copyEnvironment=new ImplObligations(this.a,
+        {target:this.fn.defaultTrait?'Self':this.fn.owner,impl:declaration},declaration);
+    }
+    return this.copyEnvironment;
+  }
+  sizedOrigin(origin) {
+    if (!this.active || !this.a.index.associatedTypes.symbolic(origin,this.parameters))return null;
+    const inherited=this.closure?.ctx.methodScope;
+    if(inherited && inherited!==this) { const result=inherited.sizedOrigin(origin);if(result!==null)return result; }
+    return this.declarationProofs().prove(origin,'core::marker::Sized');
   }
   remember(node, origin) { if (this.active && node && origin) this.expressions.set(node, origin); }
   bind(binding, origin) { if (this.active && binding && origin) this.bindings.set(binding, origin); }
@@ -262,7 +272,11 @@ export class TraitMethodScope {
     for (const name of parameters) {
       const actual = Pattern.render({variable: 'callee:' + name}, bindings);
       if (actual === null && T.substitute(result, new Map([[name, '_']])) !== result) return;
-      if (actual !== null) substitution.set(name, actual);
+      if (actual !== null) {
+        if(this.a.index.sizedTypes.requiresParameter(fn,name) && this.sizedOrigin(actual)===false)
+          throw new Diagnostic('E0277',`Calling ${fn.localName??fn.name} requires ${actual}: Sized`,node.span);
+        substitution.set(name, actual);
+      }
     }
     this.remember(node, T.substitute(result, substitution));
   }

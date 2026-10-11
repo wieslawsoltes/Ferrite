@@ -32,11 +32,11 @@ export class Parser {
     if (!this.c.match('<')) return [];
     let defaultSeen = false;
     return this.list('>', () => {
-      const name = this.c.identifier(), bounds = [];
+      const name = this.c.identifier(), bounds = [], relaxedBounds = [];
       if (this.c.is('<')) throw new Diagnostic('F_TRAIT_GENERIC', 'Parameterized traits require the generic trait continuation', this.c.peek().span);
       if (this.c.match(':')) {
         while (!this.c.is('>') && ![',', '='].includes(this.c.peek().value)) {
-          bounds.push(this.bound());
+          this.declarationBound(bounds, relaxedBounds);
           if (!this.c.match('+')) break;
         }
       }
@@ -45,10 +45,10 @@ export class Parser {
         if (!allowDefaults) throw new Diagnostic('F_GENERIC_DEFAULT_POSITION', 'Default type parameters are supported on structs, enums, type aliases and traits, not functions or impl binders', equals.span);
         defaultSeen = true;
         const start = this.c.peek(), defaultType = this.type();
-        return {name, bounds, defaultType, defaultSpan: this.c.node('typeDefault', start).span};
+        return {name, bounds, ...(relaxedBounds.length ? {relaxedBounds} : {}), defaultType, defaultSpan: this.c.node('typeDefault', start).span};
       }
       if (defaultSeen) throw new Diagnostic('E_GENERIC_DEFAULT_ORDER', 'A non-defaulted type parameter cannot follow a defaulted parameter', this.c.peek().span);
-      return {name, bounds};
+      return {name, bounds, ...(relaxedBounds.length ? {relaxedBounds} : {})};
     });
   }
   whereClause() {
@@ -56,11 +56,20 @@ export class Parser {
     if (!this.c.match('where')) return predicates;
     do {
       if (['{', '=', ';'].includes(this.c.peek().value)) break;
-      const start = this.c.peek(), type = this.type(), bounds = []; this.c.eat(':');
-      do { bounds.push(this.bound()); } while (this.c.match('+'));
-      predicates.push(this.c.node('wherePredicate', start, {type, bounds}));
+      const start = this.c.peek(), type = this.type(), bounds = [], relaxedBounds = []; this.c.eat(':');
+      while (![',', '{', '=', ';'].includes(this.c.peek().value)) {
+        this.declarationBound(bounds, relaxedBounds);
+        if (!this.c.match('+')) break;
+      }
+      predicates.push(this.c.node('wherePredicate', start, {type, bounds, ...(relaxedBounds.length ? {relaxedBounds} : {})}));
     } while (this.c.match(','));
     return predicates;
+  }
+  /** Keep relaxed bounds out of positive trait predicates, with source spans. */
+  declarationBound(bounds, relaxedBounds) {
+    const start = this.c.peek(), bound = this.bound();
+    if (bound.startsWith('?')) relaxedBounds.push({bound: bound.slice(1), span: this.c.node('relaxedBound', start).span});
+    else bounds.push(bound);
   }
   bound() {
     if (++this.typeDepth > 128) throw new Diagnostic('F_TYPE_DEPTH', 'Bound nesting limit exceeded', this.c.peek().span);
@@ -68,6 +77,7 @@ export class Parser {
   }
   parseBound() {
     if (this.c.match('(')) { const bound = this.bound(); this.c.eat(')'); return bound; }
+    if (this.c.match('?')) return '?' + this.bound();
     const name=this.path();
     if(['Fn','FnMut','FnOnce'].includes(name)&&this.c.match('(')) {
       const params=this.list(')',()=>this.type());
@@ -103,7 +113,9 @@ export class Parser {
         if (this.c.is('?')) throw new Diagnostic('E0229', 'A relaxed bound is not permitted in an associated bound argument', this.c.peek().span);
         if (this.c.peek().kind === 'lifetime' || this.c.is('for'))
           throw new Diagnostic('F_ASSOC_LIFETIME', 'Associated lifetime and higher-ranked bounds require lifetime analysis', this.c.peek().span);
-        bounds.push(this.bound());
+        const bound = this.bound();
+        if (bound.startsWith('?')) throw new Diagnostic('E0229', 'A relaxed bound is not permitted in an associated bound argument', start.span);
+        bounds.push(bound);
         if (!this.c.match('+')) break;
       }
       return `${name}:${bounds.join('+')}`;
@@ -174,22 +186,20 @@ export class Parser {
     if (this.c.is('const') && this.c.peek(1).value === 'fn') { this.c.take(); this.c.take(); return [this.fn(start, {owner, trait, attributes, visibility, isConst: true})]; }
     if (this.c.match('fn')) return [this.fn(start, {owner, trait, attributes, visibility})];
     if (this.c.match('type')) {
-      const name = this.c.identifier(), generics = this.generics(true), bounds = [];
-      let relaxedSized = false;
+      const name = this.c.identifier(), generics = this.generics(true), bounds = [], relaxedBounds = [];
       if (this.c.match(':')) {
-        do {
-          if (this.c.match('?')) {
-            if (this.c.identifier() !== 'Sized') throw new Diagnostic('F_ASSOC_BOUND', 'Only ?Sized is supported as a relaxed associated-type bound', start.span);
-            relaxedSized = true;
-          } else bounds.push(this.bound());
-        } while (this.c.match('+'));
+        while (![';', '=', 'where'].includes(this.c.peek().value)) {
+          this.declarationBound(bounds, relaxedBounds);
+          if (!this.c.match('+')) break;
+        }
       }
+      const relaxedSized = relaxedBounds.length > 0;
       const predicates = this.whereClause();
       const target = this.c.match('=') ? this.type() : null;
       this.c.eat(';');
       if (!owner && !target) throw new Diagnostic('F_TYPE_ALIAS', 'A type alias requires a definition', start.span);
       if (!owner && (bounds.length || relaxedSized)) throw new Diagnostic('F_TYPE_ALIAS', 'Bounds belong on type-alias parameters, not on the alias', start.span);
-      return [this.c.node('typeAlias', start, {name, localName: name, generics, target, predicates, bounds, relaxedSized, owner, trait, attributes, visibility})];
+      return [this.c.node('typeAlias', start, {name, localName: name, generics, target, predicates, bounds, relaxedSized, ...(relaxedBounds.length ? {relaxedBounds} : {}), owner, trait, attributes, visibility})];
     }
     if (this.c.match('struct')) {
       const name = this.c.identifier(), generics = this.generics(true);

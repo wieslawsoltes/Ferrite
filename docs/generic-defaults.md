@@ -109,9 +109,10 @@ these same sources.
 ## Current boundaries
 
 This continuation uses the compiler's existing supported generic type grammar.
-Relaxed generic parameter bounds (`T: ?Sized`), lifetime/const parameters and their
-defaults, higher-ranked constraints, GAT defaults, and standard-library declarations
-not supplied by Ferrite are separate work. Function and impl *binder* defaults are
+Relaxed generic parameter bounds (`T: ?Sized`) are supported by the
+[relaxed Sized continuation](relaxed-sized.md), including unsized defaults.
+Lifetime/const parameters and their defaults, higher-ranked constraints, GAT
+defaults, and standard-library declarations not supplied by Ferrite are separate work. Function and impl *binder* defaults are
 rejected; a concrete impl target may use defaults from its nominal declaration.
 
 Dependent inference holes in **type paths** and associated-function owner paths

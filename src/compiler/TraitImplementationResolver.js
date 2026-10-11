@@ -35,7 +35,7 @@ export class TraitImplementationResolver {
       const traitDeclaration={...trait,kind:'traitEnvironment',traitContext:trait.name,unsizedSelf:true,generics:[{name:'Self',bounds:[identity]},...traitParameters]};
       const traitRequirements=new ImplObligations(this.a,{target:'Self',impl:traitDeclaration},traitDeclaration);
       for(const generic of traitParameters)traitRequirements.validate(generic.name,trait);
-      for(const parent of this.hierarchy.parents(identity,'Self'))for(const argument of T.traitApplication(parent).args)traitRequirements.requireSized(argument,trait);
+      for(const parent of this.hierarchy.parents(identity,'Self'))traitRequirements.validateTraitArguments(parent,trait);
       for(const method of trait.methods) {
         if(method.kind!=='fn')throw new Diagnostic('F_TRAIT_ITEM','Associated types require their trait continuation',method.span);
         if(seen.has(method.localName))throw new Diagnostic('E0428',`Duplicate associated item ${method.localName}`,method.span);
@@ -80,7 +80,7 @@ export class TraitImplementationResolver {
     const parametersInTrait=new Set(['Self',...(trait.generics??[]).map(g=>g.name)]);
     const typeInTrait=raw=>this.index.typeResolver.substitute(this.index.type(raw,trait.module,'Self',parametersInTrait,trait),substitution,{...impl,typeContext:impl});
     const environment=new ImplObligations(this.a,entry);
-    for(const argument of traitArguments){this.index.typeResolver.validateKnown(argument,parameters,impl);environment.validate(argument,impl);environment.requireSized(argument,impl);}
+    for(const [i,argument] of traitArguments.entries()){this.index.typeResolver.validateKnown(argument,parameters,impl);environment.validate(argument,impl);if(this.index.sizedTypes.requiresParameter(trait,trait.generics[i].name))environment.requireSized(argument,impl);}
     for(const generic of trait.generics??[])for(const bound of generic.bounds)
       if(!environment.prove(substitution.get(generic.name),this.hierarchy.canonical(typeInTrait(bound),impl.module,impl,parameters,target,substitution.get(generic.name))))
         throw new Diagnostic('E0277',`Trait argument bound is not satisfied: ${generic.name}: ${bound}`,impl.span);
@@ -134,15 +134,16 @@ export class TraitImplementationResolver {
         const canonical=obligations.trait(actualType(bound),fn.module,node,actualType(type));
         if(!obligations.prove(actualType(type),canonical))throw new Diagnostic('E0276',`Impl has a stricter requirement ${type}: ${bound}`,node.span??fn.span);
       };
-      for(const parameter of actual)for(const bound of parameter.bounds)require(parameter.name,bound,fn);
+      for(const parameter of actual) {
+        if(this.index.sizedTypes.requiresParameter(fn,parameter.name))require(parameter.name,'core::marker::Sized',fn);
+        for(const bound of parameter.bounds)require(parameter.name,bound,fn);
+      }
       for(const predicate of (fn.predicates??[]).slice((impl.predicates??[]).length))for(const bound of predicate.bounds)require(predicate.type,bound,predicate);
       // A callable satisfies the trait's public contract, but an explicit body
       // only gets evidence stated on that implementation. Keeping the two
       // environments separate avoids monomorphization lending an omitted
       // equality (or an out-of-scope trait) to the body.
-      if ([...expected.generics.flatMap(g=>g.bounds),...(expected.predicates??[]).flatMap(p=>p.bounds)].some(bound=>T.traitApplication(bound).bindings.length)) {
-        fn.bodyGenerics=fn.generics;fn.bodyPredicates=fn.predicates??[];
-      }
+      fn.bodyGenerics=fn.generics;fn.bodyPredicates=fn.predicates??[];
       fn.generics=environment.generics;fn.predicates=environment.predicates;fn.implementedTrait=entry.traitRef;
       this.index.associatedBindings.environments.delete(fn);
       this.index.typeResolver.cache.clear();this.index.typeResolver.characters=0;
@@ -163,7 +164,7 @@ export class TraitImplementationResolver {
       used.add(name);rename.set(generic.name,name);
     }
     method=this.rewrite(method,rename);
-    const additional=traitParameters.map(generic=>({name:rename.get(generic.name),bounds:generic.bounds.map(bound=>T.substitute(this.index.type(bound,trait.module,'Self',new Set(traitParameters.map(g=>g.name)),trait),rename))}));
+    const additional=traitParameters.map(generic=>({...generic,name:rename.get(generic.name),bounds:generic.bounds.map(bound=>T.substitute(this.index.type(bound,trait.module,'Self',new Set(traitParameters.map(g=>g.name)),trait),rename))}));
     const defaultArguments=additional.map((generic,i)=>[generic.name,actual[i]]);
     const traitPredicates=(trait.predicates??[]).filter(p=>p.type!=='Self').map(p=>({...p,type:T.substitute(p.type,rename,true),bounds:p.bounds.map(bound=>T.substitute(bound,rename,true))}));
     const normalize=type=>this.index.type(type,impl.module,target,parameters,impl);

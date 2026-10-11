@@ -1,6 +1,7 @@
 import {TypeSystem as T} from './TypeSystem.js';
 import {TypeResolver} from './TypeResolver.js';
 import {GenericDefaults} from './GenericDefaults.js';
+import {SizedTypes} from './SizedTypes.js';
 import {Diagnostic} from './Diagnostic.js';
 import {AssociatedConstant} from './AssociatedConstant.js';
 import {AssociatedTypeResolver} from './AssociatedTypeResolver.js';
@@ -17,7 +18,7 @@ export class SymbolIndex {
     // Compiler-owned zero-sized marker. Its generic argument affects type identity,
     // but never adds storage or Clone/Copy obligations to the marker itself.
     this.structs.set('std::marker::PhantomData', {kind: 'struct', name: 'std::marker::PhantomData',
-      generics: [{name: 'T', bounds: []}], fields: [], form: 'unit', predicates: [], attributes: [],
+      generics: [{name: 'T', bounds: [], relaxedSized: true}], fields: [], form: 'unit', predicates: [], attributes: [],
       visibility: 'pub', module: 'std::marker', builtin: 'phantom', span: {file: 'ferrite:stdlib', start: 0, end: 0, line: 1, column: 1}});
     for(const name of ['ParseIntError','ParseFloatError'])this.structs.set('std::num::'+name,{kind:'struct',name:'std::num::'+name,generics:[],fields:[],form:'record',predicates:[],attributes:[],visibility:'pub',module:'std::num',builtin:'parse-error',span:{file:'ferrite:stdlib',start:0,end:0,line:1,column:1}});
     this.enums.set('Option', {kind: 'enum', name: 'Option', generics: [{name: 'T', bounds: []}],
@@ -29,6 +30,8 @@ export class SymbolIndex {
     this.associatedTypes = new AssociatedTypeResolver(this);
     this.associatedBindings = new AssociatedTypeBindings(this);
     this.genericDefaults = new GenericDefaults(this);
+    this.sizedTypes = new SizedTypes(this);
+    this.sizedTypes.validateRelaxations();
     this.genericDefaults.validateSyntax();
     if (validate) this.typeResolver.validate();
     // Tuple/unit constructors occupy the value namespace; record types do not.

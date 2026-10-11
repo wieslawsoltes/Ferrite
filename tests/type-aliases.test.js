@@ -36,7 +36,7 @@ for (const [name, source, code] of [
   ['excess alias arguments', 'type A=i32;fn f(x:A<i32>){}fn main(){}', 'E0107'],
   ['unknown alias target', 'type A=Missing;fn main(){}', 'E0412'],
   ['duplicate type namespace', 'struct P{x:i32}type P=i32;fn main(){}', 'E0428'],
-  ['failed where predicate', 'fn f<T>(x:T)where T:Missing {}fn main(){f(1);}', 'E0277'],
+  ['unknown where-predicate trait is rejected at declaration', 'fn f<T>(x:T)where T:Missing {}fn main(){f(1);}', 'E0405'],
   ['different tuple elements for one type variable', 'fn f<T:Copy>(x:(T,T)){}fn main(){f((1u32,true));}', 'E0308'],
   ['wrong fixed array length', 'fn f<T>(x:[T;2]){}fn main(){f([1u32,2u32,3u32]);}', 'E0308'],
 ]) test(`reject ${name}`, () => assert.throws(() => compile(source), error => error.code === code));

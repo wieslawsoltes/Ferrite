@@ -104,3 +104,13 @@ Exact-source native probes are shared with the full differential runner; hidden
 projection caches, source ASTs, query replay, privacy and budget cleanup have
 additional dedicated tests. Unsupported discovery combinations are documented,
 not included as successful native conformance.
+
+## Relaxed Sized bounds
+
+[Relaxed Sized bounds and unsized storage](relaxed-sized.md) adds declaration-local
+`?Sized` evidence, field-based storage checks, implicit trait/nominal argument
+obligations, preserved method contracts, phantom storage and `str` receiver
+dispatch. Shared native fixtures cover accepted and rejected programs; separate
+unit tests cover syntax diagnostics, immutable ASTs, query replay and bounded
+proof-cache recovery. This is not full unsized ABI, slice, coercion, variance or
+universal generic-body support.

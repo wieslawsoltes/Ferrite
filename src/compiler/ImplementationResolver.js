@@ -111,7 +111,8 @@ export class ImplementationResolver {
       if(impl.trait){this.index.associatedTypes.validateImplementation(entry);this.traits.validate(entry);}
       new ImplObligations(this.a,entry).validate(target,impl);
       for (const fn of entry.methods.values()) {
-        const obligations = new ImplObligations(this.a,entry,fn);
+        const body = fn.bodyGenerics ? {...fn,generics:fn.bodyGenerics,predicates:fn.bodyPredicates} : fn;
+        const obligations = new ImplObligations(this.a,entry,body);
         const all = new Set(fn.generics.map(g => g.name));
         if (fn.params[0]?.name === 'self') {
           let receiver = this.index.type(fn.params[0].type, fn.module, target, all, fn);
@@ -124,6 +125,7 @@ export class ImplementationResolver {
           const type = this.index.type(raw, fn.module, target, all, fn);
           this.index.typeResolver.validateKnown(type, all, fn);
           obligations.validateCanonical(type,fn);
+          if (fn.body) obligations.requireSized(type,fn);
         }
       }
     }
@@ -149,7 +151,7 @@ export class ImplementationResolver {
     const normalize = type => this.index.typeResolver.substitute(
       this.index.type(type, entry.impl.module, entry.target, entry.parameters, entry.impl), mapping, entry.impl);
     for (const parameter of entry.impl.generics ?? [])
-      if (!prove(mapping.get(parameter.name), 'core::marker::Sized')) return false;
+      if (this.index.sizedTypes.requiresParameter(entry.impl,parameter.name) && !prove(mapping.get(parameter.name), 'core::marker::Sized')) return false;
     for (const parameter of entry.impl.generics ?? []) for (const bound of parameter.bounds)
       if (!prove(mapping.get(parameter.name), this.traits.hierarchy.canonical(normalize(bound), entry.impl.module, entry.impl, new Set(), T.substitute(entry.target,mapping), mapping.get(parameter.name)))) return false;
     for (const predicate of entry.impl.predicates ?? []) for (const bound of predicate.bounds)

@@ -42,6 +42,7 @@ export class SemanticAnalyzer {
     this.index.associatedTypes.validateUses();
     this.index.associatedBindings.validateUses();
     this.index.genericDefaults.validateDefinitions(this);
+    this.index.sizedTypes.validateDefinitions(this);
   }
   static analyze(ast, options) { return new SemanticAnalyzer(ast, options).analyze(); }
   analyze() {
@@ -61,7 +62,7 @@ export class SemanticAnalyzer {
     for (const instance of this.instances.values()) if (instance.fn.isConst) this.constants.validate(instance);
     this.closures.finish();this.functionValues.finish();
     this.discriminants.annotate(this.instances.values());
-    return {genericDefaults:this.index.genericDefaults.snapshot(),associatedBindings:this.index.associatedBindings.snapshot(),associatedTypes:this.index.associatedTypes.snapshot(),traitResolution:this.implementations.traits.snapshot(),implementations: this.implementations.snapshot(), discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
+    return {sizedTypes:this.index.sizedTypes.snapshot(),genericDefaults:this.index.genericDefaults.snapshot(),associatedBindings:this.index.associatedBindings.snapshot(),associatedTypes:this.index.associatedTypes.snapshot(),traitResolution:this.implementations.traits.snapshot(),implementations: this.implementations.snapshot(), discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
       symbols: [...this.index.symbols, ...this.index.associatedTypes.symbols()], structures: this.canonicalShapes(this.index.structs).filter(shape => !shape.builtin),
       enums: this.canonicalShapes(this.index.enums), warnings: this.warnings, entry: this.entryKey,
       capabilities: {ownership: 'conservative whole-local analysis', traits: 'generic declared-trait impls and built-in bounds'}};
@@ -73,7 +74,11 @@ export class SemanticAnalyzer {
       return {...shape,...(shape.fields?{fields:shape.fields.map(field=>({...field,type:normalize(field.type)}))}:{}),...(shape.variants?{variants:shape.variants.map(variant=>({...variant,fields:variant.fields.map(normalize)}))}:{})};
     });
   }
-  normalize(type, ctx, node = null) { return this.formal(ctx.instance.fn, type, ctx.instance.substitution ?? new Map(Object.entries(ctx.instance.typeArguments)), node ?? ctx.instance.fn); }
+  normalize(type, ctx, node = null) {
+    const result=this.formal(ctx.instance.fn,type,ctx.instance.substitution??new Map(Object.entries(ctx.instance.typeArguments)),node??ctx.instance.fn);
+    this.index.sizedTypes.checkConcrete(result,this,node??ctx.instance.fn);
+    return result;
+  }
   hasBound(type,bound) {
     const declared=this.implementations?.traits.has(type,bound);
     return declared??this.hasTrait(type,bound);
@@ -84,11 +89,7 @@ export class SemanticAnalyzer {
     const closure=this.closures.get(type);
     if(['Sized','core::marker::Sized','std::marker::Sized'].includes(bound)) {
       if(T.reference(type)||T.function(type)||this.functionValues.get(type)||closure)return true;
-      if(T.numeric(type)||['bool','char','String','!'].includes(type))return true;
-      const tuple=T.tuple(type),array=T.array(type);
-      if(tuple||array)return (tuple??[array.element]).every(t=>this.hasTrait(t,'Sized',depth+1));
-      const {name,args}=T.application(type);
-      return (name==='Vec'||this.index.structs.has(name)||this.index.enums.has(name))&&args.every(t=>this.hasTrait(t,'Sized',depth+1));
+      return this.index.sizedTypes.structural(type,t=>this.hasTrait(t,'core::marker::Sized',depth+1));
     }
     if(ClosureAnalyzer.bound(bound))return (this.functionValues.get(type)||this.functionValues.pointer(type))?this.functionValues.satisfies(type,bound):this.closures.satisfies(type,bound);
     if(!T.reference(type)&&this.functionValues.get(type))return ['Copy','Clone','Send','Sync'].includes(bound);
@@ -108,6 +109,11 @@ export class SemanticAnalyzer {
     if (shape?.builtin === 'parse-error') return ['Clone','Debug','PartialEq','Eq'].includes(bound);
     if (shape?.builtin === 'phantom') return ['Copy', 'Clone', 'Debug', 'PartialEq', 'Eq', 'Default'].includes(bound);
     if (shape?.attributes?.some(a => a.name === 'derive' && a.args.includes(bound))) {
+      // Derived Copy/Clone/Default require sized generic arguments even when
+      // storage is phantom. Keep the existing field-based derive semantics for
+      // sized arguments; complete derive expansion is a separate compiler pass.
+      if (['Copy','Clone','Default'].includes(bound) &&
+          !args.every(t => this.hasTrait(t, 'core::marker::Sized', depth + 1))) return false;
       const substitution = new Map(shape.generics.map((g, i) => [g.name, args[i]]));
       const fields = shape.fields?.map(f => f.type) ?? shape.variants.flatMap(v => v.fields);
       return fields.every(t => this.hasTrait(this.index.instantiatedType(t, shape, substitution), bound, depth + 1));
@@ -124,6 +130,13 @@ export class SemanticAnalyzer {
     // them here would incorrectly require the callee to name a private closure
     // or nominal from the caller's module.
     return this.index.typeResolver.substitute(expanded, substitution, {...node, typeContext: fn});
+  }
+  formalBound(fn, raw, substitution, node = fn) {
+    const bound = this.formal(fn, raw, substitution, node);
+    if (this.index.traits.has(T.application(bound).name)) return bound;
+    const graph=this.implementations.traits.hierarchy;
+    // Preserve established public obligation spellings; resolve only imports.
+    return graph.builtinIdentity(bound, fn.module, false) ? bound : graph.builtinIdentity(bound, fn.module) ?? bound;
   }
   solveDefaultArguments(fn, substitution, node = fn) {
     for (let pass = 0; pass <= (fn.defaultArguments?.length ?? 0); pass++) {
@@ -169,8 +182,10 @@ export class SemanticAnalyzer {
     for (const parameter of fn.generics) {
       const type = substitution.get(parameter.name);
       if (!type || /\b_\b/.test(type)) throw new Diagnostic('E0282', `Cannot infer ${parameter.name} in ${fn.name}`, node.span);
+      if (this.index.sizedTypes.requiresParameter(fn,parameter.name) && !this.hasTrait(type,'core::marker::Sized'))
+        throw new Diagnostic('E0277', `Type argument ${type} must be Sized in ${fn.name}`, node.span);
       for (const rawBound of parameter.bounds) {
-        const bound=this.formal(fn, rawBound, substitution, node);
+        const bound=this.formalBound(fn, rawBound, substitution, node);
         if (!this.hasBound(type, bound)) throw new Diagnostic('E0277', `Trait obligation failed: ${type}: ${bound}`, node.span);
         this.obligations.push({type, trait: bound, status: 'satisfied', span: node.span});
       }
@@ -178,7 +193,7 @@ export class SemanticAnalyzer {
     for (const predicate of fn.predicates ?? []) {
       const type = this.formal(fn, predicate.type, substitution, node);
       for (const rawBound of predicate.bounds) {
-        const bound = this.formal(fn, rawBound, substitution, node);
+        const bound = this.formalBound(fn, rawBound, substitution, node);
         if (!this.hasBound(type, bound)) throw new Diagnostic('E0277', `Where-clause obligation failed: ${type}: ${bound}`, node.span, [{message: 'Required by this bound', span: predicate.span}]);
         this.obligations.push({type, trait: bound, status: 'satisfied', span: node.span, declaration: predicate.span});
       }
@@ -629,7 +644,10 @@ export class SemanticAnalyzer {
     const receiver = node.callee.object, method = node.callee.field;
     const original = this.infer(receiver, ctx), base = T.reference(original) && original !== '&str' ? T.target(original) : original;
     const app = T.application(base), array = /^\[(.+);\d+\]$/.exec(base);
-    const resolved = this.implementations.lookup(base, method, ctx.instance.fn.module, node,ctx.instance.fn,ctx.methodScope.selection(ctx.methodScope.of(receiver)));
+    const selection = ctx.methodScope.selection(ctx.methodScope.of(receiver));
+    const inherentStringLength = original === '&str' && method === 'len' && !selection?.abstract;
+    const resolved = inherentStringLength ? null : this.implementations.lookup(base, method, ctx.instance.fn.module, node,ctx.instance.fn,selection) ??
+      (original === '&str' ? this.implementations.lookup('str', method, ctx.instance.fn.module, node,ctx.instance.fn,selection) : null);
     if(!resolved){const dataType=inferDataMethod(this,node,ctx,original,base,expected);if(dataType)return dataType;}
     const builtins = ['len', 'clone', 'push', 'pop', 'push_str', 'to_string', 'unwrap', 'is_some', 'is_none', 'is_ok', 'is_err'];
     if (!resolved && builtins.includes(method)) {
@@ -678,7 +696,10 @@ export class SemanticAnalyzer {
         copy:this.hasTrait(firstType,'Copy'), implicitReceiverBorrow:true, span:receiver.span, loc:receiver.loc};
       node.receiverBorrow = true;
     }
-    if (T.reference(formal) && T.reference(original)) {
+    // &str already is the runtime's immutable string view, not a borrow-cell
+    // handle. Passing it to an &self str implementation must not reborrow a
+    // fictitious cell or change the checked type to &&str.
+    if (T.reference(formal) && T.reference(original) && !(formal === '&str' && original === '&str')) {
       if (formal.startsWith('&mut ') && !original.startsWith('&mut '))
         throw new Diagnostic('E0596', 'Cannot borrow a shared method receiver as mutable', receiver.span);
       // A method call borrows through an existing reference; it does not move
@@ -721,7 +742,11 @@ export class SemanticAnalyzer {
         if (annotation) T.unify(annotation, actual, new Map(), node);
         if (node.otherwise && this.block(node.otherwise, ctx) !== '!') throw new Diagnostic('E0308', 'The else branch of let-else must diverge', node.otherwise.span);
         const inferred = annotation ? T.inferred(annotation,actual) : actual;
-        this.pattern(node.pattern, inferred, ctx, node.mutable, node.annotation ? ctx.methodScope.normalize(node.annotation) : ctx.methodScope.of(node.value));
+        const origin=node.annotation ? ctx.methodScope.normalize(node.annotation) : ctx.methodScope.of(node.value);
+        if (!(ctx.methodScope.sizedOrigin(origin) ?? this.hasTrait(inferred,'core::marker::Sized')))
+          throw new Diagnostic('E0277',`Local value ${origin} needs a Sized bound`,node.span);
+        this.index.sizedTypes.checkConcrete(inferred,this,node);
+        this.pattern(node.pattern, inferred, ctx, node.mutable, origin);
         this.checkCoverage([node.pattern], inferred, node, !node.otherwise);
         node.binding = node.pattern.binding; break;
       }

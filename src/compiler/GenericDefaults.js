@@ -118,9 +118,9 @@ export class GenericDefaults {
         if (this.index.associatedTypes.symbolic(type, parameters)) continue;
         const environment = new ImplObligations(analyzer,{target:self,impl:context},context);
         environment.validateCanonical(type,node);
-        environment.requireSized(type,node);
-        // Free alias parameter bounds are not enforced by Rust, including defaults.
+        // Free-alias bounds (including implicit Sized) are not enforced by Rust.
         if (declaration.kind === 'typeAlias') continue;
+        if (this.index.sizedTypes.requiresParameter(declaration,generic.name)) environment.requireSized(type,node);
         const mapping = new Map([[generic.name,type]]);
         const required = generic.bounds.map(bound=>[generic.name,bound]);
         for (const predicate of declaration.predicates ?? []) for (const bound of predicate.bounds) required.push([predicate.type,bound]);

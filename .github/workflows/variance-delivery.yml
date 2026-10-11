@@ -13,7 +13,7 @@ jobs:
     env:
       TARGET_BRANCH: feat/compiler-nominal-variance
       EXPECTED_HEAD: 3479b9d29529070b8196d7497c6f673c1bd320a5
-      EXPECTED_TREE: 1e06090a3f1f95da6d239a20d744bc620debbe70
+      EXPECTED_TREE: 009c2defe27486750c5af6dd4d288f072b460405
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,6 +27,16 @@ jobs:
           encoded = ''.join(Path(f'.compiler-transfer/variance.{i}.b64').read_text().strip() for i in range(3))
           patch = lzma.decompress(base64.b64decode(encoded, validate=True))
           assert hashlib.sha256(patch).hexdigest() == 'bc0ae47edc9e7c9fc40f89960cef2c3eb068b199b526fe5a7dae9755c0dde8bc'
+          # Apply the separately committed trailing-empty-line correction to the
+          # transfer patch. Both input and final patch hashes are checked; the
+          # source still passes strict git apply and staged whitespace checks.
+          start = patch.index(b'diff --git a/tests/fixtures/nominal-variance.js ')
+          end = patch.index(b'diff --git ', start + 1)
+          block = patch[start:end]
+          assert block.endswith(b'+];\n+\n')
+          block = block.replace(b'index 0000000..c78976f\n', b'index 0000000..4a9976f\n').replace(b'@@ -0,0 +1,116 @@\n', b'@@ -0,0 +1,115 @@\n')[:-2]
+          patch = patch[:start] + block + patch[end:]
+          assert hashlib.sha256(patch).hexdigest() == 'f2e9b2b1d5f6b3076887728a253c8bbc6eb5b3e5e8847adb36d77e32028e16b1'
           Path(os.environ['RUNNER_TEMP'], 'variance.patch').write_bytes(patch)
           PY
       - uses: actions/checkout@v4

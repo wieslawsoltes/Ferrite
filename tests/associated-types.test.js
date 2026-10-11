@@ -111,7 +111,7 @@ test('type projections remain metadata and never become runtime layout types', (
 // are NOT exported as rustc compile-fail fixtures or counted as native conformance.
 for (const [name, source, code] of [
   ['generic associated type binders', 'trait A{type Item<T>;}fn main(){}', 'F_ASSOC_GENERIC'],
-  ['associated type equality arguments', 'trait A{type Item;}fn f<T:A<Item=i32>>(x:T){}fn main(){}', 'F_ASSOC_BINDING'],
+  ['associated type bound arguments', 'trait A{type Item;}fn f<T:A<Item:Copy>>(x:T){}fn main(){}', 'F_ASSOC_BINDING'],
   ['symbolic projection equations in implementation heads', 'trait A{type Item;}trait B<T>{}struct H<T>(T);impl<T:A>B<T> for H<T::Item>{}fn main(){}', 'F_ASSOC_IMPL_HEAD'],
 ]) test(`explicit continuation boundary: ${name}`, () => {
   assert.throws(() => compile(source), error => error.code === code);

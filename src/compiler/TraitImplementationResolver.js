@@ -14,7 +14,8 @@ export class TraitImplementationResolver {
     this.byTrait=new Map();this.byRoot=new Map();this.memo=new Map();this.memoCharacters=0;this.active=new Set();this.queries=0;this.hits=0;this.candidatesExamined=0;
   }
   declaration(name,module,node,required=true) {
-    const app=T.application(name);
+    const app=T.traitApplication(name);
+    if(app.bindings.length)throw new Diagnostic('E0229','An implementation head cannot contain associated type bindings',node?.span);
     const trait=this.index.typeResolver.find(this.index.traits,app.name,module,node);
     if(!trait) {
       if(required) {
@@ -110,16 +111,23 @@ export class TraitImplementationResolver {
       const expectedNames=new Set(['Self',...(trait.generics??[]).map(g=>g.name),...expected.generics.map(g=>g.name)]);
       const actualNames=new Set(fn.generics.map(g=>g.name));
       const rename=new Map([...substitution,...expected.generics.map((g,i)=>[g.name,actual[i].name])]);
-      const expectedType=raw=>this.index.typeResolver.substitute(this.index.type(raw,trait.module,'Self',expectedNames,expected),rename,{...fn,typeContext:fn});
-      const actualType=raw=>this.index.type(raw,fn.module,target,actualNames,fn);
+      // An implementation inherits the method's trait contract even when it
+      // does not repeat its equalities. Do not use its extra requirements as
+      // evidence while checking that very contract.
+      const outer={...fn,generics:impl.generics??[],predicates:impl.predicates??[]};
+      const inheritedType=raw=>this.index.typeResolver.substitute(this.index.type(raw,trait.module,'Self',expectedNames,expected),rename,{...fn,typeContext:outer});
+      const environment={...fn,generics:[...(impl.generics??[]),...expected.generics.map((g,i)=>({...g,name:actual[i].name,
+        bounds:g.bounds.map(inheritedType)}))],
+        predicates:[...(impl.predicates??[]),...(expected.predicates??[]).map(p=>({...p,type:inheritedType(p.type),bounds:p.bounds.map(inheritedType)}))]};
+      const expectedType=raw=>this.index.typeResolver.substitute(this.index.type(raw,trait.module,'Self',expectedNames,expected),rename,{...fn,typeContext:environment});
+      const declaredBody={...fn};
+      const declaredType=raw=>this.index.type(raw,fn.module,target,actualNames,declaredBody);
+      const actualType=raw=>this.index.associatedTypes.normalize(declaredType(raw),actualNames,{...fn,typeContext:environment});
       const lhs=[...fn.params.map(p=>p.type),fn.returnType].map(actualType);
       const rhs=[...expected.params.map(p=>p.type),expected.returnType].map(expectedType);
       if(lhs.some((type,i)=>type!==rhs[i]))throw new Diagnostic('E0053',`Signature differs from ${trait.name}::${name}`,fn.span,
         [{message:'Trait declaration is here',span:expected.span}]);
       // An implementation cannot add requirements not present on the trait method.
-      const environment={...fn,generics:[...(impl.generics??[]),...expected.generics.map((g,i)=>({...g,name:actual[i].name,
-        bounds:g.bounds.map(expectedType)}))],
-        predicates:[...(impl.predicates??[]),...(expected.predicates??[]).map(p=>({...p,type:expectedType(p.type),bounds:p.bounds.map(expectedType)}))]};
       const obligations=new ImplObligations(this.a,entry,environment);
       const require=(type,bound,node)=>{
         const canonical=obligations.trait(actualType(bound),fn.module,node);
@@ -127,8 +135,16 @@ export class TraitImplementationResolver {
       };
       for(const parameter of actual)for(const bound of parameter.bounds)require(parameter.name,bound,fn);
       for(const predicate of (fn.predicates??[]).slice((impl.predicates??[]).length))for(const bound of predicate.bounds)require(predicate.type,bound,predicate);
-      // Copy the effective inherited method contract without changing any AST node.
+      // A callable satisfies the trait's public contract, but an explicit body
+      // only gets evidence stated on that implementation. Keeping the two
+      // environments separate avoids monomorphization lending an omitted
+      // equality (or an out-of-scope trait) to the body.
+      if ([...expected.generics.flatMap(g=>g.bounds),...(expected.predicates??[]).flatMap(p=>p.bounds)].some(bound=>bound.includes('='))) {
+        fn.bodyGenerics=fn.generics;fn.bodyPredicates=fn.predicates??[];
+      }
       fn.generics=environment.generics;fn.predicates=environment.predicates;fn.implementedTrait=entry.traitRef;
+      this.index.associatedBindings.environments.delete(fn);
+      this.index.typeResolver.cache.clear();this.index.typeResolver.characters=0;
     }
     for(const [name,method] of declared) if(!entry.methods.has(name)) {
       if(!method.body)throw new Diagnostic('E0046',`Missing ${trait.name}::${name}`,impl.span);
@@ -208,9 +224,10 @@ export class TraitImplementationResolver {
     return entry.goalPattern??=Object.freeze({kind:'tuple',name:'tuple',args:Object.freeze([entry.pattern,ImplTypePattern.parse(entry.traitRef,entry.parameters,`impl${entry.id}:`)])});
   }
   match(entry,type,bound) {
+    bound=T.traitIdentity(bound);
     const query={kind:'tuple',name:'tuple',args:[ImplTypePattern.parse(type,new Set(),'query:'),ImplTypePattern.parse(bound,new Set(),'traitQuery:')]};
     const bindings=ImplTypePattern.unify(this.goal(entry),query);
-    return bindings?new Map([...entry.parameters].map(name=>[name,ImplTypePattern.render({variable:`impl${entry.id}:`+name},bindings)])):null;
+    return bindings?this.index.associatedBindings.completeImplementation(entry,new Map([...entry.parameters].map(name=>[name,ImplTypePattern.render({variable:`impl${entry.id}:`+name},bindings)]))):null;
   }
   candidates(type,bound) {
     const roots=this.byRoot.get(T.application(bound).name);
@@ -226,6 +243,11 @@ export class TraitImplementationResolver {
   }
   snapshot() {return {hierarchy:this.hierarchy.snapshot(),queries:this.queries,cacheHits:this.hits,cacheEntries:this.memo.size,cacheCharacters:this.memoCharacters,candidatesExamined:this.candidatesExamined};}
   prove(type,bound,environment,depth) {
+    const constraints=T.traitApplication(bound).bindings;
+    if(constraints.length) {
+      if(!environment.prove(type,T.traitIdentity(bound),depth+1))return false;
+      return this.index.associatedBindings.satisfies(type,bound,environment.parameters,environment.declaration);
+    }
     const active=environment.traitActive??=new Set(),key=JSON.stringify([type,bound]);
     if(active.has(key))return false;
     active.add(key);
@@ -250,7 +272,8 @@ export class TraitImplementationResolver {
       for(const entry of this.candidates(type,bound)) {
         this.candidatesExamined++;
         const mapping=this.match(entry,type,bound);
-        if(mapping && [...mapping.values()].every(value=>value!==null) && this.owner.applicable(entry,mapping)){success=true;break;}
+        if(mapping && [...mapping.values()].every(value=>value!==null) && this.owner.applicable(entry,mapping) &&
+            this.index.associatedBindings.satisfies(type,bound,new Set(),entry.impl)){success=true;break;}
       }
       // A negative result inside recursion may depend on an in-progress query.
       // Only the top-level result is memoized; successful finite proofs are stable.

@@ -31,18 +31,21 @@ export class ImplObligations {
     const fn=T.function(type);if(fn)return [...fn.params,fn.result].some(t=>this.symbolic(t));
     const tuple=T.tuple(type);if(tuple)return tuple.some(t=>this.symbolic(t));
     const array=T.array(type);if(array)return this.symbolic(array.element);
-    return T.application(type).args.some(t=>this.symbolic(t));
+    const app=T.traitApplication(type);
+    return [...app.args,...app.bindings.map(binding=>binding.type)].some(t=>this.symbolic(t));
   }
   assume(rawType,rawBound,node) {
     const type=this.normalize(rawType,node),bound=this.trait(this.normalize(rawBound,node),this.declaration.module,node);
-    if(this.index.traits.has(T.application(bound).name))for(const argument of T.application(bound).args)this.index.typeResolver.validateKnown(argument,this.parameters,{...this.declaration,span:node.span??this.declaration.span});
+    if(this.index.traits.has(T.application(bound).name))for(const argument of [...T.traitApplication(bound).args,...T.traitApplication(bound).bindings.map(binding=>binding.type)])this.index.typeResolver.validateKnown(argument,this.parameters,{...this.declaration,span:node.span??this.declaration.span});
+    this.index.associatedBindings.constraints(type,bound,node);
     if((!this.index.traits.has(T.application(bound).name) && type.startsWith('&mut ') && ['Copy','Clone'].includes(this.a.implementations.traits.hierarchy.builtinName(bound))) || !this.symbolic(type) && !this.symbolic(bound) && !this.prove(type,bound))
       throw new Diagnostic('E0277',`Implementation has an unsatisfied bound: ${type}: ${bound}`,node.span??this.declaration.span);
     if(!this.assumptions.has(type))this.assumptions.set(type,new Set());
     const set=this.assumptions.get(type);
     for(const implied of this.a.implementations.traits.hierarchy.closure(bound,type)) {
-      if(this.index.traits.has(T.application(implied).name))for(const argument of T.application(implied).args)this.index.typeResolver.validateKnown(argument,this.parameters,{...this.declaration,span:node.span??this.declaration.span});
-      set.add(implied);
+      if(this.index.traits.has(T.application(implied).name))for(const argument of [...T.traitApplication(implied).args,...T.traitApplication(implied).bindings.map(binding=>binding.type)])this.index.typeResolver.validateKnown(argument,this.parameters,{...this.declaration,span:node.span??this.declaration.span});
+      this.index.associatedBindings.constraints(type,implied,node);
+      set.add(implied); set.add(T.traitIdentity(implied));
     }
   }
   prove(type,bound,depth=0) {
@@ -50,6 +53,10 @@ export class ImplObligations {
     const graph=this.a.implementations.traits.hierarchy;
     // Recursive builtin proofs use canonical identities, never a same-named user trait.
     const short=graph.builtinName(bound);
+    if(T.traitApplication(bound).bindings.length) {
+      return this.prove(type,T.traitIdentity(bound),depth+1) &&
+        this.index.associatedBindings.satisfies(type,bound,this.parameters,this.declaration);
+    }
     if(this.assumptions.get(type)?.has(bound))return true;
     const projection=T.projection(type);
     if(projection) {

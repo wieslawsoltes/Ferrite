@@ -49,13 +49,13 @@ export class AssociatedTypeResolver {
   }
 
   canonicalTrait(raw, module, self, parameters, node) {
-    const app = T.application(raw);
+    const app = T.traitApplication(raw);
     const trait = this.index.typeResolver.find(this.index.traits, app.name, module, node);
     if (!trait) throw new Diagnostic('E0405', `Unknown trait '${app.name}' in associated type`, node?.span);
     if (trait.generics.length !== app.args.length)
       throw new Diagnostic('E0107', `Trait ${trait.name} expects ${trait.generics.length} type argument(s)`, node?.span);
     const args = app.args.map(type => this.index.type(type, module, self, parameters, node));
-    return trait.name + (args.length ? `<${args.join(',')}>` : '');
+    return T.traitName(trait.name, args, app.bindings.map(binding => ({...binding, type: this.index.type(binding.type, module, self, parameters, node)})));
   }
 
   member(traitName, name, node) {
@@ -79,9 +79,9 @@ export class AssociatedTypeResolver {
     for (const bound of raw) {
       const app = T.application(bound);
       if (!this.index.typeResolver.find(this.index.traits, app.name, module, node)) continue;
-      const identity = this.canonicalTrait(bound, module, self, parameters, node);
+      const identity = this.canonicalTrait(T.traitIdentity(bound), module, self, parameters, node);
       const closure = this.implementations?.traits.hierarchy.closure(identity, origin) ?? [identity];
-      for (const candidate of closure) result.add(candidate);
+      for (const candidate of closure) result.add(T.traitIdentity(candidate));
     }
     return result;
   }
@@ -130,7 +130,8 @@ export class AssociatedTypeResolver {
     if (tuple || array) return (tuple ?? [array.element]).some(t => this.symbolic(t, parameters));
     const projection = T.projection(type);
     if (projection) return this.symbolic(projection.self, parameters) || this.symbolic(projection.trait, parameters);
-    return T.application(type).args.some(t => this.symbolic(t, parameters));
+    const app = T.traitApplication(type);
+    return [...app.args, ...app.bindings.map(binding => binding.type)].some(t => this.symbolic(t, parameters));
   }
 
   currentEntry(node) {
@@ -146,21 +147,35 @@ export class AssociatedTypeResolver {
     if (!this.implementations) return projection;
     const symbolic = this.symbolic(self, parameters) || this.symbolic(trait, parameters);
     if (!symbolic && this.cache.has(projection)) { this.hits++; return this.cache.get(projection); }
+    if (symbolic && !this.index.associatedBindings.building) {
+      const value = this.index.associatedBindings.lookup(projection, parameters, node);
+      if (value !== null && value !== projection) {
+        const key = `equality:${projection}`;
+        if (this.active.has(key)) throw new Diagnostic('E0391', `Cycle in associated type equality ${projection}`, node?.span);
+        if (this.active.size >= this.maxDepth) throw new Diagnostic('F_ASSOC_TYPE_LIMIT', 'Associated-type equality recursion budget exceeded', node?.span);
+        this.active.add(key);
+        try { return this.normalize(value, parameters, node); }
+        finally { this.active.delete(key); }
+      }
+    }
     // A bare type parameter remains abstract even when the current program has
     // just one implementing type. Concrete coincidence is not a generic proof.
-    if (parameters.has(self) || self === 'Self' || self === '_') return projection;
+    const current = this.currentEntry(node);
+    const ownsProjection = symbolic && current && self === current.target && trait === current.traitRef;
+    if ((parameters.has(self) || self === 'Self' || self === '_') && !ownsProjection) return projection;
     if (this.active.has(projection)) throw new Diagnostic('E0391', `Cycle in associated type ${projection}`, node?.span);
     if (this.active.size >= this.maxDepth) throw new Diagnostic('F_ASSOC_TYPE_LIMIT', 'Associated-type recursion budget exceeded', node?.span);
     // Applicability itself can depend on projections in where clauses. Guard the
     // entire query, not merely expansion after implementation selection.
     this.active.add(projection);
     try {
-      const current = this.currentEntry(node);
       const candidates = this.implementations.traits.candidates(self, trait);
       const matches = [];
       for (const entry of candidates) {
         if (symbolic && entry !== current) continue;
-        const mapping = this.implementations.traits.match(entry, self, trait);
+        const mapping = ownsProjection && entry === current
+          ? new Map([...entry.parameters].map(name => [name, name]))
+          : this.implementations.traits.match(entry, self, trait);
         if (!mapping || [...mapping.values()].some(value => value === null)) continue;
         if (!symbolic && !this.implementations.applicable(entry, mapping)) continue;
         matches.push({entry, mapping});
@@ -194,8 +209,8 @@ export class AssociatedTypeResolver {
     const array = T.array(type); if (array) return `[${next(array.element)};${array.length}]`;
     const projection = T.projection(type);
     if (projection) return this.reduce(next(projection.self), next(projection.trait), projection.member, parameters, node);
-    const app = T.application(type);
-    return app.name + (app.args.length ? `<${app.args.map(next).join(',')}>` : '');
+    const app = T.traitApplication(type);
+    return T.traitName(app.name, app.args.map(next), app.bindings.map(binding => ({...binding, type: next(binding.type)})));
   }
 
   remember(key, value) {

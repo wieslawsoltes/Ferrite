@@ -79,3 +79,11 @@ unsupported-feature tests remain distinct from the native corpus. This
 continuation's local environment did not provide rustc, so browser-backend passes
 are not native validation. The unchanged native differential CI gate is required
 before merge.
+
+
+[Associated-type equality bindings](associated-bindings.md) add declaration-local
+equations distinct from trait-selection inputs, directed function/impl output
+inference, trait/default-method and alias semantics, bounded query isolation and
+concrete cross-backend layouts. The shared fixtures include the native discovery
+probes for repeated/contradictory bounds, alias non-enforcement and explicit-method
+body evidence. The normal native-rustc and HTTP/browser gates remain unchanged.

@@ -65,12 +65,42 @@ export class TypeSystem {
     const i = type.indexOf('<');
     return i < 0 ? {name: type, args: []} : {name: type.slice(0, i), args: this.split(type.slice(i + 1, -1))};
   }
+  /** Equality constraints are not positional trait arguments. Keep them out of
+   * implementation identity, but retain their labels and RHS type identities. */
+  static traitApplication(type) {
+    const application = this.application(type), args = [], bindings = [];
+    for (const value of application.args) {
+      const equal = this.split(value, '=');
+      if (equal.length === 1) {
+        if (bindings.length) throw new Diagnostic('E0229', 'Type arguments must precede associated type bindings');
+        args.push(value); continue;
+      }
+      if (equal.length !== 2 || !/^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(equal[0]))
+        throw new Diagnostic('E0229', 'Invalid associated type binding');
+      const [name, type] = equal;
+      // Rust permits repeated constraints, including contradictory assumptions
+      // on unused generic declarations. Ambiguity is checked at projection use.
+      bindings.push({name, type});
+    }
+    return {name: application.name, args, bindings};
+  }
+  static traitName(name, args = [], bindings = []) {
+    const parts = [...args, ...bindings.map(binding => `${binding.name}=${binding.type}`)];
+    return name + (parts.length ? `<${parts.join(',')}>` : '');
+  }
+  static traitIdentity(type) {
+    const {name, args} = this.traitApplication(type);
+    return this.traitName(name, args);
+  }
   static substitute(type, map, binderPrefixes = false) {
     if (!map.size || ![...map.keys()].some(key => type.includes(key))) return type;
     const tokens = Lexer.tokenize(type), parts = []; let offset = 0;
     for (let i = 0; i < tokens.length; i++) {
       const token = tokens[i];
       if (token.kind !== 'identifier' && token.value !== 'Self') continue;
+      // An equality label belongs to the associated-item namespace, not to the
+      // generic binder namespace (e.g. Trait<Item=Item> substitutes only RHS).
+      if (tokens[i + 1]?.value === '=' || tokens[i - 1]?.value === '::') continue;
       const root = token.value;
       let name = root, end = token.span.end;
       while (tokens[i + 1]?.value === '::' && tokens[i + 2]?.kind === 'identifier') { i += 2; name += '::' + tokens[i].value; end = tokens[i].span.end; }

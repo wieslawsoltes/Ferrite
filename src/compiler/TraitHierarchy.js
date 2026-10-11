@@ -53,13 +53,13 @@ export class TraitHierarchy {
   limit(node) { throw new Diagnostic('F_TRAIT_HIERARCHY_LIMIT', 'Supertrait graph or elaboration budget exceeded', node?.span); }
   tick(node) { if (++this.visits > this.maxVisits) this.limit(node); }
   canonical(raw, module = '', node = null, parameters = new Set(), self = 'Self') {
-    const app = T.application(raw);
+    const app = T.traitApplication(raw);
     const declaration = this.index.typeResolver.find(this.index.traits, app.name, module, node);
     if (declaration) {
       const arity = declaration.generics?.length ?? 0;
       if (app.args.length !== arity) throw new Diagnostic('E0107', `Trait ${declaration.name} expects ${arity} type argument(s)`, node?.span);
       const args = app.args.map(type => this.index.type(type, module, self, parameters, node));
-      return declaration.name + (args.length ? `<${args.join(',')}>` : '');
+      return T.traitName(declaration.name, args, app.bindings.map(binding => ({...binding, type: this.index.type(binding.type, module, self, parameters, node)})));
     }
     const name = raw.split('::').at(-1);
     if (Object.hasOwn(paths, name) && (raw === name || raw === paths[name] || raw === paths[name].replace(/^core::/, 'std::'))) return paths[name];
@@ -70,7 +70,7 @@ export class TraitHierarchy {
     return builtins.has(identity) ? identity.split('::').at(-1) : null;
   }
   parents(identity, self = 'Self') {
-    const {name, args} = T.application(identity), raw = this.direct.get(name);
+    const {name, args} = T.traitApplication(identity), raw = this.direct.get(name);
     if (!raw) return builtinParents.get(identity) ?? empty;
     const generics = this.index.traits.get(name)?.generics ?? [];
     if (generics.length !== args.length) throw new Diagnostic('E0107', `Trait ${name} expects ${generics.length} type argument(s)`);
@@ -135,7 +135,13 @@ export class TraitHierarchy {
     if (child === parent) return true;
     const value = this.closure(child);
     if (!this.membership.has(value)) this.membership.set(value, new Set(value));
-    return this.membership.get(value).has(parent);
+    if (this.membership.get(value).has(parent)) return true;
+    const expected = T.traitApplication(parent), identity = T.traitIdentity(parent);
+    return value.some(candidate => {
+      if (T.traitIdentity(candidate) !== identity) return false;
+      const available = new Map(T.traitApplication(candidate).bindings.map(binding => [binding.name, binding.type]));
+      return expected.bindings.every(binding => available.get(binding.name) === binding.type);
+    });
   }
   snapshot() { return {traits: this.direct.size, edges: this.edges, visits: this.visits, cacheHits: this.hits, cacheEntries: this.cache.size, cacheCharacters: this.characters}; }
 }

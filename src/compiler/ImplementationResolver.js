@@ -105,6 +105,7 @@ export class ImplementationResolver {
         throw new Diagnostic('E0116', 'Inherent implementations require a nominal type defined in this crate', impl.span);
       const used = new Set(), queue = [entry.pattern,...(entry.trait?[ImplTypePattern.parse(entry.traitRef,parameters,`impl${entry.id}:`)]:[])];
       while (queue.length) { const term = queue.pop(); if (term.variable) used.add(term.variable); else queue.push(...term.args); }
+      this.index.associatedBindings.constrainImplementation(entry, used);
       for (const name of parameters) if (!used.has(`impl${entry.id}:` + name))
         throw new Diagnostic('E0207', `Implementation parameter ${name} is not constrained by its self type`, impl.span);
       if(impl.trait){this.index.associatedTypes.validateImplementation(entry);this.traits.validate(entry);}
@@ -141,7 +142,7 @@ export class ImplementationResolver {
     this.prepare(entry);
     const bindings = ImplTypePattern.unify(entry.pattern, query ?? ImplTypePattern.parse(type, new Set(), 'query:'));
     if (!bindings) return null;
-    return new Map([...entry.parameters].map(name => [name, ImplTypePattern.render({variable: `impl${entry.id}:` + name}, bindings)]));
+    return this.index.associatedBindings.completeImplementation(entry, new Map([...entry.parameters].map(name => [name, ImplTypePattern.render({variable: `impl${entry.id}:` + name}, bindings)])));
   }
   applicable(entry, mapping, prove=(type,bound)=>this.a.hasBound(type,bound)) {
     if ([...mapping.values()].some(type => type === null)) return true;

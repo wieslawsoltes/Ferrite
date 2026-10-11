@@ -39,6 +39,7 @@ export class SemanticAnalyzer {
     this.index.typeResolver.validate();
     this.implementations.validate();
     this.index.associatedTypes.validateUses();
+    this.index.associatedBindings.validateUses();
   }
   static analyze(ast, options) { return new SemanticAnalyzer(ast, options).analyze(); }
   analyze() {
@@ -58,7 +59,7 @@ export class SemanticAnalyzer {
     for (const instance of this.instances.values()) if (instance.fn.isConst) this.constants.validate(instance);
     this.closures.finish();this.functionValues.finish();
     this.discriminants.annotate(this.instances.values());
-    return {associatedTypes:this.index.associatedTypes.snapshot(),traitResolution:this.implementations.traits.snapshot(),implementations: this.implementations.snapshot(), discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
+    return {associatedBindings:this.index.associatedBindings.snapshot(),associatedTypes:this.index.associatedTypes.snapshot(),traitResolution:this.implementations.traits.snapshot(),implementations: this.implementations.snapshot(), discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
       symbols: [...this.index.symbols, ...this.index.associatedTypes.symbols()], structures: this.canonicalShapes(this.index.structs).filter(shape => !shape.builtin),
       enums: this.canonicalShapes(this.index.enums), warnings: this.warnings, entry: this.entryKey,
       capabilities: {ownership: 'conservative whole-local analysis', traits: 'generic declared-trait impls and built-in bounds'}};
@@ -213,6 +214,7 @@ export class SemanticAnalyzer {
       if(abstractReturn&&!this.hasBound(inferred,abstractReturn))throw new Diagnostic('E0277',`Returned type does not implement ${abstractReturn}`,copy.body.span);
       instance.returnType=inferred;
     }else T.unify(instance.returnType, actual, new Map(), copy.body);
+    ctx.methodScope.checkResult(copy.body);
     if (fn.implGenericCount && !fn.associatedConstant && new AssigneeAnalyzer(this, ctx).carriesReference(instance.returnType))
       throw new Diagnostic('F_IMPL_REFERENCE', 'Reference-carrying generic method results require interprocedural loan tracking', node.span);
     instance.locals = ctx.locals;
@@ -733,6 +735,7 @@ export class SemanticAnalyzer {
         const actual=this.infer(node.value,ctx,expected==='_'||expected.startsWith('impl ')?null:expected);
         if(expected==='_'||expected.startsWith('impl '))ctx.inferredReturns.push(actual);
         else T.unify(expected,actual,new Map(),node);
+        ctx.methodScope.checkResult(node.value);
         type = '!'; break;
       }
       case 'break': case 'continue': {

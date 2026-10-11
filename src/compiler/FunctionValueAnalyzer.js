@@ -64,6 +64,7 @@ export class FunctionValueAnalyzer {
     formals.forEach((type,i)=>{if(hints[i])inference.unify(normalize(type),hints[i],node??record.node);});
     if(resultHint)inference.unify(normalize(this.result(record)),resultHint,node??record.node);
     if(!record.constructor)this.a.solveDefaultArguments(record.owner,record.mapping,node??record.node);
+    inference.settle(false);
     if([...record.mapping.values()].some(type=>!type||/\b_\b/.test(type))){
       if(node)throw new Diagnostic('E0282','Cannot infer function-item specialization; provide type arguments or callable context',node.span);
       return null;

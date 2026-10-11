@@ -17,18 +17,21 @@ export class ProjectionInference {
   }
   expression(expected, node, infer, diagnostic = null) {
     const check = () => {
-      const hint = this.index.associatedTypes.containsProjection(expected) ?
-        this.index.typeResolver.substitute(expected, this.mapping, {typeContext: this.declaration}) : expected;
+      const hint = this.index.typeResolver.substitute(expected, this.mapping, {typeContext: this.declaration});
       this.unify(hint, infer(hint), node, diagnostic);
     };
     // Only literal trees can be delayed. They create no bindings, captures,
     // moves, loans or calls; AST and generated evaluation order stay unchanged.
     // This avoids prematurely defaulting a projected u8 literal to i32.
-    if (this.index.associatedTypes.containsProjection(expected) && ProjectionInference.literalTree(node)) this.literals.push(check);
+    if ((this.index.associatedTypes.containsProjection(expected) || this.index.associatedBindings.outputDependent(expected, this.mapping, this.declaration)) && ProjectionInference.literalTree(node)) this.literals.push(check);
     else check();
   }
   unify(expected, actual, node, diagnostic = null) {
-    try { return this.visit(expected, actual, node, 0, diagnostic); }
+    try {
+      const result = this.visit(expected, actual, node, 0, diagnostic);
+      this.index.associatedBindings.completeArguments(this.declaration, this.mapping);
+      return result;
+    }
     catch (error) {
       // Keep caller-specific mismatch context through deferred equalities,
       // without disguising inference limits, missing traits or expression errors.
@@ -72,6 +75,7 @@ export class ProjectionInference {
     e.args.forEach((type, i) => next(type, a.args[i])); return actual;
   }
   settle(required = true) {
+    this.index.associatedBindings.completeArguments(this.declaration, this.mapping);
     const literals = this.literals; this.literals = [];
     for (const check of literals) check();
     for (let pass = 0; this.pending.length && pass <= this.mapping.size; pass++) {

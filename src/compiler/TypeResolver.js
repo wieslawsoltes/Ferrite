@@ -17,7 +17,7 @@ export class TypeResolver {
       if (!this.contexts.has(declaration)) this.contexts.set(declaration, ++this.contextSequence);
       scope = this.contexts.get(declaration);
     }
-    const key = JSON.stringify([module, self, [...parameters].sort(), type, declaration?.defaultTrait, declaration?.implementedTrait, scope]);
+    const key = JSON.stringify([module, self, [...parameters].sort(), type, declaration?.defaultTrait, declaration?.implementedTrait, scope, !!this.index.associatedBindings?.building]);
     if (this.cache.has(key)) { this.hits++; return this.cache.get(key); }
     if (stack.length > this.maxDepth) throw new Diagnostic('E0391', 'Type alias expansion exceeded the recursion budget', node?.span);
     this.misses++;
@@ -34,6 +34,14 @@ export class TypeResolver {
       else {
         const projected = this.index.associatedTypes?.resolve(type, module, self, parameters, node);
         if (projected !== null && projected !== undefined) return this.remember(key, projected);
+        const constrained = T.traitApplication(type);
+        if (constrained.bindings.length) {
+          const trait = this.find(this.index.traits, constrained.name, module, node);
+          if (!trait) throw new Diagnostic('E0229', 'Associated type bindings require a declared trait', node?.span);
+          if (constrained.args.length !== trait.generics.length) throw new Diagnostic('E0107', `Trait ${trait.name} expects ${trait.generics.length} type argument(s)`, node?.span);
+          const result = T.traitName(trait.name, constrained.args.map(next), constrained.bindings.map(binding => ({...binding, type: next(binding.type)})));
+          return this.remember(key, result);
+        }
         const {name, args} = T.application(type), arguments_ = args.map(next);
         const alias = parameters.has(name) ? null : this.find(this.index.aliases, name, module, node);
         if (alias) {
@@ -105,6 +113,8 @@ export class TypeResolver {
     for (const alias of this.index.aliases.values()) {
       const parameters = new Set(alias.generics.map(g => g.name));
       if (parameters.size !== alias.generics.length) throw new Diagnostic('E0403', `Duplicate generic parameter in ${alias.name}`, alias.span);
+      for (const parameter of parameters) if (T.substitute(alias.target, new Map([[parameter, '__FerriteAliasParameterUse']]), true) === alias.target)
+        throw new Diagnostic('E0091', `Type parameter ${parameter} is never used in ${alias.name}`, alias.span);
       const result = this.resolve(alias.target, alias.module, null, parameters, [alias.name], alias);
       this.validateKnown(result, parameters, alias);
     }
@@ -150,6 +160,7 @@ export class TypeResolver {
         const type = this.resolve(field.type, shape.module, shape.name, parameters, [], {...field.node, typeContext: shape});
         this.validateKnown(type, parameters, {...shape,span:field.node.span ?? shape.span});
         used(type, parameters, found);
+        for (const parameter of parameters) if (T.substitute(field.type, new Map([[parameter, '__FerriteFieldParameterUse']]), true) !== field.type) found.add(parameter);
       }
       for (const name of parameters) if (!found.has(name) && shape.builtin !== 'phantom')
         throw new Diagnostic('E0392', `Type parameter ${name} is never used in ${shape.name}`, shape.span);

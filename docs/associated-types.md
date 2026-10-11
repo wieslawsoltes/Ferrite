@@ -146,10 +146,11 @@ unchecked reflection path. The artifact exposes normalization counters in
 
 ## Current boundaries
 
-This increment does **not** implement generic associated types (GATs), associated
-equality/bound arguments such as `Source<Item = i32>` or `Source<Item: Copy>`,
-conditional associated-item `where` clauses, or symbolic associated projection
-equations in impl heads. Those valid Rust continuations receive explicit Ferrite
+The [equality-binding continuation](associated-bindings.md) adds `Source<Item = i32>`
+and directed output inference. Generic associated types (GATs), associated-bound
+shorthand such as `Source<Item: Copy>`,
+conditional associated-item `where` clauses, and symbolic associated projection
+equations in impl heads remain unsupported. Those valid Rust continuations receive explicit Ferrite
 unsupported-feature diagnostics; their tests are not misreported as native Rust
 compile-fail conformance. Associated type defaults and inherent associated types
 are rejected rather than presented as stable Rust features.
@@ -188,10 +189,11 @@ Ferrite uses its existing `E_LITERAL` diagnostic. The shared harness is unchange
 
 `npm run test:language -- --browser-only` runs browser backends without a native
 oracle, and always records `nativeValidated: false`. It does not establish native
-Rust compatibility. This continuation's development environment lacked `rustc`;
-its native validation attempt failed explicitly instead of silently downgrading
-to browser-only mode. Run the native gate in the unchanged repository CI before
-merging this continuation.
+Rust compatibility. The initial development environment lacked `rustc`;
+its attempted native run failed explicitly. PR #27 subsequently passed the full
+native/HTTP/browser CI run 38140063811 with 1,069 native differential cases,
+including the method-scope corrections below. Further source changes must pass
+the same unchanged native gate before merge.
 
 The UI history tests also await the existing cooperative debugger's completion
 event rather than assuming that Continue finishes within one CPU timeslice. An

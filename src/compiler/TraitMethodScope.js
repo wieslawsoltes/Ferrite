@@ -8,6 +8,7 @@ import {ImplTypePattern as Pattern} from './ImplTypePattern.js';
 export class TraitMethodScope {
   constructor(analyzer, declaration, substitution = new Map()) {
     this.substitution=substitution;
+    if (declaration.bodyGenerics) declaration={...declaration,generics:declaration.bodyGenerics,predicates:declaration.bodyPredicates};
     this.a = analyzer; this.fn = declaration;
     this.graph = analyzer.implementations.traits.hierarchy;
     this.bindings = new WeakMap(); this.expressions = new WeakMap(); this.bounds = new Map();
@@ -16,7 +17,7 @@ export class TraitMethodScope {
     const assume = (type, raw) => {
       const subject = this.normalize(type), trait = this.graph.canonical(raw, declaration.module, declaration, this.parameters, 'Self');
       if (!this.bounds.has(subject)) this.bounds.set(subject, new Set());
-      for (const parent of this.graph.closure(trait,subject)) this.bounds.get(subject).add(parent);
+      for (const parent of this.graph.closure(trait,subject)) this.bounds.get(subject).add(T.traitIdentity(parent));
     };
     for (const parameter of declaration.generics) for (const bound of parameter.bounds) assume(parameter.name, bound);
     for (const predicate of declaration.predicates ?? []) for (const bound of predicate.bounds) assume(predicate.type, bound);
@@ -48,7 +49,7 @@ export class TraitMethodScope {
       // concrete type happens to be substituted into this instantiation.
       for (const raw of this.a.index.associatedTypes.declaredBounds(projection, this.fn)) {
         const bound = this.graph.canonical(raw, this.fn.module, this.fn, this.parameters, 'Self');
-        for (const parent of this.graph.closure(bound, origin)) traits.add(parent);
+        for (const parent of this.graph.closure(bound, origin)) traits.add(T.traitIdentity(parent));
       }
     }
     return explicit || projection ? traits : null;
@@ -99,6 +100,12 @@ export class TraitMethodScope {
       if (node.builtin === 'method::pop') origin = `Option<${this.element(receiver) ?? '_'}>`;
     }
     this.remember(node, origin); return origin;
+  }
+  checkResult(node) {
+    if (!this.fn.bodyGenerics || !node || node.type === '!' || this.fn.returnType.startsWith('impl ')) return;
+    const actual = this.of(node), expected = this.normalize(this.fn.returnType);
+    if (this.a.index.associatedTypes.symbolic(actual, this.parameters) || this.a.index.associatedTypes.symbolic(expected, this.parameters))
+      T.unify(expected, actual, new Map(), node);
   }
   join(nodes, fallback) {
     const live = nodes.filter(node => node && node.type !== '!').map(node => this.of(node));

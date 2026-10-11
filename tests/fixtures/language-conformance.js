@@ -1,3 +1,4 @@
+import {genericDefaultCases, genericDefaultCompileFailCases} from './generic-defaults.js';
 import {associatedBoundCases, associatedBoundCompileFailCases} from './associated-bounds.js';
 import {associatedBindingCases, associatedBindingCompileFailCases} from './associated-bindings.js';
 import {associatedTypeCases, associatedTypeCompileFailCases} from './associated-types.js';
@@ -163,3 +164,6 @@ languageCases.push(...associatedBindingCases.map(([name, source, output]) => ({n
 
 languageCases.push(...associatedBoundCases.map(([name, source, output]) => ({name, source, output, kind: 'run'})),
   ...associatedBoundCompileFailCases.map(([name, source]) => ({name, source, kind: 'compile-fail'})));
+
+languageCases.push(...genericDefaultCases.map(([name, source, output]) => ({name, source, output, kind: 'run'})),
+  ...genericDefaultCompileFailCases.map(([name, source]) => ({name, source, kind: 'compile-fail'})));

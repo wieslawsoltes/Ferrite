@@ -96,3 +96,11 @@ cases, trait method contracts, projected callables, closures and constants.
 Dedicated tests also enforce proof/cache isolation, frozen ASTs, bounded
 elaboration and concrete executable MIR. The documented uninstantiated generic
 body discrepancy is not represented as a passing native compatibility case.
+
+[Default generic type parameters](generic-defaults.md) distinguish annotation
+omission from expression inference, preserve default `Self` subjects, and integrate
+nominal/trait defaults, constructor equations and concrete declaration obligations.
+Exact-source native probes are shared with the full differential runner; hidden
+projection caches, source ASTs, query replay, privacy and budget cleanup have
+additional dedicated tests. Unsupported discovery combinations are documented,
+not included as successful native conformance.

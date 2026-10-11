@@ -58,7 +58,7 @@ export class AssociatedTypeBindings {
       if (!owners.size) throw new Diagnostic('E0220', `Trait ${app.name} has no associated type ${binding.name}`, node?.span);
       if (owners.size > 1) throw new Diagnostic('E0222', `Associated type ${binding.name} is ambiguous in ${app.name}`, node?.span);
       const projection = T.projectionName(subject, [...owners][0], binding.name);
-      return binding.bounds ? {projection, bounds: binding.bounds} : {projection, type: binding.type};
+      return binding.bounds ? {projection, bounds: binding.bounds.map(bound => this.graph.completeCanonical(bound,projection,node))} : {projection, type: binding.type};
     });
   }
 
@@ -68,6 +68,7 @@ export class AssociatedTypeBindings {
     const pending = [{subject, bound, depth: 0}], seen = new Set(), result = [];
     while (pending.length) {
       const next = pending.pop(); this.tick(node);
+      if(this.graph)next.bound=this.graph.completeCanonical(next.bound,next.subject,node);
       if (next.depth > 64) throw new Diagnostic('F_ASSOC_BINDING_LIMIT', 'Associated bound elaboration depth exceeded', node?.span);
       const key = JSON.stringify([next.subject, next.bound]);
       if (seen.has(key)) continue;
@@ -137,7 +138,7 @@ export class AssociatedTypeBindings {
         // their validation to their existing owner rather than changing diagnostics.
         if (!T.traitApplication(rawBound).bindings.length && !this.index.typeResolver.find(this.index.traits, T.application(rawBound).name, module, context)) continue;
         const subject = this.index.type(rawSubject, module, self, parameters, context);
-        const bound = this.graph.canonical(rawBound, module, context, parameters, self);
+        const bound = this.graph.canonical(rawBound, module, context, parameters, self, subject);
         add(boundsTable, subject, bound);
         for (const requirement of this.requirements(subject, bound, context)) {
           if (requirement.bounds) for (const required of requirement.bounds) add(boundsTable, requirement.projection, required);
@@ -346,18 +347,25 @@ export class AssociatedTypeBindings {
       const parameters = this.parametersFor(declaration);
       const context = index.associatedTypes.context(declaration);
       const self = context.kind === 'impl' ? context.target : context.owner ?? 'Self';
-      const bounds = [...(declaration.bounds ?? []), ...(declaration.generics ?? []).flatMap(g => g.bounds),
-        ...(declaration.predicates ?? []).flatMap(p => p.bounds),
-        ...(declaration.returnType?.startsWith('impl ') ? [declaration.returnType.slice(5)] : [])];
-      for (const raw of bounds) {
+      // Defaults such as Rhs = Self bind to each predicate's subject, not
+      // the enclosing implementation's lexical Self. Resolve supplied Self in
+      // lexical scope while retaining the distinct subject for omitted inputs.
+      const bounds = (declaration.bounds ?? []).map(bound => ['Self', bound]);
+      for (const generic of declaration.generics ?? []) for (const bound of generic.bounds) bounds.push([generic.name, bound]);
+      for (const predicate of declaration.predicates ?? []) for (const bound of predicate.bounds) bounds.push([predicate.type, bound]);
+      if (declaration.returnType?.startsWith('impl ')) bounds.push(['Self', declaration.returnType.slice(5)]);
+      for (const [rawSubject, raw] of bounds) {
         const app = T.traitApplication(raw);
         const trait = index.typeResolver.find(index.traits, app.name, declaration.module, declaration);
-        if (trait && app.args.length !== trait.generics.length)
-          throw new Diagnostic('E0107', `Trait ${trait.name} expects ${trait.generics.length} type argument(s)`, declaration.span);
+        if (trait) index.genericDefaults.checkArity(trait, app.args, declaration);
         if (!this.enabled) continue;
-        const bound = this.graph.canonical(raw, declaration.module ?? context.module, declaration, parameters, self);
-        this.validateArguments(bound, parameters, declaration);
-        this.requirements('_', bound, declaration); // includes member validation for an empty `Item:` bound
+        const scope = new Set(parameters);
+        if (rawSubject === 'Self') scope.add('Self'); // syntax-only subject for an opaque return
+        const subject = index.type(rawSubject, declaration.module ?? context.module, self, scope, declaration);
+        const bound = this.graph.canonical(raw, declaration.module ?? context.module, declaration, scope, self, subject);
+        this.validateArguments(bound, scope, declaration);
+        this.requirements(subject, bound, {...declaration, typeContext: {...context, generics: [...(context.generics ?? []),
+          ...(rawSubject === 'Self' ? [{name:'Self',bounds:[]}] : [])]}});
       }
       const equations = this.environment(parameters, declaration);
       if (!equations) continue;

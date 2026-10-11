@@ -16,7 +16,7 @@ export class TraitMethodScope {
     this.parameters = new Set(declaration.generics.map(g => g.name));
     if (declaration.defaultTrait) this.parameters.add('Self');
     const assume = (type, raw) => {
-      const subject = this.normalize(type), trait = this.graph.canonical(raw, declaration.module, declaration, this.parameters, 'Self');
+      const subject = this.normalize(type), trait = this.graph.canonical(raw, declaration.module, declaration, this.parameters, declaration.defaultTrait ? 'Self' : declaration.owner ?? 'Self', subject);
       if (!this.bounds.has(subject)) this.bounds.set(subject, new Set());
       for (const parent of this.graph.closure(trait,subject)) this.bounds.get(subject).add(T.traitIdentity(parent));
     };
@@ -49,7 +49,7 @@ export class TraitMethodScope {
       // Associated bounds are declaration evidence, not privileges of whichever
       // concrete type happens to be substituted into this instantiation.
       for (const raw of this.a.index.associatedTypes.declaredBounds(projection, this.fn)) {
-        const bound = this.graph.canonical(raw, this.fn.module, this.fn, this.parameters, 'Self');
+        const bound = this.graph.canonical(raw, this.fn.module, this.fn, this.parameters, this.fn.defaultTrait ? 'Self' : this.fn.owner ?? 'Self', origin);
         for (const parent of this.graph.closure(bound, origin)) traits.add(T.traitIdentity(parent));
       }
     }

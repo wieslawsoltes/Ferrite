@@ -1,3 +1,4 @@
+import {DefaultArgumentInference} from './DefaultArgumentInference.js';
 import {ProjectionInference} from './ProjectionInference.js';
 import {EnumRecordAnalyzer} from './EnumRecordAnalyzer.js';
 import {Diagnostic} from './Diagnostic.js';
@@ -33,16 +34,16 @@ export class StructAnalyzer {
     const selfType = node.name === 'Self' ? T.application(spelling) : null;
     const alias = this.index.resolve(this.index.aliases, selfType?.name ?? spelling, module, node, false);
     const explicit = (node.typeArguments ?? selfType?.args ?? []).map(type => this.a.normalize(type, context, node));
-    const app = alias ? T.application(this.index.type(spelling + (explicit.length ? `<${explicit.join(',')}>` : ''), module, null, new Set(), node)) : null;
+    const aliasArguments = alias && !explicit.length ? alias.generics.map(()=>'_') : explicit;
+    const app = alias ? T.application(this.index.type(spelling + (aliasArguments.length ? `<${aliasArguments.join(',')}>` : ''), module, null, new Set(), node)) : null;
     const shape = this.index.resolve(this.index.structs, app?.name ?? selfType?.name ?? spelling, module, node);
     const supplied = app?.args ?? explicit;
-    if (supplied.length && supplied.length !== shape.generics.length)
-      throw new Diagnostic('E0107', `${shape.name} expects ${shape.generics.length} type arguments`, node.span);
     const hint = T.application(expected ?? '');
-    const substitution = new Map(shape.generics.map((g, i) => [g.name, supplied[i] ?? (hint.name === shape.name ? hint.args[i] : null)]));
+    const defaults = new DefaultArgumentInference(this.index,shape,supplied,hint.name === shape.name ? hint.args : [],node,module);
+    const substitution = defaults.mapping;
     if (node.fields.length !== shape.fields.length)
       throw new Diagnostic('E0063', `Incorrect number of fields for ${shape.name}`, node.span);
-    const seen = new Set(), inference = new ProjectionInference(this.index, substitution, shape);
+    const seen = new Set(), inference = new ProjectionInference(this.index, substitution, shape, defaults);
     for (const field of node.fields) {
       const definition = this.index.field(shape, field.name);
       if (!definition || seen.has(field.name)) throw new Diagnostic('E0062', `Unknown or duplicate field ${field.name}`, node.span);

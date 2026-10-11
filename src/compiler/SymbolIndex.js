@@ -1,5 +1,6 @@
 import {TypeSystem as T} from './TypeSystem.js';
 import {TypeResolver} from './TypeResolver.js';
+import {GenericDefaults} from './GenericDefaults.js';
 import {Diagnostic} from './Diagnostic.js';
 import {AssociatedConstant} from './AssociatedConstant.js';
 import {AssociatedTypeResolver} from './AssociatedTypeResolver.js';
@@ -27,6 +28,8 @@ export class SymbolIndex {
     this.typeResolver = new TypeResolver(this);
     this.associatedTypes = new AssociatedTypeResolver(this);
     this.associatedBindings = new AssociatedTypeBindings(this);
+    this.genericDefaults = new GenericDefaults(this);
+    this.genericDefaults.validateSyntax();
     if (validate) this.typeResolver.validate();
     // Tuple/unit constructors occupy the value namespace; record types do not.
     for (const shape of this.structs.values()) if (shape.form === 'tuple' || shape.form === 'unit') {

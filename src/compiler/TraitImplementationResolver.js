@@ -25,16 +25,17 @@ export class TraitImplementationResolver {
       }
       return null;
     }
-    if(app.args.length!==(trait.generics?.length??0))throw new Diagnostic('E0107',`Trait ${trait.name} expects ${trait.generics?.length??0} type argument(s)`,node?.span);
+    this.index.genericDefaults.checkArity(trait,app.args,node);
     return trait;
   }
   validateDeclarations() {
     for(const trait of this.index.traits.values()) {
       const seen=new Set(), traitParameters=trait.generics??[];
       const identity=trait.name+(traitParameters.length?`<${traitParameters.map(g=>g.name).join(',')}>`:'');
-      const traitDeclaration={...trait,unsizedSelf:true,generics:[{name:'Self',bounds:[identity]},...traitParameters]};
+      const traitDeclaration={...trait,kind:'traitEnvironment',traitContext:trait.name,unsizedSelf:true,generics:[{name:'Self',bounds:[identity]},...traitParameters]};
       const traitRequirements=new ImplObligations(this.a,{target:'Self',impl:traitDeclaration},traitDeclaration);
       for(const generic of traitParameters)traitRequirements.validate(generic.name,trait);
+      for(const parent of this.hierarchy.parents(identity,'Self'))for(const argument of T.traitApplication(parent).args)traitRequirements.requireSized(argument,trait);
       for(const method of trait.methods) {
         if(method.kind!=='fn')throw new Diagnostic('F_TRAIT_ITEM','Associated types require their trait continuation',method.span);
         if(seen.has(method.localName))throw new Diagnostic('E0428',`Duplicate associated item ${method.localName}`,method.span);
@@ -81,10 +82,10 @@ export class TraitImplementationResolver {
     const environment=new ImplObligations(this.a,entry);
     for(const argument of traitArguments){this.index.typeResolver.validateKnown(argument,parameters,impl);environment.validate(argument,impl);environment.requireSized(argument,impl);}
     for(const generic of trait.generics??[])for(const bound of generic.bounds)
-      if(!environment.prove(substitution.get(generic.name),this.hierarchy.canonical(typeInTrait(bound),impl.module,impl,parameters,target)))
+      if(!environment.prove(substitution.get(generic.name),this.hierarchy.canonical(typeInTrait(bound),impl.module,impl,parameters,target,substitution.get(generic.name))))
         throw new Diagnostic('E0277',`Trait argument bound is not satisfied: ${generic.name}: ${bound}`,impl.span);
     for(const predicate of trait.predicates??[])if(predicate.type!=='Self')for(const bound of predicate.bounds)
-      if(!environment.prove(typeInTrait(predicate.type),this.hierarchy.canonical(typeInTrait(bound),impl.module,impl,parameters,target)))
+      if(!environment.prove(typeInTrait(predicate.type),this.hierarchy.canonical(typeInTrait(bound),impl.module,impl,parameters,target,typeInTrait(predicate.type))))
         throw new Diagnostic('E0277',`Trait predicate is not satisfied: ${predicate.type}: ${bound}`,impl.span);
     const parents = this.hierarchy.parents(entry.traitRef,target);
     if (parents.length) {
@@ -130,7 +131,7 @@ export class TraitImplementationResolver {
       // An implementation cannot add requirements not present on the trait method.
       const obligations=new ImplObligations(this.a,entry,environment);
       const require=(type,bound,node)=>{
-        const canonical=obligations.trait(actualType(bound),fn.module,node);
+        const canonical=obligations.trait(actualType(bound),fn.module,node,actualType(type));
         if(!obligations.prove(actualType(type),canonical))throw new Diagnostic('E0276',`Impl has a stricter requirement ${type}: ${bound}`,node.span??fn.span);
       };
       for(const parameter of actual)for(const bound of parameter.bounds)require(parameter.name,bound,fn);
@@ -261,6 +262,7 @@ export class TraitImplementationResolver {
   }
   has(type,bound) {
     if(!this.index.traits.has(T.application(bound).name))return null;
+    bound=this.hierarchy.completeCanonical(bound,type);
     const key=JSON.stringify([type,bound]);
     if(++this.queries>200000)throw new Diagnostic('F_TRAIT_OBLIGATION_LIMIT','Trait obligation query budget exceeded');
     if(this.memo.has(key)){this.hits++;return this.memo.get(key);}

@@ -161,6 +161,16 @@ export class TypeSystem {
     }
     this.mismatch(expected, actual, node);
   }
+  static inferred(expected, actual) {
+    if (actual === '!' || !/\b_\b/.test(expected)) return expected;
+    if (expected === '_') return actual;
+    if (this.reference(expected)) return (expected.startsWith('&mut ') ? '&mut ' : '&') + this.inferred(this.target(expected),this.target(actual));
+    const fn=this.function(expected);if(fn){const other=this.function(actual);return this.functionName(fn.params.map((t,i)=>this.inferred(t,other.params[i])),this.inferred(fn.result,other.result));}
+    const tuple=this.tuple(expected);if(tuple){const other=this.tuple(actual);return this.tupleName(tuple.map((t,i)=>this.inferred(t,other[i])));}
+    const array=this.array(expected);if(array)return `[${this.inferred(array.element,this.array(actual).element)};${array.length}]`;
+    const app=this.application(expected),other=this.application(actual);
+    return app.name+(app.args.length?`<${app.args.map((t,i)=>this.inferred(t,other.args[i])).join(',')}>`:'');
+  }
   static mismatch(expected, actual, node) { throw new Diagnostic('E0308', `Type mismatch: expected ${expected}, got ${actual}`, node?.span); }
   static primitiveCopy(type) {
     return this.numeric(type) || !!this.function(type) || ['bool', 'char', '&str', '()'].includes(type) || (this.reference(type) && !type.startsWith('&mut '));

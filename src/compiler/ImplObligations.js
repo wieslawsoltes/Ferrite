@@ -21,8 +21,8 @@ export class ImplObligations {
   normalize(type,node=this.declaration) {
     return this.index.type(type,this.declaration.module,this.entry.target,this.parameters,{...node,typeContext:this.declaration});
   }
-  trait(raw,module=this.declaration.module,node=this.declaration) {
-    return this.a.implementations.traits.hierarchy.canonical(raw,module,node,this.parameters,this.entry.target);
+  trait(raw,module=this.declaration.module,node=this.declaration,subject=this.entry.target) {
+    return this.a.implementations.traits.hierarchy.canonical(raw,module,node,this.parameters,this.entry.target,subject);
   }
   symbolic(type) {
     if(this.parameters.has(type))return true;
@@ -35,22 +35,23 @@ export class ImplObligations {
     return [...app.args,...T.bindingTypes(app.bindings)].some(t=>this.symbolic(t));
   }
   assume(rawType,rawBound,node) {
-    const type=this.normalize(rawType,node),bound=this.trait(this.normalize(rawBound,node),this.declaration.module,node);
+    const type=this.normalize(rawType,node),bound=this.trait(this.normalize(rawBound,node),this.declaration.module,node,type);
     if(this.index.traits.has(T.application(bound).name))this.index.associatedBindings.validateArguments(bound,this.parameters,{...this.declaration,span:node.span??this.declaration.span});
-    this.index.associatedBindings.constraints(type,bound,node);
+    this.index.associatedBindings.constraints(type,bound,{...node,typeContext:this.declaration});
     if((!this.index.traits.has(T.application(bound).name) && type.startsWith('&mut ') && ['Copy','Clone'].includes(this.a.implementations.traits.hierarchy.builtinName(bound))) || !this.symbolic(type) && !this.symbolic(bound) && !this.prove(type,bound))
       throw new Diagnostic('E0277',`Implementation has an unsatisfied bound: ${type}: ${bound}`,node.span??this.declaration.span);
     if(!this.assumptions.has(type))this.assumptions.set(type,new Set());
     const set=this.assumptions.get(type);
     for(const implied of this.a.implementations.traits.hierarchy.closure(bound,type)) {
       if(this.index.traits.has(T.application(implied).name))this.index.associatedBindings.validateArguments(implied,this.parameters,{...this.declaration,span:node.span??this.declaration.span});
-      this.index.associatedBindings.constraints(type,implied,node);
+      this.index.associatedBindings.constraints(type,implied,{...node,typeContext:this.declaration});
       set.add(implied); set.add(T.traitIdentity(implied));
     }
   }
   prove(type,bound,depth=0) {
     if(++this.visits>65536 || depth>64)throw new Diagnostic('F_IMPL_BOUND_LIMIT','Implementation obligation budget exceeded',this.declaration.span);
     const graph=this.a.implementations.traits.hierarchy;
+    if(this.index.traits.has(T.application(bound).name))bound=graph.completeCanonical(bound,type,this.declaration,this.parameters);
     // Recursive builtin proofs use canonical identities, never a same-named user trait.
     const short=graph.builtinName(bound);
     if(T.traitApplication(bound).bindings.length) {
@@ -64,7 +65,7 @@ export class ImplObligations {
       const normalized=this.index.associatedTypes.normalize(type,this.parameters,{typeContext:this.declaration});
       if(normalized!==type)return this.prove(normalized,bound,depth+1);
       return this.index.associatedTypes.declaredBounds(projection,this.declaration,this.parameters).some(required=>
-        graph.implies(graph.canonical(required,this.declaration.module,this.declaration,this.parameters,this.entry.target),bound));
+        graph.implies(graph.canonical(required,this.declaration.module,this.declaration,this.parameters,this.entry.target,type),bound));
     }
     // Ordinary parameters are implicitly Sized, unlike Self in a trait.
     if(this.index.traits.has(T.application(bound).name))return (this.symbolic(type)||this.symbolic(bound))?this.a.implementations.traits.prove(type,bound,this,depth):this.a.hasBound(type,bound);
@@ -136,7 +137,7 @@ export class ImplObligations {
     for(const predicate of shape.predicates??[])for(const bound of predicate.bounds)required.push([predicate.type,bound]);
     for(const [subject,rawBound] of required) {
       const actual=this.index.instantiatedType(subject,shape,substitution,node,this.parameters);
-      const bound=this.trait(this.index.instantiatedType(rawBound,shape,substitution,node,this.parameters),shape.module,node);
+      const bound=this.trait(this.index.instantiatedType(rawBound,shape,substitution,node,this.parameters),shape.module,node,actual);
       if(!this.prove(actual,bound))throw new Diagnostic('E0277',`Missing declaration bound: ${actual}: ${bound}`,node.span??this.declaration.span,
         [{message:'Required by this nominal declaration',span:shape.span}]);
     }

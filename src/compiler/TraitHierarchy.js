@@ -1,4 +1,5 @@
 import {Diagnostic} from './Diagnostic.js';
+import {GenericDefaults} from './GenericDefaults.js';
 import {TypeSystem as T} from './TypeSystem.js';
 
 const paths = Object.freeze({
@@ -28,7 +29,7 @@ export class TraitHierarchy {
   constructor(index, {maxEdges = 65536, maxVisits = 1000000, maxEntries = 1024, maxCharacters = 4000000, maxQueryVisits = 200000, maxTotalVisits = 4000000} = {}) {
     for (const value of [maxEdges, maxVisits, maxEntries, maxCharacters, maxQueryVisits, maxTotalVisits])
       if (!Number.isSafeInteger(value) || value < 0) throw new RangeError('Trait hierarchy limits must be nonnegative safe integers');
-    this.index = index; this.direct = new Map(); this.cache = new Map();
+    this.index = index; this.defaults = index.genericDefaults ?? new GenericDefaults(index); this.direct = new Map(); this.cache = new Map();
     this.maxEdges = maxEdges; this.maxVisits = maxVisits; this.maxEntries = maxEntries; this.maxCharacters = maxCharacters;
     this.maxQueryVisits = maxQueryVisits; this.maxTotalVisits = maxTotalVisits; this.queryVisits = 0;
     this.membership = new WeakMap(); this.ancestorLists = new WeakMap();
@@ -52,19 +53,39 @@ export class TraitHierarchy {
   }
   limit(node) { throw new Diagnostic('F_TRAIT_HIERARCHY_LIMIT', 'Supertrait graph or elaboration budget exceeded', node?.span); }
   tick(node) { if (++this.visits > this.maxVisits) this.limit(node); }
-  canonical(raw, module = '', node = null, parameters = new Set(), self = 'Self') {
+  canonical(raw, module = '', node = null, parameters = new Set(), self = 'Self', subject = self) {
     const app = T.traitApplication(raw);
     const declaration = this.index.typeResolver.find(this.index.traits, app.name, module, node);
     if (declaration) {
-      const arity = declaration.generics?.length ?? 0;
-      if (app.args.length !== arity) throw new Diagnostic('E0107', `Trait ${declaration.name} expects ${arity} type argument(s)`, node?.span);
-      const args = app.args.map(type => this.index.type(type, module, self, parameters, node));
-      return T.traitName(declaration.name, args, T.mapBindings(app.bindings, type => this.index.type(type, module, self, parameters, node), bound => this.canonical(bound, module, node, parameters, self)));
+      const supplied = app.args.map(type => this.index.type(type, module, self, parameters, node));
+      const args = this.defaults.expand(declaration, supplied, {node, parameters, self: subject ?? 'Self', module});
+      return T.traitName(declaration.name, args, T.mapBindings(app.bindings, type => this.index.type(type, module, self, parameters, node), bound => this.canonicalSyntax(bound, module, node, parameters, self)));
     }
     const name = raw.split('::').at(-1);
     if (Object.hasOwn(paths, name) && (raw === name || raw === paths[name] || raw === paths[name].replace(/^core::/, 'std::'))) return paths[name];
     if (/^(Fn|FnMut|FnOnce)\(/.test(raw)) return this.index.type(raw, module, self, parameters, node);
     throw new Diagnostic('E0405', `Unknown trait '${raw}'`, node?.span);
+  }
+  /** Complete an already canonical application without resolving its supplied
+   * types again. They may be private caller types or symbolic binders, not names
+   * accessible from the obligation consumer's lexical scope. */
+  completeCanonical(raw, subject = 'Self', node = null, parameters = null) {
+    const app = T.traitApplication(raw), declaration = this.index.traits.get(app.name);
+    if (!declaration) return raw;
+    const scope = parameters ?? this.index.associatedBindings?.parametersFor(node) ?? new Set();
+    const args = this.defaults.expand(declaration, app.args, {node, parameters:scope, self:subject});
+    return T.traitName(app.name,args,app.bindings);
+  }
+  /** Resolve names in nested predicates, but do not bind a default Self until
+   * the associated projection which is the predicate's subject is known. */
+  canonicalSyntax(raw, module, node, parameters, self) {
+    const app = T.traitApplication(raw);
+    const declaration = this.index.typeResolver.find(this.index.traits, app.name, module, node);
+    if (!declaration) return this.canonical(raw, module, node, parameters, self);
+    this.defaults.checkArity(declaration, app.args, node);
+    const type = value => this.index.type(value, module, self, parameters, node);
+    return T.traitName(declaration.name, app.args.map(type),
+      T.mapBindings(app.bindings, type, bound => this.canonicalSyntax(bound, module, node, parameters, self)));
   }
   builtinName(identity) {
     return builtins.has(identity) ? identity.split('::').at(-1) : null;

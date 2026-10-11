@@ -13,7 +13,7 @@ export class TypeResolver {
     if (typeof type !== 'string') throw new Diagnostic('F_TYPE', 'A type must have a structural name', node?.span);
     const declaration = node?.typeContext ?? node;
     let scope = 0;
-    if (type.includes('::') && declaration && this.index.associatedTypes?.enabled) {
+    if ((type.includes('::') || this.index.genericDefaults?.enabled) && declaration && this.index.associatedTypes?.enabled) {
       if (!this.contexts.has(declaration)) this.contexts.set(declaration, ++this.contextSequence);
       scope = this.contexts.get(declaration);
     }
@@ -38,27 +38,30 @@ export class TypeResolver {
         if (constrained.bindings.length) {
           const trait = this.find(this.index.traits, constrained.name, module, node);
           if (!trait) throw new Diagnostic('E0229', 'Associated type bindings require a declared trait', node?.span);
-          if (constrained.args.length !== trait.generics.length) throw new Diagnostic('E0107', `Trait ${trait.name} expects ${trait.generics.length} type argument(s)`, node?.span);
+          this.index.genericDefaults.checkArity(trait, constrained.args, node);
           const result = T.traitName(trait.name, constrained.args.map(next), T.mapBindings(constrained.bindings, next));
           return this.remember(key, result);
         }
         const {name, args} = T.application(type), arguments_ = args.map(next);
         const alias = parameters.has(name) ? null : this.find(this.index.aliases, name, module, node);
         if (alias) {
-          if (alias.generics.length !== args.length) throw new Diagnostic('E0107', `Alias ${alias.name} expects ${alias.generics.length} type argument(s), got ${args.length}`, node?.span ?? alias.span);
+          const applied = this.index.genericDefaults.expand(alias, arguments_, {node, parameters, module});
           if (stack.includes(alias.name)) throw new Diagnostic('E0391', `Recursive type alias: ${[...stack, alias.name].join(' → ')}`, node?.span ?? alias.span);
           const declared = new Set(alias.generics.map(g => g.name));
           const target = this.resolve(alias.target, alias.module, self, declared, [...stack, alias.name], alias);
-          result = this.substitute(target, new Map(alias.generics.map((g, i) => [g.name, arguments_[i]])), alias, parameters);
+          result = this.substitute(target, new Map(alias.generics.map((g, i) => [g.name, applied[i]])), alias, parameters);
           // Alias names resolve at their declaration; projection selection keeps
           // the caller's current impl evidence without re-resolving private names.
           result = this.index.associatedTypes?.normalize(result, parameters, node) ?? result;
-          const usage = {alias: alias.name, arguments: arguments_, expanded: result, span: alias.span};
-          if (this.expansions.size < 512 && result.length < 8192) this.expansions.set(JSON.stringify([alias.name, arguments_]), usage);
+          const usage = {alias: alias.name, arguments: applied, expanded: result, span: alias.span};
+          if (this.expansions.size < 512 && result.length < 8192) this.expansions.set(JSON.stringify([alias.name, applied]), usage);
         } else {
           const canonical = parameters.has(name) ? name : name === 'Self' && self ? self :
             this.find(this.index.structs, name, module, node)?.name ?? this.find(this.index.enums, name, module, node)?.name ?? this.find(this.index.traits,name,module,node)?.name ?? name;
-          result = canonical + (args.length ? `<${arguments_.join(',')}>` : '');
+          const shape = parameters.has(name) ? null : this.index.structs.get(canonical) ?? this.index.enums.get(canonical);
+          const applied = shape && this.index.genericDefaults.has(shape)
+            ? this.index.genericDefaults.expand(shape, arguments_, {node, parameters, module}) : arguments_;
+          result = canonical + (applied.length ? `<${applied.join(',')}>` : '');
         }
       }
     }

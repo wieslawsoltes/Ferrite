@@ -151,9 +151,9 @@ export class ImplementationResolver {
     for (const parameter of entry.impl.generics ?? [])
       if (!prove(mapping.get(parameter.name), 'core::marker::Sized')) return false;
     for (const parameter of entry.impl.generics ?? []) for (const bound of parameter.bounds)
-      if (!prove(mapping.get(parameter.name), this.traits.hierarchy.canonical(normalize(bound), entry.impl.module, entry.impl))) return false;
+      if (!prove(mapping.get(parameter.name), this.traits.hierarchy.canonical(normalize(bound), entry.impl.module, entry.impl, new Set(), T.substitute(entry.target,mapping), mapping.get(parameter.name)))) return false;
     for (const predicate of entry.impl.predicates ?? []) for (const bound of predicate.bounds)
-      if (!prove(normalize(predicate.type), this.traits.hierarchy.canonical(normalize(bound), entry.impl.module, entry.impl))) return false;
+      if (!prove(normalize(predicate.type), this.traits.hierarchy.canonical(normalize(bound), entry.impl.module, entry.impl, new Set(), T.substitute(entry.target,mapping), normalize(predicate.type)))) return false;
     return true;
   }
   lookup(type, method, module, node, context=null, scope=null, requiredTrait=null) {
@@ -247,11 +247,15 @@ export class ImplementationResolver {
       return this.lookup(owner,method,module,node,context.instance.fn,scope);
     }
     const explicit = node.ownerTypeArguments?.map(type => this.a.normalize(type, context, node));
-    const args = explicit ?? (app.args.length ? app.args : declaration.generics.map(() => '_'));
+    const args = explicit?.length || app.args.length ? this.index.genericDefaults.expand(declaration,explicit?.length ? explicit : app.args,{node,module}) : declaration.generics.map(() => '_');
     if (args.length !== declaration.generics.length) throw new Diagnostic('E0107', `Wrong number of type arguments for ${app.name}`, node.span);
     const type = this.index.type(app.name + (args.length ? `<${args.join(',')}>` : ''), module, context.instance.fn.owner, new Set(), node);
     const result = this.lookup(type, method, module, node,context.instance.fn,scope);
     if (!result) throw new Diagnostic('E0599', `No associated function ${method} for ${type}`, node.span);
+    if (this.index.genericDefaults.has(declaration) && args.some(argument=>/\b_\b/.test(argument))) {
+      const selectedOwner = this.index.instantiatedType(result.fn.owner,result.fn,result.mapping,node);
+      this.index.genericDefaults.accessible(selectedOwner,module,node,new Set([...result.mapping].filter(([,type])=>type===null).map(([name])=>name)));
+    }
     return result;
   }
   explicit(resolved, node, context) {

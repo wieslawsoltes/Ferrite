@@ -1,3 +1,4 @@
+import {DefaultArgumentInference} from '../DefaultArgumentInference.js';
 import {AssociatedConstant} from '../AssociatedConstant.js';
 import {EnumRecordAnalyzer} from '../EnumRecordAnalyzer.js';
 import {Diagnostic} from '../Diagnostic.js';
@@ -23,11 +24,10 @@ export class PatternAnalyzer {
 
   constructorArguments(pattern, owner, type, context) {
     if (!pattern.ownerTypeArguments) return;
-    if (pattern.ownerTypeArguments.length !== owner.generics.length)
-      throw new Diagnostic('E0107', `Wrong number of pattern type arguments for ${owner.name}`, pattern.span);
+    const supplied = pattern.ownerTypeArguments.map(argument => this.analyzer.normalize(argument,context,pattern));
     const actual = T.application(type).args;
-    pattern.ownerTypeArguments.forEach((argument, index) =>
-      T.unify(actual[index], this.analyzer.normalize(argument, context, pattern), new Map(), pattern));
+    const defaults = new DefaultArgumentInference(this.analyzer.index,owner,supplied,actual,pattern,context.instance.fn.module);
+    owner.generics.forEach((generic,index)=>T.unify(actual[index],defaults.mapping.get(generic.name) ?? '_',new Map(),pattern));
   }
 
   analyze(pattern, type, context, mutable = false, bindings = new Map(), names = new Set(), reuse = false) {
@@ -145,7 +145,11 @@ export class PatternAnalyzer {
         const constructor = this.analyzer.index.constructorFor(pattern.name.startsWith('Self::') ? context.instance.fn.owner + pattern.name.slice(4) : pattern.name, context.instance.fn.module, pattern);
         if (constructor?.kind === 'enum') this.constructorArguments(pattern, constructor.owner, type, context);
         if (constructor?.kind === 'enum') return EnumRecordAnalyzer.pattern(this.analyzer, pattern, constructor, type, context, mutable, bindings, names, reuse);
-        const shape = this.analyzer.index.resolve(this.analyzer.index.structs, T.application(this.analyzer.index.type(pattern.name, context.instance.fn.module, context.instance.fn.owner)).name, context.instance.fn.module, pattern);
+        const index = this.analyzer.index, module = context.instance.fn.module;
+        const direct = index.resolve(index.structs,pattern.name,module,pattern,false);
+        const alias = index.resolve(index.aliases,pattern.name,module,pattern,false);
+        const spelling = alias?.generics.length ? `${pattern.name}<${alias.generics.map(()=>'_').join(',')}>` : pattern.name;
+        const shape = direct ?? index.resolve(index.structs,T.application(index.type(spelling,module,context.instance.fn.owner)).name,module,pattern);
         const app = T.application(type);
         if (app.name !== shape.name) throw new Diagnostic('E0308', `Pattern ${shape.name} does not match ${type}`, pattern.span);
         this.constructorArguments(pattern, shape, type, context);

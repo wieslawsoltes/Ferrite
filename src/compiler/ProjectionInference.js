@@ -6,8 +6,8 @@ import {TypeSystem as T} from './TypeSystem.js';
  * guesses the implementing type. Revisit it only after independent evidence.
  * Nonliteral checking order and all runtime evaluation order are preserved. */
 export class ProjectionInference {
-  constructor(index, mapping, declaration) {
-    this.index = index; this.mapping = mapping; this.declaration = declaration;
+  constructor(index, mapping, declaration, defaults = null) {
+    this.index = index; this.mapping = mapping; this.declaration = declaration; this.defaults = defaults;
     this.pending = []; this.literals = []; this.visits = 0;
   }
   static literalTree(node) {
@@ -23,13 +23,19 @@ export class ProjectionInference {
     // Only literal trees can be delayed. They create no bindings, captures,
     // moves, loans or calls; AST and generated evaluation order stay unchanged.
     // This avoids prematurely defaulting a projected u8 literal to i32.
-    if ((this.index.associatedTypes.containsProjection(expected) || this.index.associatedBindings.outputDependent(expected, this.mapping, this.declaration)) && ProjectionInference.literalTree(node)) this.literals.push(check);
-    else check();
+    if ((this.defaults?.dependent(expected) || this.index.associatedTypes.containsProjection(expected) || this.index.associatedBindings.outputDependent(expected, this.mapping, this.declaration)) && ProjectionInference.literalTree(node)) {
+      const unsuffixed = value => value.kind === 'literal' ? value.type === '{integer}' || value.type === 'f64' && !value.suffix :
+        value.kind === 'unary' ? unsuffixed(value.value) : value.items.some(unsuffixed);
+      check.defaultPriority = this.defaults && unsuffixed(node) ? 1 : 0;
+      this.literals.push(check);
+    } else check();
   }
   unify(expected, actual, node, diagnostic = null) {
     try {
       const result = this.visit(expected, actual, node, 0, diagnostic);
+      this.defaults?.complete();
       this.index.associatedBindings.completeArguments(this.declaration, this.mapping);
+      this.defaults?.complete();
       return result;
     }
     catch (error) {
@@ -76,7 +82,9 @@ export class ProjectionInference {
   }
   settle(required = true) {
     this.index.associatedBindings.completeArguments(this.declaration, this.mapping);
+    this.defaults?.complete();
     const literals = this.literals; this.literals = [];
+    if(this.defaults)literals.sort((a,b)=>a.defaultPriority-b.defaultPriority);
     for (const check of literals) check();
     for (let pass = 0; this.pending.length && pass <= this.mapping.size; pass++) {
       const before = [...this.mapping.values()].filter(value => value !== null).length;

@@ -48,13 +48,12 @@ export class AssociatedTypeResolver {
     return context.trait ?? null;
   }
 
-  canonicalTrait(raw, module, self, parameters, node) {
+  canonicalTrait(raw, module, self, parameters, node, subject = self) {
     const app = T.traitApplication(raw);
     const trait = this.index.typeResolver.find(this.index.traits, app.name, module, node);
     if (!trait) throw new Diagnostic('E0405', `Unknown trait '${app.name}' in associated type`, node?.span);
-    if (trait.generics.length !== app.args.length)
-      throw new Diagnostic('E0107', `Trait ${trait.name} expects ${trait.generics.length} type argument(s)`, node?.span);
-    const args = app.args.map(type => this.index.type(type, module, self, parameters, node));
+    const supplied = app.args.map(type => this.index.type(type, module, self, parameters, node));
+    const args = this.index.genericDefaults.expand(trait, supplied, {node, parameters, self: subject ?? 'Self', module});
     return T.traitName(trait.name, args, T.mapBindings(app.bindings, type => this.index.type(type, module, self, parameters, node)));
   }
 
@@ -79,7 +78,7 @@ export class AssociatedTypeResolver {
     for (const bound of raw) {
       const app = T.application(bound);
       if (!this.index.typeResolver.find(this.index.traits, app.name, module, node)) continue;
-      const identity = this.canonicalTrait(T.traitIdentity(bound), module, self, parameters, node);
+      const identity = this.canonicalTrait(T.traitIdentity(bound), module, self, parameters, node, origin);
       const closure = this.implementations?.traits.hierarchy.closure(identity, origin) ?? [identity];
       for (const candidate of closure) result.add(T.traitIdentity(candidate));
     }
@@ -94,7 +93,7 @@ export class AssociatedTypeResolver {
       if (explicit.args.length) throw new Diagnostic('E0107', 'This associated type does not accept generic arguments', node?.span);
       if (explicit.tail.length) throw new Diagnostic('F_ASSOC_PATH', 'Use an explicitly qualified nested associated-type projection', node?.span);
       const target = this.index.type(explicit.self, module, self, parameters, node);
-      const trait = this.canonicalTrait(explicit.trait, module, self, parameters, node);
+      const trait = this.canonicalTrait(explicit.trait, module, self, parameters, node, target);
       this.member(trait, explicit.member, node);
       return this.reduce(target, trait, explicit.member, parameters, node);
     }
@@ -261,7 +260,7 @@ export class AssociatedTypeResolver {
         if (item.visibility === 'pub') throw new Diagnostic('E0449', 'Associated types inherit trait visibility', item.span);
         this.checkItemScope(item);
         const parameters = new Set(['Self', ...trait.generics.map(g => g.name)]);
-        for (const bound of item.bounds) this.implementations.traits.hierarchy.canonical(bound, trait.module, {...item, typeContext: trait}, parameters, 'Self');
+        for (const bound of item.bounds) this.implementations.traits.hierarchy.canonical(bound, trait.module, {...item, typeContext: trait}, parameters, 'Self', T.projectionName('Self',trait.name+(trait.generics.length?`<${trait.generics.map(g=>g.name).join(',')}>`:''),item.localName));
       }
     }
     for (const entry of this.implementations.entries) {
@@ -298,7 +297,7 @@ export class AssociatedTypeResolver {
       environment.validateCanonical(type, context);
       const projection = {self: entry.target, trait: entry.traitRef, member: name};
       for (const raw of this.declaredBounds(projection, expected)) {
-        const bound = this.implementations.traits.hierarchy.canonical(raw, entry.impl.module, context, entry.parameters, entry.target);
+        const bound = this.implementations.traits.hierarchy.canonical(raw, entry.impl.module, context, entry.parameters, entry.target,type);
         if (!environment.prove(type, bound)) throw new Diagnostic('E0277', `Associated type ${name} does not satisfy ${bound}`, item.span);
       }
     }

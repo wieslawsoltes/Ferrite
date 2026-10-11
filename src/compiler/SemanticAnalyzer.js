@@ -1,3 +1,4 @@
+import {DefaultArgumentInference} from './DefaultArgumentInference.js';
 import {ProjectionInference} from './ProjectionInference.js';
 import {AssociatedConstant} from './AssociatedConstant.js';
 import {inferDataMethod} from './DataMethods.js';
@@ -40,6 +41,7 @@ export class SemanticAnalyzer {
     this.implementations.validate();
     this.index.associatedTypes.validateUses();
     this.index.associatedBindings.validateUses();
+    this.index.genericDefaults.validateDefinitions(this);
   }
   static analyze(ast, options) { return new SemanticAnalyzer(ast, options).analyze(); }
   analyze() {
@@ -59,7 +61,7 @@ export class SemanticAnalyzer {
     for (const instance of this.instances.values()) if (instance.fn.isConst) this.constants.validate(instance);
     this.closures.finish();this.functionValues.finish();
     this.discriminants.annotate(this.instances.values());
-    return {associatedBindings:this.index.associatedBindings.snapshot(),associatedTypes:this.index.associatedTypes.snapshot(),traitResolution:this.implementations.traits.snapshot(),implementations: this.implementations.snapshot(), discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
+    return {genericDefaults:this.index.genericDefaults.snapshot(),associatedBindings:this.index.associatedBindings.snapshot(),associatedTypes:this.index.associatedTypes.snapshot(),traitResolution:this.implementations.traits.snapshot(),implementations: this.implementations.snapshot(), discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
       symbols: [...this.index.symbols, ...this.index.associatedTypes.symbols()], structures: this.canonicalShapes(this.index.structs).filter(shape => !shape.builtin),
       enums: this.canonicalShapes(this.index.enums), warnings: this.warnings, entry: this.entryKey,
       capabilities: {ownership: 'conservative whole-local analysis', traits: 'generic declared-trait impls and built-in bounds'}};
@@ -465,9 +467,9 @@ export class SemanticAnalyzer {
     if (form === 'tuple' && !['call', 'structLiteral'].includes(node.kind)) throw new Diagnostic('F_CONSTRUCTOR_VALUE', 'Call the tuple constructor directly; function-item values are not yet supported', node.span);
     if (variant.fields.length !== args.length) throw new Diagnostic('E0061', `${tag} expects ${variant.fields.length} values`, node.span);
     const explicit = (node.callee?.ownerTypeArguments ?? node.callee?.typeArguments ?? node.ownerTypeArguments ?? node.typeArguments ?? []).map(type => this.normalize(type, ctx, node));
-    if (explicit.length && explicit.length !== owner.generics.length) throw new Diagnostic('E0107', 'Incorrect number of constructor type arguments', node.span);
-    const hint = T.application(expected ?? ''), substitution = new Map(owner.generics.map((g, i) => [g.name, explicit[i] ?? constructor.typeArguments?.[i] ?? (hint.name === owner.name ? hint.args[i] : null)]));
-    const inference = new ProjectionInference(this.index, substitution, owner);
+    const hint = T.application(expected ?? '');
+    const defaults = new DefaultArgumentInference(this.index,owner,explicit.length ? explicit : constructor.typeArguments ?? [],hint.name === owner.name ? hint.args : [],node,ctx.instance.fn.module);
+    const substitution = defaults.mapping, inference = new ProjectionInference(this.index, substitution, owner, defaults);
     args.forEach((arg, i) => {
       const formal = this.index.instantiatedType(variant.fields[i], owner, substitution, node);
       inference.expression(formal, arg, hint => this.infer(arg, ctx,
@@ -718,8 +720,9 @@ export class SemanticAnalyzer {
         const actual = this.infer(node.value, ctx, annotation);
         if (annotation) T.unify(annotation, actual, new Map(), node);
         if (node.otherwise && this.block(node.otherwise, ctx) !== '!') throw new Diagnostic('E0308', 'The else branch of let-else must diverge', node.otherwise.span);
-        this.pattern(node.pattern, annotation ?? actual, ctx, node.mutable, node.annotation ? ctx.methodScope.normalize(node.annotation) : ctx.methodScope.of(node.value));
-        this.checkCoverage([node.pattern], annotation ?? actual, node, !node.otherwise);
+        const inferred = annotation ? T.inferred(annotation,actual) : actual;
+        this.pattern(node.pattern, inferred, ctx, node.mutable, node.annotation ? ctx.methodScope.normalize(node.annotation) : ctx.methodScope.of(node.value));
+        this.checkCoverage([node.pattern], inferred, node, !node.otherwise);
         node.binding = node.pattern.binding; break;
       }
       case 'assign': {

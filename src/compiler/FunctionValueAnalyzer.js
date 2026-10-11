@@ -1,3 +1,4 @@
+import {ProjectionInference} from './ProjectionInference.js';
 import {Diagnostic} from './Diagnostic.js';
 import {TypeSystem as T} from './TypeSystem.js';
 import {ClosureAnalyzer} from './closures/ClosureAnalyzer.js';
@@ -58,14 +59,16 @@ export class FunctionValueAnalyzer {
     }
     const formals=this.formals(record),parameters=new Set(record.mapping.keys());
     if(hints.length&&hints.length!==formals.length)throw new Diagnostic('E0061',`Callable expects ${formals.length} arguments`,node?.span??record.node.span);
-    const normalize=type=>record.constructor ? this.index.type(T.substitute(type,record.mapping),record.owner.module,record.owner.owner,parameters,record.node) : this.a.formal(record.owner,type,record.mapping,record.node);
-    formals.forEach((type,i)=>{if(hints[i])T.unify(normalize(type),hints[i],record.mapping,node??record.node);});
-    if(resultHint)T.unify(normalize(this.result(record)),resultHint,record.mapping,node??record.node);
+    const normalize=type=>record.constructor ? this.index.instantiatedType(type,record.owner,record.mapping,record.node) : this.a.formal(record.owner,type,record.mapping,record.node);
+    const inference=new ProjectionInference(this.index,record.mapping,record.owner);
+    formals.forEach((type,i)=>{if(hints[i])inference.unify(normalize(type),hints[i],node??record.node);});
+    if(resultHint)inference.unify(normalize(this.result(record)),resultHint,node??record.node);
     if(!record.constructor)this.a.solveDefaultArguments(record.owner,record.mapping,node??record.node);
     if([...record.mapping.values()].some(type=>!type||/\b_\b/.test(type))){
       if(node)throw new Diagnostic('E0282','Cannot infer function-item specialization; provide type arguments or callable context',node.span);
       return null;
     }
+    inference.settle();
     const concrete=record.owner.generics.map(g=>record.mapping.get(g.name));
     const key=JSON.stringify([record.constructor?record.constructor.tag??record.owner.name:record.owner.name,concrete]);
     const prior=this.interned.get(key);
@@ -167,7 +170,7 @@ export class FunctionValueAnalyzer {
   }
   call(node,ctx,type) {
     const record=this.get(type);if(!record)return null;
-    const formals=record.signature??this.formals(record).map(t=>this.index.type(T.substitute(t,record.mapping),record.owner.module,record.owner.owner,new Set(record.mapping.keys()),node));
+    const formals=record.signature??this.formals(record).map(t=>record.constructor?this.index.instantiatedType(t,record.owner,record.mapping,node):this.a.formal(record.owner,t,record.mapping,node));
     if(node.args.length!==formals.length)throw new Diagnostic('E0061',`Callable expects ${formals.length} arguments`,node.span);
     const types=node.args.map((arg,i)=>this.a.infer(arg,ctx,record.mapping.has(formals[i])?null:formals[i]));
     const instance=this.prepare(record,types,null,node);

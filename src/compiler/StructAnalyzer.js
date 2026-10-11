@@ -1,3 +1,4 @@
+import {ProjectionInference} from './ProjectionInference.js';
 import {EnumRecordAnalyzer} from './EnumRecordAnalyzer.js';
 import {Diagnostic} from './Diagnostic.js';
 import {TypeSystem as T} from './TypeSystem.js';
@@ -41,23 +42,26 @@ export class StructAnalyzer {
     const substitution = new Map(shape.generics.map((g, i) => [g.name, supplied[i] ?? (hint.name === shape.name ? hint.args[i] : null)]));
     if (node.fields.length !== shape.fields.length)
       throw new Diagnostic('E0063', `Incorrect number of fields for ${shape.name}`, node.span);
-    const seen = new Set();
+    const seen = new Set(), inference = new ProjectionInference(this.index, substitution, shape);
     for (const field of node.fields) {
       const definition = this.index.field(shape, field.name);
       if (!definition || seen.has(field.name)) throw new Diagnostic('E0062', `Unknown or duplicate field ${field.name}`, node.span);
       seen.add(field.name); this.index.fieldVisible(shape, definition, module, field.value);
-      const formal = this.index.type(T.substitute(definition.type, substitution), shape.module, shape.name, new Set(substitution.keys()), node);
-      const actual = this.a.infer(field.value, context, substitution.has(formal) ? null : formal);
-      try { T.unify(formal, actual, substitution, field.value); }
-      catch { throw new Diagnostic('E0308', `Field ${shape.name}.${field.name} expects ${formal}, got ${actual}`, field.value.span); }
+      const formal = this.index.instantiatedType(definition.type, shape, substitution, node);
+      inference.expression(formal, field.value, hint => this.a.infer(field.value, context,
+        substitution.has(hint) || this.index.associatedTypes.containsProjection(hint) ? null : hint),
+      (_, actual) => new Diagnostic('E0308',
+        `Field ${shape.name}.${field.name} expects ${this.index.instantiatedType(definition.type, shape, substitution, node)}, got ${field.value.type ?? actual}`,
+        field.value.span));
     }
+    inference.settle();
     for (const generic of shape.generics) {
       const type = substitution.get(generic.name);
       if (!type || /\b_\b/.test(type)) throw new Diagnostic('E0282', `Cannot infer ${generic.name} in ${shape.name}`, node.span);
       for (const rawBound of generic.bounds) this.bound(type, rawBound, shape, substitution, node);
     }
     for (const predicate of shape.predicates ?? []) {
-      const type = this.index.type(T.substitute(predicate.type, substitution), shape.module, shape.name);
+      const type = this.index.instantiatedType(predicate.type, shape, substitution, node);
       for (const bound of predicate.bounds) this.bound(type, bound, shape, substitution, node);
     }
     node.name = shape.name;
@@ -65,7 +69,7 @@ export class StructAnalyzer {
   }
 
   bound(type, raw, shape, substitution, node) {
-    const bound = this.index.type(T.substitute(raw, substitution), shape.module, shape.name);
+    const bound = this.index.instantiatedType(raw, shape, substitution, node);
     if (!this.a.hasBound(type, bound)) throw new Diagnostic('E0277', `Trait obligation failed: ${type}: ${bound}`, node.span);
     this.a.obligations.push({type, trait: bound, status: 'satisfied', span: node.span});
   }

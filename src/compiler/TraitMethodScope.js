@@ -36,10 +36,27 @@ export class TraitMethodScope {
   normalize(type) {
     return this.a.index.type(type, this.fn.module, this.fn.defaultTrait ? 'Self' : this.fn.owner, this.parameters, this.fn);
   }
-  traits(origin) {
+  declaredTraits(origin) {
+    if (!origin) return null;
+    const root = origin.split('::')[0];
+    if (origin.includes('::') && (this.parameters.has(root) || root === 'Self')) origin = this.normalize(origin);
     while (T.reference(origin)) origin = T.target(origin);
-    const traits=this.bounds.get(origin);
-    return traits?new Set([...traits].map(trait=>T.substitute(trait,this.substitution))):null;
+    const explicit = this.bounds.get(origin), projection = T.projection(origin);
+    const traits = new Set(explicit ?? []);
+    if (projection) {
+      // Associated bounds are declaration evidence, not privileges of whichever
+      // concrete type happens to be substituted into this instantiation.
+      for (const raw of this.a.index.associatedTypes.declaredBounds(projection, this.fn)) {
+        const bound = this.graph.canonical(raw, this.fn.module, this.fn, this.parameters, 'Self');
+        for (const parent of this.graph.closure(bound, origin)) traits.add(parent);
+      }
+    }
+    return explicit || projection ? traits : null;
+  }
+  traits(origin) {
+    const traits = this.declaredTraits(origin);
+    return traits ? new Set([...traits].map(trait =>
+      this.a.index.typeResolver.substitute(trait, this.substitution, this.fn))) : null;
   }
   remember(node, origin) { if (this.active && node && origin) this.expressions.set(node, origin); }
   bind(binding, origin) { if (this.active && binding && origin) this.bindings.set(binding, origin); }
@@ -111,15 +128,36 @@ export class TraitMethodScope {
    * variables. Concrete fallback never invents a caller bound from equality. */
   callResult(node, fn, receiverOrigin = null) {
     if (!this.active) return;
-    const parameters = new Set(fn.generics.map(g => g.name));
-    const bindings = new Map(), formal = raw => {
-      let type = this.a.index.type(raw, fn.module, fn.owner, parameters, fn);
-      if (receiverOrigin && raw.includes('Self')) {
-        const self = new Map([['Self', receiverOrigin]]);
-        type = this.a.index.type(T.substitute(raw, self), fn.module, null, new Set([...parameters, ...this.parameters]), fn);
+    let contract = null;
+    if (receiverOrigin && fn.implementedTrait) {
+      const instance = this.a.instances.get(node.resolved);
+      const actual = T.substitute(fn.implementedTrait, new Map(Object.entries(instance?.typeArguments ?? {})));
+      const identity = [...(this.declaredTraits(receiverOrigin) ?? [])].find(bound => T.substitute(bound, this.substitution) === actual);
+      if (identity) {
+        const trait = this.a.index.traits.get(T.application(identity).name);
+        const member = trait?.methods.find(method => method.localName === fn.localName);
+        if (member) {
+          // An explicit impl may spell its return as a concrete type. Generic
+          // callers nevertheless see the trait declaration's abstract result.
+          const method = this.a.implementations.traits.freshen(member,
+            new Set([...this.parameters, ...trait.generics.map(g => g.name)]), 'origin');
+          const args = T.application(identity).args;
+          contract = {trait, mapping: new Map([['Self', receiverOrigin], ...trait.generics.map((g, i) => [g.name, args[i]])])};
+          fn = {...method, implGenericCount: 0};
+        }
       }
-      return Pattern.parse(type, parameters, 'callee:');
+    }
+    const parameters = new Set(fn.generics.map(g => g.name));
+    const bindings = new Map(), canonical = raw => {
+      if (contract) {
+        const names = new Set(['Self', ...parameters, ...contract.trait.generics.map(g => g.name)]);
+        return T.substitute(this.a.index.type(raw, contract.trait.module, 'Self', names, fn), contract.mapping);
+      }
+      const names = receiverOrigin ? new Set([...parameters, 'Self']) : parameters;
+      const type = this.a.index.type(raw, fn.module, receiverOrigin ? 'Self' : fn.owner, names, fn);
+      return receiverOrigin ? T.substitute(type, new Map([['Self', receiverOrigin]])) : type;
     };
+    const formal = raw => Pattern.parse(canonical(raw), parameters, 'callee:');
     for (let i = 0; i < node.args.length; i++) {
       if (!Pattern.unify(formal(fn.params[i].type), Pattern.parse(this.of(node.args[i])), bindings)) return;
     }
@@ -128,7 +166,14 @@ export class TraitMethodScope {
     for (let i = 0; i < explicit.length && i < generics.length; i++) {
       if (!Pattern.unify({variable: 'callee:' + generics[i].name}, Pattern.parse(this.normalize(explicit[i])), bindings)) return;
     }
-    const origin = Pattern.render(formal(fn.returnType), bindings);
-    if (origin) this.remember(node, origin);
+    // Projection inputs can be rendered from independently determined binders,
+    // but must never be inferred by structurally inverting a projected result.
+    const result = canonical(fn.returnType), substitution = new Map();
+    for (const name of parameters) {
+      const actual = Pattern.render({variable: 'callee:' + name}, bindings);
+      if (actual === null && T.substitute(result, new Map([[name, '_']])) !== result) return;
+      if (actual !== null) substitution.set(name, actual);
+    }
+    this.remember(node, T.substitute(result, substitution));
   }
 }

@@ -104,11 +104,12 @@ value caches; a previous `S::<bool>::N` evaluation cannot authorize a dependent
 
 ## Current boundaries
 
-This increment does not implement associated types, associated type bindings,
-generic associated types, trait type-parameter defaults, general const generics,
-reference promotion, aggregate structural-constant patterns, trait-object
-constants, or const trait methods. Constants support the evaluator's existing
-materializable values; they do not introduce arbitrary compile-time allocation
+Non-generic associated types are covered by the subsequent
+[associated-types continuation](associated-types.md). Associated type equality/bound
+bindings, generic associated types, trait type-parameter defaults, general const
+generics, reference promotion, aggregate structural-constant patterns, trait-object
+constants and const trait methods remain unsupported. Constants support the
+evaluator's existing materializable values; they do not introduce arbitrary compile-time allocation
 or references into temporary const storage.
 
 The generic-pattern proof is conservative for inferred helper-call type origins

@@ -2,6 +2,7 @@ import {TypeSystem as T} from './TypeSystem.js';
 import {TypeResolver} from './TypeResolver.js';
 import {Diagnostic} from './Diagnostic.js';
 import {AssociatedConstant} from './AssociatedConstant.js';
+import {AssociatedTypeResolver} from './AssociatedTypeResolver.js';
 
 /** Declaration indexing and namespace resolution are independent of expression typing. */
 export class SymbolIndex {
@@ -22,7 +23,9 @@ export class SymbolIndex {
     this.enums.set('Result', {kind: 'enum', name: 'Result', generics: [{name: 'T', bounds: []}, {name: 'E', bounds: []}],
       variants: [{name: 'Ok', fields: ['T']}, {name: 'Err', fields: ['E']}], attributes: []});
     this.addItems(ast.items, '');
-    this.typeResolver = new TypeResolver(this); if (validate) this.typeResolver.validate();
+    this.typeResolver = new TypeResolver(this);
+    this.associatedTypes = new AssociatedTypeResolver(this);
+    if (validate) this.typeResolver.validate();
     // Tuple/unit constructors occupy the value namespace; record types do not.
     for (const shape of this.structs.values()) if (shape.form === 'tuple' || shape.form === 'unit') {
       if (this.functions.has(shape.name) || this.constants.has(shape.name))
@@ -37,7 +40,10 @@ export class SymbolIndex {
   addItems(items, module) {
     for (const original of items) {
       const item = {...original, module: original.module ?? module};
-      if (item.kind === 'impl' || item.kind === 'trait') item.methods = item.methods.map(AssociatedConstant.descriptor);
+      if (item.kind === 'impl' || item.kind === 'trait') {
+        item.associatedTypes = item.methods.filter(member => member.kind === 'typeAlias').map(member => ({...member, module: item.module}));
+        item.methods = item.methods.filter(member => member.kind !== 'typeAlias').map(AssociatedConstant.descriptor);
+      }
       const prefix = item.module ? item.module + '::' : '';
       this.moduleRoots.set(item.module, item.crateRoot ?? this.moduleRoots.get(item.module) ?? '');
       if (item.kind === 'mod') {
@@ -53,7 +59,7 @@ export class SymbolIndex {
       if (item.kind === 'impl') {
         const implIndex = this.impls.length; this.impls.push(item);
         for (const method of item.methods) {
-          if (method.kind !== 'fn') throw new Diagnostic('F_IMPL_ITEM', 'Associated types are not yet supported', method.span);
+          if (method.kind !== 'fn') throw new Diagnostic('F_IMPL_ITEM', 'Unsupported associated item kind', method.span);
           const inherited = item.generics ?? [], names = new Set();
           for (const parameter of [...inherited, ...method.generics]) {
             if (names.has(parameter.name)) throw new Diagnostic('E0403', `Duplicate generic parameter ${parameter.name}`, method.span);
@@ -74,6 +80,10 @@ export class SymbolIndex {
       if (!target) throw new Diagnostic('F0200', `Unindexed declaration ${item.kind}`, item.span);
       if (['struct', 'enum', 'typeAlias', 'trait'].includes(item.kind) && [this.structs, this.enums, this.aliases, this.traits].some(map => map.has(item.name))) throw new Diagnostic('E0428', `Duplicate type declaration ${item.name}`, item.span);
       if (target.has(item.name)) throw new Diagnostic('E0428', `Duplicate declaration ${item.name}`, item.span);
+      if (item.kind === 'trait') {
+        item.methods = item.methods.map(method => ({...method, module: item.module, traitContext: item.name}));
+        item.associatedTypes = item.associatedTypes.map(member => ({...member, traitContext: item.name}));
+      }
       target.set(item.name, item);
       this.symbols.push({id: item.id, name: item.name, kind: item.associatedConstant ? 'const' : item.kind, span: item.span, loc: item.loc, line: item.span?.line});
     }
@@ -181,6 +191,14 @@ export class SymbolIndex {
   fieldVisible(shape, field, module = '', node = null) {
     if (field.visibility === 'private' && module !== shape.module && !module.startsWith((shape.module ? shape.module + '::' : '')))
       throw new Diagnostic('E0616', `Field '${shape.name}.${field.name}' is private`, node?.span ?? field.span);
+  }
+  /** Resolve at the declaration site before substituting canonical caller types.
+   * This preserves generic associated-item origins and private caller identities. */
+  instantiatedType(type, declaration, mapping, node = declaration, callerParameters = new Set()) {
+    const parameters = new Set((declaration.generics ?? []).map(g => g.name));
+    const context = {...node, typeContext: declaration};
+    const formal = this.type(type, declaration.module, declaration.owner ?? declaration.name, parameters, context);
+    return this.typeResolver.substitute(formal, mapping, context, callerParameters);
   }
   type(type, module, self = null, parameters = new Set(), node = null) {
     return this.typeResolver.resolve(type, module, self, parameters, [], node);

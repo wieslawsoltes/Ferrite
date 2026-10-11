@@ -19,13 +19,14 @@ export class ImplObligations {
     }
   }
   normalize(type,node=this.declaration) {
-    return this.index.type(type,this.declaration.module,this.entry.target,this.parameters,node);
+    return this.index.type(type,this.declaration.module,this.entry.target,this.parameters,{...node,typeContext:this.declaration});
   }
   trait(raw,module=this.declaration.module,node=this.declaration) {
     return this.a.implementations.traits.hierarchy.canonical(raw,module,node,this.parameters,this.entry.target);
   }
   symbolic(type) {
     if(this.parameters.has(type))return true;
+    const projection=T.projection(type);if(projection)return this.symbolic(projection.self)||this.symbolic(projection.trait);
     if(T.reference(type))return this.symbolic(T.target(type));
     const fn=T.function(type);if(fn)return [...fn.params,fn.result].some(t=>this.symbolic(t));
     const tuple=T.tuple(type);if(tuple)return tuple.some(t=>this.symbolic(t));
@@ -50,6 +51,13 @@ export class ImplObligations {
     // Recursive builtin proofs use canonical identities, never a same-named user trait.
     const short=graph.builtinName(bound);
     if(this.assumptions.get(type)?.has(bound))return true;
+    const projection=T.projection(type);
+    if(projection) {
+      const normalized=this.index.associatedTypes.normalize(type,this.parameters,{typeContext:this.declaration});
+      if(normalized!==type)return this.prove(normalized,bound,depth+1);
+      return this.index.associatedTypes.declaredBounds(projection,this.declaration).some(required=>
+        graph.implies(graph.canonical(required,this.declaration.module,this.declaration,this.parameters,this.entry.target),bound));
+    }
     // Ordinary parameters are implicitly Sized, unlike Self in a trait.
     if(this.index.traits.has(T.application(bound).name))return (this.symbolic(type)||this.symbolic(bound))?this.a.implementations.traits.prove(type,bound,this,depth):this.a.hasBound(type,bound);
     if(bound==='Sized'||bound==='core::marker::Sized'||bound==='std::marker::Sized') {
@@ -79,7 +87,7 @@ export class ImplObligations {
       if(!args.every(t=>this.prove(t,identity,depth+1)))return false;
       const map=new Map(shape.generics.map((g,i)=>[g.name,args[i]]));
       const fields=shape.fields?.map(field=>field.type)??shape.variants.flatMap(v=>v.fields);
-      return fields.every(field=>this.prove(this.index.type(T.substitute(field,map),shape.module,type,this.parameters,shape),identity,depth+1));
+      return fields.every(field=>this.prove(this.index.instantiatedType(field,shape,map,shape,this.parameters),identity,depth+1));
     }
     return false;
   }
@@ -94,6 +102,14 @@ export class ImplObligations {
     if(this.checked.has(type))return;
     this.checked.add(type);
     if(++this.visits>65536)throw new Diagnostic('F_IMPL_BOUND_LIMIT','Implementation obligation budget exceeded',node.span);
+    const projection=T.projection(type);
+    if(projection) {
+      this.index.associatedTypes.validateProjection(projection,this.parameters,node);
+      this.validateCanonical(projection.self,node);
+      for(const argument of T.application(projection.trait).args)this.validateCanonical(argument,node);
+      if(!this.prove(projection.self,projection.trait))throw new Diagnostic('E0277',`Missing projection bound: ${projection.self}: ${projection.trait}`,node.span??this.declaration.span);
+      return;
+    }
     if(T.reference(type))return this.validateCanonical(T.target(type),node);
     const fn=T.function(type);if(fn){[...fn.params,fn.result].forEach(t=>this.validateCanonical(t,node));return;}
     const tuple=T.tuple(type);if(tuple){
@@ -108,11 +124,11 @@ export class ImplObligations {
     if(!shape)return;
     const substitution=new Map(shape.generics.map((g,i)=>[g.name,args[i]]));
     const required=[];
-    for(const generic of shape.generics)for(const bound of generic.bounds)required.push([substitution.get(generic.name),bound]);
-    for(const predicate of shape.predicates??[])for(const bound of predicate.bounds)required.push([T.substitute(predicate.type,substitution),bound]);
+    for(const generic of shape.generics)for(const bound of generic.bounds)required.push([generic.name,bound]);
+    for(const predicate of shape.predicates??[])for(const bound of predicate.bounds)required.push([predicate.type,bound]);
     for(const [subject,rawBound] of required) {
-      const actual=this.index.type(subject,shape.module,type,this.parameters,node);
-      const bound=this.trait(T.substitute(rawBound,substitution),shape.module,node);
+      const actual=this.index.instantiatedType(subject,shape,substitution,node,this.parameters);
+      const bound=this.trait(this.index.instantiatedType(rawBound,shape,substitution,node,this.parameters),shape.module,node);
       if(!this.prove(actual,bound))throw new Diagnostic('E0277',`Missing declaration bound: ${actual}: ${bound}`,node.span??this.declaration.span,
         [{message:'Required by this nominal declaration',span:shape.span}]);
     }

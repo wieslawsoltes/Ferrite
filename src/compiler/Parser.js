@@ -56,7 +56,8 @@ export class Parser {
       const params=this.list(')',()=>this.type());
       const result=this.c.match('->')?this.type():'()';return `${name}(${params.join(',')})->${result}`;
     }
-    if(this.c.match('<'))return `${name}<${this.list('>',()=>this.type()).join(',')}>`;
+    if(this.c.is('<<'))this.c.split('<');
+    if(this.c.match('<'))return `${name}<${this.list('>',()=>this.typeArgument()).join(',')}>`;
     return name;
   }
   path() {
@@ -72,6 +73,12 @@ export class Parser {
     if (!/^(0|[1-9][0-9]*)$/.test(token.value))
       throw new Diagnostic('E0609', 'Tuple field names must be unsuffixed decimal indices', token.span);
     return this.c.take().value;
+  }
+  typeArgument() {
+    const type = this.type();
+    if (this.c.is('=') || this.c.is(':')) throw new Diagnostic('F_ASSOC_BINDING',
+      'Associated-type equality and bound arguments require projection-constraint solving', this.c.peek().span);
+    return type;
   }
   type() {
     if (++this.typeDepth > 128) throw new Diagnostic('F_TYPE_DEPTH', 'Type nesting limit exceeded', this.c.peek().span);
@@ -111,8 +118,21 @@ export class Parser {
       const length = tokens.length === 1 ? source : `{ ${source} }`;
       this.c.eat(']'); return `[${type};${length}]`;
     }
-    let type = this.path();
-    if (this.c.match('<')) type += '<' + this.list('>', () => this.type()).join(',') + '>';
+    let type;
+    if (this.c.is('<<')) this.c.split('<');
+    if (this.c.match('<')) {
+      const self = this.type();
+      const trait = this.c.match('as') ? this.type() : null;
+      this.c.eat('>'); this.c.eat('::');
+      type = `<${self}${trait ? ` as ${trait}` : ''}>::${this.c.identifier()}`;
+    } else type = this.c.identifier();
+    for (;;) {
+      if (this.c.is('<<')) this.c.split('<');
+      if (this.c.is('::') && this.c.peek(1).value === '<') this.c.take();
+      if (this.c.match('<')) type += '<' + this.list('>', () => this.typeArgument()).join(',') + '>';
+      if (!this.c.match('::')) break;
+      type += '::' + this.c.identifier();
+    }
     return type;
   }
   item(owner = null, trait = null, traitDeclaration = false) {
@@ -121,9 +141,22 @@ export class Parser {
     if (this.c.is('const') && this.c.peek(1).value === 'fn') { this.c.take(); this.c.take(); return [this.fn(start, {owner, trait, attributes, visibility, isConst: true})]; }
     if (this.c.match('fn')) return [this.fn(start, {owner, trait, attributes, visibility})];
     if (this.c.match('type')) {
-      const name = this.c.identifier(), generics = this.generics(), predicates = this.whereClause();
-      this.c.eat('='); const target = this.type(); this.c.eat(';');
-      return [this.c.node('typeAlias', start, {name, generics, target, predicates, attributes, visibility})];
+      const name = this.c.identifier(), generics = this.generics(), bounds = [];
+      let relaxedSized = false;
+      if (this.c.match(':')) {
+        do {
+          if (this.c.match('?')) {
+            if (this.c.identifier() !== 'Sized') throw new Diagnostic('F_ASSOC_BOUND', 'Only ?Sized is supported as a relaxed associated-type bound', start.span);
+            relaxedSized = true;
+          } else bounds.push(this.bound());
+        } while (this.c.match('+'));
+      }
+      const predicates = this.whereClause();
+      const target = this.c.match('=') ? this.type() : null;
+      this.c.eat(';');
+      if (!owner && !target) throw new Diagnostic('F_TYPE_ALIAS', 'A type alias requires a definition', start.span);
+      if (!owner && (bounds.length || relaxedSized)) throw new Diagnostic('F_TYPE_ALIAS', 'Bounds belong on type-alias parameters, not on the alias', start.span);
+      return [this.c.node('typeAlias', start, {name, localName: name, generics, target, predicates, bounds, relaxedSized, owner, trait, attributes, visibility})];
     }
     if (this.c.match('struct')) {
       const name = this.c.identifier(), generics = this.generics();
@@ -348,7 +381,7 @@ export class Parser {
       this.c.eat('>'); this.c.eat('::'); name = '__qualified::' + this.path();
     } else name = this.path();
     if (this.c.match('::')) {
-      this.c.eat('<'); ownerTypeArguments = this.list('>', () => this.type());
+      this.c.eat('<'); ownerTypeArguments = this.list('>', () => this.typeArgument());
       if (this.c.match('::')) name += '::' + this.path();
     }
     const pathDetails = {qualifiedSelf, qualifiedTrait, ownerTypeArguments};
@@ -390,7 +423,7 @@ export class Parser {
         if (this.c.match('::')) {
           if (this.c.match('<')) {
             if (left.typeArguments) throw new Diagnostic('E0107', 'Repeated generic arguments on the same path segment', left.span);
-            left.typeArguments = this.list('>', () => this.type());
+            left.typeArguments = this.list('>', () => this.typeArgument());
           } else {
             if (left.kind !== 'variable') throw new Diagnostic('E0223', 'An associated path requires a type or module', left.span);
             if (left.typeArguments) {

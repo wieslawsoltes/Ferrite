@@ -64,7 +64,7 @@ export class PatternCoverage {
       const substitution = new Map(enumeration.generics.map((g, i) => [g.name, app.args[i]]));
       return enumeration.variants.map(variant => ({kind: 'variant', key: `${enumeration.name}::${variant.name}`,
         fields: variant.form === 'record' ? variant.members.map(field => field.name) : null,
-        types: variant.fields.map(t => this.index.type(T.substitute(t, substitution), enumeration.module))}));
+        types: variant.fields.map(t => this.index.instantiatedType(t, enumeration, substitution, this.node))}));
     }
     const array = T.array(type);
     if (array) {
@@ -77,7 +77,7 @@ export class PatternCoverage {
     if (structure) {
       const substitution = new Map(structure.generics.map((g, i) => [g.name, app.args[i]]));
       return [{kind: 'struct', key: structure.name, fields: structure.fields.map(f => f.name),
-        types: structure.fields.map(f => this.index.type(T.substitute(f.type, substitution), structure.module))}];
+        types: structure.fields.map(f => this.index.instantiatedType(f.type, structure, substitution, this.node))}];
     }
     const keys = new Set(patterns.filter(p => p?.kind === 'literal').map(p => p.value));
     return [...keys].map(key => ({kind: 'literal', key, types: []})).concat({kind: 'other', key: type, types: []});

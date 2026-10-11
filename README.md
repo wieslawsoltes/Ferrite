@@ -21,7 +21,7 @@ Find in Files has source-linked results, include/exclude masks, explicit replace
 
 Every compiler representation uses original-file UTF-16 spans: selecting a token, AST/HIR node, symbol, obligation, ownership event, generic instance, MIR instruction, call site, diagnostic or mapped generated-JavaScript line navigates to the source. Editor selections highlight matching visible items. Edits invalidate old spans instead of navigating into obsolete source.
 
-Language continuation: [associated constants, checked evaluation and current limits](docs/associated-constants.md).
+Language continuation: [associated constants and checked evaluation](docs/associated-constants.md), and [associated types, generic projections, inference and current limits](docs/associated-types.md).
 
 ## Rust UI Studio and embeddable compiler
 
@@ -91,11 +91,11 @@ The register-MIR VM powers actual stepping, call frames, locals, breakpoints, ru
 
 ### Supported subset
 
-Functions, lexical locals/shadowing, numeric inference for supported cases, signed/unsigned integers through 128 bits, floats, arrays, tuples, record/tuple/unit structs, tuple/unit/named-field enums, Option/Result, generic functions, transparent type aliases and function `where` clauses, concrete trait implementations, closure capture and Fn/FnMut/FnOnce calls, references, selected String/Vec methods, control flow, ranges, nested enum/tuple/struct patterns, or-patterns, integer/character ranges, coverage witnesses, guards, `let-else`, `if let`, `while let`, `?`, modules/use paths, constants and selected built-in macros. Browser tests recognize `#[test]`, `#[ignore]` and `#[should_panic]`.
+Functions, lexical locals/shadowing, numeric inference for supported cases, signed/unsigned integers through 128 bits, floats, arrays, tuples, record/tuple/unit structs, tuple/unit/named-field enums, Option/Result, generic functions, transparent type aliases and function `where` clauses, generic inherent/user-trait implementations, associated constants and non-generic associated types, closure capture and Fn/FnMut/FnOnce calls, references, selected String/Vec methods, control flow, ranges, nested enum/tuple/struct patterns, or-patterns, integer/character ranges, coverage witnesses, guards, `let-else`, `if let`, `while let`, `?`, modules/use paths, constants and selected built-in macros. Browser tests recognize `#[test]`, `#[ignore]` and `#[should_panic]`.
 
 Tuple/unit constructors, numeric fields, positional/rest patterns and irrefutable constructor assignments share the existing aggregate/MIR backends. Declaration-local member indexes avoid repeated wide-field scans. See [nominal constructors](docs/nominal-constructors.md) for examples, visibility/type-namespace rules, validation and explicit limits.
 
-Ownership checking is a **conservative whole-local move/loan model**, not rustc's full non-lexical lifetime analysis. General async/generators, procedural/declarative user macros, higher-ranked closure/lifetime bounds, full associated-type/trait coherence, complete lifetime and const-generic semantics, platform ABIs and LLVM/native object generation are not implemented by the JavaScript frontend. Unsupported features produce diagnostics; the native example explicitly uses installed Cargo.
+Ownership checking is a **conservative whole-local move/loan model**, not rustc's full non-lexical lifetime analysis. General async/generators, procedural/declarative user macros, higher-ranked closure/lifetime bounds, GATs, associated equality constraints and full trait/projection solving, complete lifetime and const-generic semantics, platform ABIs and LLVM/native object generation are not implemented by the JavaScript frontend. Unsupported syntax is diagnosed; generic bodies retain the documented monomorphized-checker limitations. The native example explicitly uses installed Cargo.
 
 The sample catalog includes a multi-file geometry/trait application, Option pattern loops, a Result pipeline, a local Cargo workspace with a path dependency, test-harness behavior, u128 arithmetic, capturing closures, Cargo feature selection, pattern coverage, aliases/where constraints and an ownership error. A native-only sample demonstrates async syntax and `macro_rules!`; those features are compiled by the installed toolchain, not fabricated in the browser.
 

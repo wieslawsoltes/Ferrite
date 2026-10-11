@@ -5,6 +5,20 @@ import {MirVirtualMachine} from '../src/runtime/MirVirtualMachine.js';
 import {compileRust, compileUI, UISession, createUIRuntime} from '../src/sdk/Ferrite.js';
 import {createDocument, elements} from './fixtures/ui-dom.js';
 
+// Continue is cooperatively scheduled (512 instructions / 8 ms per slice).
+// Wait for its completion event rather than relying on a particular CPU load.
+function continueEvent(session) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => finish(Error('UI debugger did not complete')), 15000);
+    const unsubscribe = session.subscribe(event => {
+      if (event.type === 'debug-complete') finish();
+      else if (event.type === 'debug-error') finish(Error(event.error?.message ?? event.reason));
+    });
+    function finish(error) { clearTimeout(timeout); unsubscribe(); error ? reject(error) : resolve(); }
+    try { session.debug('continue'); } catch (error) { finish(error); }
+  });
+}
+
 test('identity snapshots restore cycles, aliases, deleted fields and sparse array lengths', () => {
   const cell = {value: [1n, , 3n]}, reference = {__ref: true, cell, path: []};
   const root = {cell, aliases: [reference, reference]}; root.self = root;
@@ -46,7 +60,7 @@ test('MIR panic is reversible to the exact pre-instruction state', () => {
 });
 
 for (const backend of ['mir', 'wasm', 'javascript']) {
-  test(`${backend}: reverse UI instructions and owned staged state without committing the DOM`, () => {
+  test(`${backend}: reverse UI instructions and owned staged state without committing the DOM`, async t => {
     const source = `#[derive(Clone)] struct Model { total: i64, values: Vec<i64> }
 fn app() -> ui::Node {
   let state = ui::state(Model { total: 1, values: vec![2_i64] });
@@ -54,6 +68,7 @@ fn app() -> ui::Node {
 }`;
     const runtime = createUIRuntime(), container = createDocument().createElement('main');
     const session = new UISession(compileUI(source), {backend, runtime}).mount(container);
+    t.after(() => session.dispose());
     session.armDebugger(); elements(container, 'button')[0].dispatchEvent(new Event('click'));
     const initial = session.inspectDebugger(); let limit = 500;
     while (!session.debugger.vm.done && --limit) session.debug('step');
@@ -62,20 +77,39 @@ fn app() -> ui::Node {
     session.debug('restart'); assert.equal(session.inspectDebugger().state.steps, initial.state.steps);
     assert.equal(session.inspectDebugger().stagedStates[0].value.total, '1');
     assert.throws(() => session.setState(session.inspect().states[0].handle, {}), /paused event/);
-    session.debug('continue'); assert.equal(elements(container, 'button')[0].textContent, '2');
+    await continueEvent(session); assert.equal(elements(container, 'button')[0].textContent, '2');
     assert.equal(session.debugger.vm, null); session.dispose();
   });
 }
 
-test('external event emission establishes a reverse boundary and is never undone or replayed implicitly', () => {
+test('external event emission establishes a reverse boundary and is never undone or replayed implicitly', async t => {
   const runtime = createUIRuntime(), container = createDocument().createElement('main'), events = [];
   const artifact = compileUI('fn app() -> ui::Node { let n = ui::use_state(0); view! { <button on:click={move || { ui::set(n, 1); ui::emit("saved", ui::get(n)); ui::set(n, 2); }}>Run</button> } }');
   const session = new UISession(artifact, {runtime, onEvent: (...args) => events.push(args)}).mount(container);
+  t.after(() => session.dispose());
   session.armDebugger(); elements(container, 'button')[0].dispatchEvent(new Event('click'));
   let limit = 200; while (!events.length && --limit) session.debug('step');
   assert.ok(limit); assert.deepEqual(events, [['saved', '1']]);
   assert.equal(session.inspect().states[0].value, '1');
   assert.throws(() => session.debug('back'), /Host operation ui::emit/);
-  session.debug('continue'); assert.equal(events.length, 1); assert.equal(session.inspect().states[0].value, '2');
+  await continueEvent(session); assert.equal(events.length, 1); assert.equal(session.inspect().states[0].value, '2');
   session.dispose();
+});
+
+test('Continue yields between instruction slices and commits staged state exactly once', async t => {
+  const runtime = createUIRuntime(), container = createDocument().createElement('main');
+  const artifact = compileUI('fn app()->ui::Node{let n=ui::use_state(0);view!{<button on:click={move || { let mut i=0_i64;while i<60{i+=1;}ui::set(n, i); }}>{ui::get(n)}</button>}}');
+  const session = new UISession(artifact, {runtime}).mount(container);
+  t.after(() => session.dispose());
+  let completions = 0; session.subscribe(event => { if (event.type === 'debug-complete') completions++; });
+  session.armDebugger(); elements(container, 'button')[0].dispatchEvent(new Event('click'));
+  const completion = continueEvent(session);
+  try {
+    assert.equal(session.inspectDebugger().status, 'running');
+    assert.equal(elements(container, 'button')[0].textContent, '0');
+    assert.equal(session.inspect().states[0].value, '0n');
+  } finally { await completion; }
+  assert.equal(elements(container, 'button')[0].textContent, '60');
+  assert.equal(session.inspect().states[0].value, '60n');
+  assert.equal(completions, 1); assert.equal(session.debugger.vm, null);
 });

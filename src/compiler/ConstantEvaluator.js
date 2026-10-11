@@ -251,7 +251,7 @@ export class ConstantEvaluator {
     const shape = structure ?? enumeration;
     if (!shape) throw new Diagnostic('F_CONST_VALUE', `Cannot materialize constant type ${type}`, origin?.span);
     const substitution = new Map(shape.generics.map((g, i) => [g.name, app.args[i]]));
-    const fieldType = t => this.index.type(T.substitute(t, substitution), shape.module);
+    const fieldType = t => this.index.instantiatedType(t, shape, substitution);
     if (structure) return {...node, kind: 'structLiteral', name: shape.name,
       fields: shape.fields.map(field => ({name: field.name, value: child(value[field.name], fieldType(field.type), field.name)}))};
     const prefix = shape.name + '::';

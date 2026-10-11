@@ -46,19 +46,35 @@ export class TypeSystem {
     const parts = this.split(type.slice(1, -1), ';');
     return parts.length === 2 ? {element: parts[0], length: parts[1]} : null;
   }
+  /** A qualified projection is an opaque type constructor until normalized.
+   * In particular it is never a nominal with an empty name. */
+  static projection(type) {
+    if (typeof type !== 'string' || !type.startsWith('<')) return null;
+    const parts = this.split(type, ':').filter(Boolean);
+    const head = parts.shift();
+    if (!head.endsWith('>') || !parts.length) return null;
+    const words = this.split(head.slice(1, -1), ' '), at = words.indexOf('as');
+    const self = (at < 0 ? words : words.slice(0, at)).join(' ');
+    const trait = at < 0 ? null : words.slice(at + 1).join(' ');
+    const member = this.application(parts.shift());
+    return {self, trait, member: member.name, args: member.args, tail: parts};
+  }
+  static projectionName(self, trait, member) { return `<${self} as ${trait}>::${member}`; }
   static application(type) {
+    if (type.startsWith('<')) return {name: type, args: []};
     const i = type.indexOf('<');
     return i < 0 ? {name: type, args: []} : {name: type.slice(0, i), args: this.split(type.slice(i + 1, -1))};
   }
-  static substitute(type, map) {
+  static substitute(type, map, binderPrefixes = false) {
     if (!map.size || ![...map.keys()].some(key => type.includes(key))) return type;
     const tokens = Lexer.tokenize(type), parts = []; let offset = 0;
     for (let i = 0; i < tokens.length; i++) {
       const token = tokens[i];
       if (token.kind !== 'identifier' && token.value !== 'Self') continue;
-      let name = token.value, end = token.span.end;
+      const root = token.value;
+      let name = root, end = token.span.end;
       while (tokens[i + 1]?.value === '::' && tokens[i + 2]?.kind === 'identifier') { i += 2; name += '::' + tokens[i].value; end = tokens[i].span.end; }
-      parts.push(type.slice(offset, token.span.start), map.get(name) ?? type.slice(token.span.start, end)); offset = end;
+      parts.push(type.slice(offset, token.span.start), map.get(name) ?? (binderPrefixes && map.has(root) ? map.get(root) + name.slice(root.length) : type.slice(token.span.start, end))); offset = end;
     }
     parts.push(type.slice(offset)); return parts.join('');
   }

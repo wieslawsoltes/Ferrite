@@ -38,7 +38,7 @@ literals are not implicitly converted to floats. General bidirectional numeric/t
 inference, exact Rust float formatting and NaN payload-bit preservation are not claimed.
 
 Full user macros, async/generators, lifetime/NLL analysis, const generics, advanced
-trait/associated-type solving, reference/slice patterns, native ABI/code generation
+trait/GAT/projection-equation solving, reference/slice patterns, native ABI/code generation
 and the complete standard library remain outside this browser-compiler scope.
 
 The follow-on [destructuring assignment](destructuring-assignment.md) scope adds typed tuple/array/record assignees, staged RHS projections and sequential destination stores. Its shared fixtures also compare pre-panic output with native rustc. Reference-carrier transfers and projection-sensitive partial moves remain explicit boundaries.
@@ -70,3 +70,12 @@ arguments. See [Receiver reborrows](receiver-reborrows.md) for supported origins
 evaluation ordering and the conservative reference-result boundary.
 
 Associated constants have [dedicated resolution, CTFE and isolation coverage](associated-constants.md), shared unchanged with the installed-rustc differential corpus.
+
+[Associated types](associated-types.md) add non-generic trait type declarations,
+checked definitions, bounded projection normalization, deferred non-injective
+inference and symbolic method-origin tracking. Their shared corpus contains 71
+execution and 40 compile-fail fixtures; additional cache, resource-limit and
+unsupported-feature tests remain distinct from the native corpus. This
+continuation's local environment did not provide rustc, so browser-backend passes
+are not native validation. The unchanged native differential CI gate is required
+before merge.

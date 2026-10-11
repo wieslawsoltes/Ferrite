@@ -27,6 +27,42 @@ export class ImplementationResolver {
       bucket.get(fn.localName).push(entry);
     }
     this.traits=new TraitImplementationResolver(this);this.traits.prepare();
+    this.index.associatedTypes.attach(this);
+  }
+  /** Bootstrap projections as wildcard candidates, then resolve their concrete
+   * heads on demand. This permits forward references without source-order
+   * dependence; generic projection equations are deliberately not inverted. */
+  normalizeProjectionHeads() {
+    const resolver = this.index.associatedTypes;
+    const pending = this.entries.filter(entry => resolver.containsProjection(entry.target ?? '') || resolver.containsProjection(entry.traitRef ?? ''));
+    if (!pending.length) return;
+    for (const entry of pending) { entry.pattern = null; entry.root = '*'; }
+    this.reindexHeads();
+    for (const entry of pending) {
+      this.prepare(entry);
+      if (entry.trait) entry.traitRef = this.traits.hierarchy.canonical(entry.impl.trait, entry.impl.module, entry.impl, entry.parameters, entry.target);
+      if (resolver.containsProjection(entry.target) || resolver.containsProjection(entry.traitRef ?? ''))
+        throw new Diagnostic('F_ASSOC_IMPL_HEAD', 'A symbolic projection in an implementation head requires projection-equality solving', entry.impl.span);
+      entry.root = this.head(entry.target);
+    }
+    this.reindexHeads();
+  }
+  reindexHeads() {
+    this.byOwner.clear(); this.traits.byRoot.clear();
+    for (const entry of this.entries) {
+      if (!this.byOwner.has(entry.root)) this.byOwner.set(entry.root, new Map());
+      const methods = this.byOwner.get(entry.root);
+      for (const name of entry.methods.keys()) {
+        if (!methods.has(name)) methods.set(name, []);
+        methods.get(name).push(entry);
+      }
+      if (entry.trait) {
+        if (!this.traits.byRoot.has(entry.trait.name)) this.traits.byRoot.set(entry.trait.name, new Map());
+        const roots = this.traits.byRoot.get(entry.trait.name);
+        if (!roots.has(entry.root)) roots.set(entry.root, []);
+        roots.get(entry.root).push(entry);
+      }
+    }
   }
   root(type, module, parameters, seen = new Set()) {
     const app = T.application(type);
@@ -55,6 +91,7 @@ export class ImplementationResolver {
     } finally { entry.resolving = false; }
   }
   validate() {
+    this.index.associatedTypes.validateDeclarations();
     this.traits.validateDeclarations();
     for (const entry of this.entries) {
       this.prepare(entry);
@@ -70,7 +107,7 @@ export class ImplementationResolver {
       while (queue.length) { const term = queue.pop(); if (term.variable) used.add(term.variable); else queue.push(...term.args); }
       for (const name of parameters) if (!used.has(`impl${entry.id}:` + name))
         throw new Diagnostic('E0207', `Implementation parameter ${name} is not constrained by its self type`, impl.span);
-      if(impl.trait)this.traits.validate(entry);
+      if(impl.trait){this.index.associatedTypes.validateImplementation(entry);this.traits.validate(entry);}
       new ImplObligations(this.a,entry).validate(target,impl);
       for (const fn of entry.methods.values()) {
         const obligations = new ImplObligations(this.a,entry,fn);
@@ -108,7 +145,8 @@ export class ImplementationResolver {
   }
   applicable(entry, mapping, prove=(type,bound)=>this.a.hasBound(type,bound)) {
     if ([...mapping.values()].some(type => type === null)) return true;
-    const normalize = type => this.index.type(T.substitute(type, mapping), entry.impl.module, T.substitute(entry.target, mapping));
+    const normalize = type => this.index.typeResolver.substitute(
+      this.index.type(type, entry.impl.module, entry.target, entry.parameters, entry.impl), mapping, entry.impl);
     for (const parameter of entry.impl.generics ?? [])
       if (!prove(mapping.get(parameter.name), 'core::marker::Sized')) return false;
     for (const parameter of entry.impl.generics ?? []) for (const bound of parameter.bounds)

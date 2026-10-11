@@ -5,13 +5,19 @@ import {TypeSystem as T} from './TypeSystem.js';
  * The cache belongs to one declaration index; no type result crosses revisions. */
 export class TypeResolver {
   constructor(index, {limit = 4096, maxDepth = 64} = {}) {
+    this.contexts = new WeakMap(); this.contextSequence = 0;
     this.index = index; this.limit = limit; this.maxDepth = maxDepth; this.cache = new Map();
     this.expansions = new Map(); this.hits = 0; this.misses = 0; this.characters = 0; this.maxCharacters = 4000000;
   }
   resolve(type, module = '', self = null, parameters = new Set(), stack = [], node = null) {
     if (typeof type !== 'string') throw new Diagnostic('F_TYPE', 'A type must have a structural name', node?.span);
     const declaration = node?.typeContext ?? node;
-    const key = JSON.stringify([module, self, [...parameters].sort(), type, declaration?.defaultTrait, declaration?.implementedTrait]);
+    let scope = 0;
+    if (type.includes('::') && declaration && this.index.associatedTypes?.enabled) {
+      if (!this.contexts.has(declaration)) this.contexts.set(declaration, ++this.contextSequence);
+      scope = this.contexts.get(declaration);
+    }
+    const key = JSON.stringify([module, self, [...parameters].sort(), type, declaration?.defaultTrait, declaration?.implementedTrait, scope]);
     if (this.cache.has(key)) { this.hits++; return this.cache.get(key); }
     if (stack.length > this.maxDepth) throw new Diagnostic('E0391', 'Type alias expansion exceeded the recursion budget', node?.span);
     this.misses++;
@@ -26,6 +32,8 @@ export class TypeResolver {
       const prefix=/^(Fn|FnMut|FnOnce)(?=\()/.exec(type), callable=prefix?T.function('fn'+type.slice(prefix[1].length)):null;
       if (callable) result = `${prefix[1]}(${callable.params.map(next).join(',')})->${next(callable.result)}`;
       else {
+        const projected = this.index.associatedTypes?.resolve(type, module, self, parameters, node);
+        if (projected !== null && projected !== undefined) return this.remember(key, projected);
         const {name, args} = T.application(type), arguments_ = args.map(next);
         const alias = parameters.has(name) ? null : this.find(this.index.aliases, name, module, node);
         if (alias) {
@@ -33,7 +41,10 @@ export class TypeResolver {
           if (stack.includes(alias.name)) throw new Diagnostic('E0391', `Recursive type alias: ${[...stack, alias.name].join(' → ')}`, node?.span ?? alias.span);
           const declared = new Set(alias.generics.map(g => g.name));
           const target = this.resolve(alias.target, alias.module, self, declared, [...stack, alias.name], alias);
-          result = this.substitute(target, new Map(alias.generics.map((g, i) => [g.name, arguments_[i]])), alias);
+          result = this.substitute(target, new Map(alias.generics.map((g, i) => [g.name, arguments_[i]])), alias, parameters);
+          // Alias names resolve at their declaration; projection selection keeps
+          // the caller's current impl evidence without re-resolving private names.
+          result = this.index.associatedTypes?.normalize(result, parameters, node) ?? result;
           const usage = {alias: alias.name, arguments: arguments_, expanded: result, span: alias.span};
           if (this.expansions.size < 512 && result.length < 8192) this.expansions.set(JSON.stringify([alias.name, arguments_]), usage);
         } else {
@@ -44,6 +55,9 @@ export class TypeResolver {
       }
     }
     if (result.length > 1000000) throw new Diagnostic('F_TYPE_SIZE', 'Expanded type exceeds the size budget', node?.span);
+    return this.remember(key, result);
+  }
+  remember(key, result) {
     const cost = key.length + result.length;
     if (cost <= this.maxCharacters) {
       while (this.cache.size && (this.cache.size >= this.limit || this.characters + cost > this.maxCharacters)) {
@@ -53,10 +67,12 @@ export class TypeResolver {
     }
     return result;
   }
-  substitute(type, arguments_, node) {
+  substitute(type, arguments_, node, parameters = new Set()) {
     const result = T.substitute(type, arguments_);
-    if (result.length > 1000000) throw new Diagnostic('F_TYPE_SIZE', 'Expanded alias exceeds the size budget', node.span);
-    return result;
+    if (result.length > 1000000) throw new Diagnostic('F_TYPE_SIZE', 'Expanded alias exceeds the size budget', node?.span);
+    const context = node?.typeContext ?? node;
+    const remaining = new Set([...parameters, ...[...arguments_].filter(([, value]) => value == null).map(([name]) => name), ...(context?.generics ?? []).filter(g => !arguments_.has(g.name)).map(g => g.name)]);
+    return this.index.associatedTypes?.normalize(result, remaining, node) ?? result;
   }
   find(map, name, module, node) {
     for (const candidate of this.index.candidates(name, module)) if (map.has(candidate))
@@ -72,6 +88,11 @@ export class TypeResolver {
     const array = T.array(type); if (array) return next(array.element);
     const prefix=/^(Fn|FnMut|FnOnce)(?=\()/.exec(type), callable=prefix?T.function('fn'+type.slice(prefix[1].length)):null;
     if (callable) { callable.params.forEach(next); next(callable.result); return; }
+    const projection = T.projection(type);
+    if (projection) {
+      this.index.associatedTypes.validateProjection(projection, parameters, node);
+      return;
+    }
     const {name, args} = T.application(type);
     if (!parameters.has(name) && !T.numeric(name) && !['bool', 'char', 'str', 'String', 'Vec', '!', '_'].includes(name) && !this.index.structs.has(name) && !this.index.enums.has(name))
       throw new Diagnostic('E0412', `Unknown type '${name}' in declaration ${node.name}`, node.span);
@@ -98,6 +119,8 @@ export class TypeResolver {
       const array = T.array(type); if (array) return used(array.element, parameters, found);
       const prefix=/^(Fn|FnMut|FnOnce)(?=\()/.exec(type), callable=prefix?T.function('fn'+type.slice(prefix[1].length)):null;
       if (callable) { [...callable.params, callable.result].forEach(t => used(t, parameters, found)); return; }
+      const projection = T.projection(type);
+      if (projection) { used(projection.self, parameters, found); T.application(projection.trait).args.forEach(t => used(t, parameters, found)); return; }
       const app = T.application(type);
       if (parameters.has(app.name)) found.add(app.name);
       app.args.forEach(t => used(t, parameters, found));
@@ -124,7 +147,7 @@ export class TypeResolver {
       for (const field of fields) {
         if (/\b_\b/.test(field.type)) throw new Diagnostic('E0121', 'Inferred placeholder types are not allowed in stored field declarations', field.node.span ?? shape.span);
         if (/\bimpl\s/.test(field.type)) throw new Diagnostic('E0562', 'impl Trait is not allowed in stored field declarations', field.node.span ?? shape.span);
-        const type = this.resolve(field.type, shape.module, shape.name, parameters, [], field.node);
+        const type = this.resolve(field.type, shape.module, shape.name, parameters, [], {...field.node, typeContext: shape});
         this.validateKnown(type, parameters, {...shape,span:field.node.span ?? shape.span});
         used(type, parameters, found);
       }

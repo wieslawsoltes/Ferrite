@@ -156,7 +156,7 @@ export class PatternAnalyzer {
           if (!definition || fields.has(field.name)) throw new Diagnostic('E0025', `Unknown or duplicate field ${field.name}`, pattern.span);
           fields.add(field.name);
           this.analyzer.index.fieldVisible(shape, definition, context.instance.fn.module, field.pattern);
-          const fieldType = this.analyzer.index.type(T.substitute(definition.type, substitution), shape.module);
+          const fieldType = this.analyzer.index.instantiatedType(definition.type, shape, substitution, pattern);
           this.analyze(field.pattern, fieldType, context, mutable, bindings, names, reuse);
         }
         if (!pattern.rest && fields.size !== shape.fields.length) throw new Diagnostic('E0027', `Pattern ${shape.name} must mention every field or use '..'`, pattern.span);
@@ -184,7 +184,7 @@ export class PatternAnalyzer {
         this.expandRest(pattern, constructor.variant.fields.length, 'E0023');
         const substitution = new Map(constructor.owner.generics.map((g, i) => [g.name, app.args[i]]));
         pattern.variant = constructor.tag;
-        pattern.items.forEach((p, i) => this.analyze(p, this.analyzer.index.type(T.substitute(constructor.variant.fields[i], substitution), constructor.owner.module, constructor.owner.name), context, mutable, bindings, names, reuse));
+        pattern.items.forEach((p, i) => this.analyze(p, this.analyzer.index.instantiatedType(constructor.variant.fields[i], constructor.owner, substitution, pattern), context, mutable, bindings, names, reuse));
         return;
       }
       default: throw new Diagnostic('F_PATTERN', `Pattern '${pattern.kind}' has no type rule`, pattern.span);

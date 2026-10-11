@@ -92,8 +92,7 @@ export class AssigneeAnalyzer {
         const item = projection.value; item.assigneeIndex = Number(projection.name);
         this.prepare(item, depth + 1);
         const hint = this.hint(item);
-        if (!hint.includes('_')) T.unify(this.a.index.type(fields[item.assigneeIndex], owner.module,
-          null, new Set(substitution.keys()), item), hint, substitution, item);
+        if (!hint.includes('_')) T.unify(this.a.index.instantiatedType(fields[item.assigneeIndex], owner, substitution, item), hint, substitution, item);
         return item;
       });
       node.name = owner.name; node.assigneeTag = constructor.tag;
@@ -113,8 +112,7 @@ export class AssigneeAnalyzer {
         node.items = node.fields.map((field, i) => {
           const item = field.value; item.assigneeIndex = order[i]; this.prepare(item, depth + 1);
           const hint = this.hint(item);
-          if (!hint.includes('_')) T.unify(this.a.index.type(constructor.variant.fields[order[i]], owner.module,
-            null, new Set(substitution.keys()), item), hint, substitution, item);
+          if (!hint.includes('_')) T.unify(this.a.index.instantiatedType(constructor.variant.fields[order[i]], owner, substitution, item), hint, substitution, item);
           return item;
         });
         node.kind = 'constructorAssignee'; node.assignee = 'variant'; node.name = owner.name; node.assigneeTag = constructor.tag;
@@ -140,7 +138,7 @@ export class AssigneeAnalyzer {
         this.prepare(field.value, depth + 1);
         const hint = this.hint(field.value);
         if (!hint.includes('_')) {
-          const formal = this.a.index.type(T.substitute(definition.type, substitution), shape.module);
+          const formal = this.a.index.instantiatedType(definition.type, shape, substitution, node);
           T.unify(formal, hint, substitution, field.value);
         }
       }
@@ -193,7 +191,7 @@ export class AssigneeAnalyzer {
       T.unify(node.assigneeHint, actual, new Map(), node);
       const app = T.application(actual), shape = this.a.index.enums.get(app.name);
       const substitution = new Map(shape.generics.map((g, i) => [g.name, app.args[i]]));
-      for (const item of node.items) this.check(item, this.a.index.type(T.substitute(shape.variants[0].fields[item.assigneeIndex], substitution), shape.module));
+      for (const item of node.items) this.check(item, this.a.index.instantiatedType(shape.variants[0].fields[item.assigneeIndex], shape, substitution, node));
       return;
     }
     if (node.assignee === 'struct') {
@@ -202,7 +200,7 @@ export class AssigneeAnalyzer {
       const substitution = new Map(shape.generics.map((g, i) => [g.name, app.args[i]]));
       for (const field of node.fields) {
         const definition = this.a.index.field(shape, field.name);
-        this.check(field.value, this.a.index.type(T.substitute(definition.type, substitution), shape.module));
+        this.check(field.value, this.a.index.instantiatedType(definition.type, shape, substitution, node));
       }
       return;
     }
@@ -234,6 +232,6 @@ export class AssigneeAnalyzer {
     if (!shape) return false;
     const substitution = new Map(shape.generics.map((g, i) => [g.name, app.args[i]]));
     const fields = shape.fields?.map(field => field.type) ?? shape.variants.flatMap(variant => variant.fields);
-    return fields.some(field => visit(this.a.index.type(T.substitute(field, substitution), shape.module)));
+    return fields.some(field => visit(this.a.index.instantiatedType(field, shape, substitution)));
   }
 }

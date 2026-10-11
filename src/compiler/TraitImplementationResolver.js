@@ -76,7 +76,7 @@ export class TraitImplementationResolver {
     const traitArguments=T.application(entry.traitRef).args;
     const substitution=new Map([['Self',target],...(trait.generics??[]).map((g,i)=>[g.name,traitArguments[i]])]);
     const parametersInTrait=new Set(['Self',...(trait.generics??[]).map(g=>g.name)]);
-    const typeInTrait=raw=>T.substitute(this.index.type(raw,trait.module,'Self',parametersInTrait,trait),substitution);
+    const typeInTrait=raw=>this.index.typeResolver.substitute(this.index.type(raw,trait.module,'Self',parametersInTrait,trait),substitution,{...impl,typeContext:impl});
     const environment=new ImplObligations(this.a,entry);
     for(const argument of traitArguments){this.index.typeResolver.validateKnown(argument,parameters,impl);environment.validate(argument,impl);environment.requireSized(argument,impl);}
     for(const generic of trait.generics??[])for(const bound of generic.bounds)
@@ -110,7 +110,7 @@ export class TraitImplementationResolver {
       const expectedNames=new Set(['Self',...(trait.generics??[]).map(g=>g.name),...expected.generics.map(g=>g.name)]);
       const actualNames=new Set(fn.generics.map(g=>g.name));
       const rename=new Map([...substitution,...expected.generics.map((g,i)=>[g.name,actual[i].name])]);
-      const expectedType=raw=>T.substitute(this.index.type(raw,trait.module,'Self',expectedNames,expected),rename);
+      const expectedType=raw=>this.index.typeResolver.substitute(this.index.type(raw,trait.module,'Self',expectedNames,expected),rename,{...fn,typeContext:fn});
       const actualType=raw=>this.index.type(raw,fn.module,target,actualNames,fn);
       const lhs=[...fn.params.map(p=>p.type),fn.returnType].map(actualType);
       const rhs=[...expected.params.map(p=>p.type),expected.returnType].map(expectedType);
@@ -148,7 +148,7 @@ export class TraitImplementationResolver {
     method=this.rewrite(method,rename);
     const additional=traitParameters.map(generic=>({name:rename.get(generic.name),bounds:generic.bounds.map(bound=>T.substitute(this.index.type(bound,trait.module,'Self',new Set(traitParameters.map(g=>g.name)),trait),rename))}));
     const defaultArguments=additional.map((generic,i)=>[generic.name,actual[i]]);
-    const traitPredicates=(trait.predicates??[]).filter(p=>p.type!=='Self').map(p=>({...p,type:T.substitute(p.type,rename),bounds:p.bounds.map(bound=>T.substitute(bound,rename))}));
+    const traitPredicates=(trait.predicates??[]).filter(p=>p.type!=='Self').map(p=>({...p,type:T.substitute(p.type,rename,true),bounds:p.bounds.map(bound=>T.substitute(bound,rename,true))}));
     const normalize=type=>this.index.type(type,impl.module,target,parameters,impl);
     const inherited=(impl.generics??[]).map(g=>({...g,bounds:g.bounds.map(normalize)}));
     const fn={...structuredClone(method),name:`${target}::__trait${entry.id}::${method.localName}`,owner:target,
@@ -175,7 +175,7 @@ export class TraitImplementationResolver {
   }
   rewrite(method,rename,renameBinders=false) {
     const copy=structuredClone(method);if(!rename.size)return copy;
-    const rewrite=value=>T.substitute(value,rename),queue=[copy];
+    const rewrite=value=>T.substitute(value,rename,true),queue=[copy];
     while(queue.length) {
       const node=queue.pop();
       for(const [key,value] of Object.entries(node)) {

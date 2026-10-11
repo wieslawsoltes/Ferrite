@@ -1,0 +1,51 @@
+name: Native associated binding edge probes
+on:
+  push:
+    branches: [automation/compiler-associated-bindings]
+    paths: ['.github/workflows/binding-native-probes-extra.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Install matching stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Capture native evidence
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess, tempfile
+          d='trait A{type Item;}struct S;impl A for S{type Item=i32;}'
+          cases={
+            'duplicate-different-unused': d+'fn f<T:A<Item=i32,Item=bool>>(x:T){}fn main(){}',
+            'duplicate-identical-used': d+'fn f<T:A<Item=i32,Item=i32>>(x:T::Item)->i32{x}fn main(){println!("{}",f::<S>(42));}',
+            'duplicate-different-projection-unused': d+'fn f<T:A<Item=i32,Item=bool>>(x:T::Item){}fn main(){}',
+            'conflicting-two-bounds-projection-unused': d+'fn f<T:A<Item=i32>>(x:T::Item)where T:A<Item=bool>{}fn main(){}',
+            'method-omits-equality-constant': d+'trait B{fn f<T:A<Item=i32>>(t:T,x:T::Item)->i32;}impl B for S{fn f<U:A>(t:U,x:U::Item)->i32{42}}fn main(){println!("{}",S::f(S,42));}',
+            'method-omits-equality-projected-return': d+'trait B{fn f<T:A<Item=i32>>(t:T,x:T::Item)->i32;}impl B for S{fn f<U:A>(t:U,x:U::Item)->U::Item{x}}fn main(){println!("{}",S::f(S,42));}',
+            'method-omits-base-bound': d+'trait B{fn f<T:A<Item=i32>>(t:T,x:T::Item)->i32;}impl B for S{fn f<U>(t:U,x:U::Item)->i32{42}}fn main(){println!("{}",S::f(S,42));}',
+            'struct-only-projected-use': d+'struct H<T:A<Item=i32>>{x:T::Item}fn main(){let h=H::<S>{x:42};println!("{}",h.x);}',
+            'alias-projected-use': d+'type H<T:A<Item=i32>>=T::Item;fn main(){let h:H<S>=42;println!("{}",h);}',
+            'child-own-binding-used': 'trait A{type Item;}trait B:A{type Item;}struct S;impl A for S{type Item=bool;}impl B for S{type Item=i32;}fn f<T:B<Item=i32>>(x:<T as B>::Item)->i32{x}fn main(){println!("{}",f::<S>(42));}',
+            'alias-unknown-binding-member': d+'type H<T:A<Missing=i32>>=T::Item;fn main(){}',
+            'alias-inherited-equality-through-supertrait': 'trait A{type Item;}trait B:A<Item=i32>{}struct S;impl A for S{type Item=bool;}type H<T:B>=T::Item;fn main(){let h:H<S>=true;println!("{}",h);}',
+            'noninjective-equality-no-parameter-in-impl': d+'trait B{}impl<T:A<Item=U>,U>B for T{}fn main(){}',
+            'reordered-binding-argument': 'trait A<T>{type Item;}fn f<T:A<Item=i32,bool>>(x:T){}fn main(){}'
+          }
+          report={'rustc':subprocess.check_output(['rustup','run','stable','rustc','--version','--verbose'],text=True),'cases':[]}
+          with tempfile.TemporaryDirectory() as directory:
+            source=pathlib.Path(directory,'fixture.rs'); binary=pathlib.Path(directory,'fixture')
+            for name,code in cases.items():
+              source.write_text(code)
+              result=subprocess.run(['rustup','run','stable','rustc',str(source),'--edition=2024','-A','warnings','-C','overflow-checks=on','-o',str(binary)],capture_output=True,text=True,timeout=30)
+              execution=subprocess.run([str(binary)],capture_output=True,text=True,timeout=5) if result.returncode==0 else None
+              item={'name':name,'source':code,'accepted':result.returncode==0,'diagnostics':result.stderr,'output':execution.stdout if execution else None}
+              report['cases'].append(item);print(json.dumps(item),flush=True)
+          pathlib.Path('native-binding-edge-probes.json').write_text(json.dumps(report,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-binding-edge-probes
+          path: native-binding-edge-probes.json
+          retention-days: 7

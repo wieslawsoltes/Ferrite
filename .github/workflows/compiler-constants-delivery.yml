@@ -32,9 +32,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: feat/compiler-associated-constants
-          path: source
       - name: Apply and regenerate exact tree
-        working-directory: source
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           git apply --check --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/compiler-constants.patch"
@@ -45,12 +43,10 @@ jobs:
           git diff --cached --check
           test "$(git write-tree)" = "$EXPECTED_TREE"
       - name: Validate publication
-        working-directory: source
         run: |
           npm run check
           node --test --test-concurrency=4 tests/*.test.js
       - name: Commit and non-force push
-        working-directory: source
         run: |
           test "$(git write-tree)" = "$EXPECTED_TREE"
           git config user.name 'Wiesław Šoltés'

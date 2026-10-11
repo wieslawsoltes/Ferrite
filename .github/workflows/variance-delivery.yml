@@ -13,8 +13,8 @@ jobs:
     env:
       TARGET_BRANCH: feat/compiler-nominal-variance
       EXPECTED_HEAD: 3479b9d29529070b8196d7497c6f673c1bd320a5
-      PREVIOUS_TREE: 009c2defe27486750c5af6dd4d288f072b460405
       EXPECTED_TREE: fa7dd561d8f912ea472daa94caec3f69805280a0
+      SOURCE_TREE: 9c0eb347232c3b99a6dcaf6ae30502dada8de72e
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,7 +28,6 @@ jobs:
           encoded = ''.join(Path(f'.compiler-transfer/variance.{i}.b64').read_text().strip() for i in range(3))
           patch = lzma.decompress(base64.b64decode(encoded, validate=True))
           assert hashlib.sha256(patch).hexdigest() == 'bc0ae47edc9e7c9fc40f89960cef2c3eb068b199b526fe5a7dae9755c0dde8bc'
-          # Reconstruct the separately committed trailing-empty-line correction.
           start = patch.index(b'diff --git a/tests/fixtures/nominal-variance.js ')
           end = patch.index(b'diff --git ', start + 1)
           block = patch[start:end]
@@ -44,18 +43,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: feat/compiler-nominal-variance
-          fetch-depth: 0
       - name: Apply and regenerate exact tree
         run: |
-          if test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"; then
-            git apply --check --whitespace=error-all "$RUNNER_TEMP/variance.patch"
-            git apply --index --whitespace=error-all "$RUNNER_TEMP/variance.patch"
-          else
-            # A previous queued publisher may have committed the exact pre-fix
-            # tree. Only that verified single-parent continuation is accepted.
-            test "$(git rev-parse HEAD^{tree})" = "$PREVIOUS_TREE"
-            test "$(git rev-parse HEAD^)" = "$EXPECTED_HEAD"
-          fi
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git apply --check --whitespace=error-all "$RUNNER_TEMP/variance.patch"
+          git apply --index --whitespace=error-all "$RUNNER_TEMP/variance.patch"
           git apply --check --whitespace=error-all "$RUNNER_TEMP/variance-debugger.patch"
           git apply --index --whitespace=error-all "$RUNNER_TEMP/variance-debugger.patch"
           npm run build:workers
@@ -77,9 +69,17 @@ jobs:
             ${{ runner.temp }}/variance-check.log
             ${{ runner.temp }}/variance-tests.log
           retention-days: 7
-      - name: Commit and non-force push
+      - name: Commit ordinary source and non-force push
         run: |
           test "$(git write-tree)" = "$EXPECTED_TREE"
+          # The Actions token cannot edit workflows. Keep every existing CI gate
+          # unchanged in this source commit. The authenticated connector adds the
+          # new two-line native-variance gate separately before PR creation.
+          git show "$EXPECTED_HEAD:.github/workflows/test.yml" > .github/workflows/test.yml
+          git add .github/workflows/test.yml
+          git diff --cached --check
+          test "$(git write-tree)" = "$SOURCE_TREE"
+          test -z "$(git diff --cached --name-only -- .github/workflows)"
           git config user.name 'Wiesław Šoltés'
           git config user.email 'wieslawsoltes@users.noreply.github.com'
           git commit -m 'feat: infer nominal variance with deterministic debugger regressions'

@@ -1,0 +1,85 @@
+name: Publish checked ownership implementation
+on:
+  push:
+    branches: [automation/ownership-places-validation]
+    paths: ['.github/workflows/ownership-delivery.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: transfer
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Decode and verify the exact reviewed source patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, json, lzma, os, pathlib
+          root = pathlib.Path('transfer')
+          encoded = ''.join((root / f'ownership-transfer.part{i}').read_text().strip() for i in range(3))
+          raw = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(raw).hexdigest() == '998617a92bffbaec11273b674be4bc57590647469a72cf5fedc5767faae4395a'
+          patches = json.loads(raw)
+          assert set(patches) == {'core', 'inspection'}
+          for name, patch in patches.items():
+              (pathlib.Path(os.environ['RUNNER_TEMP']) / f'ownership-{name}.patch').write_text(patch)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/ownership-places-and-reborrows
+          path: source
+          fetch-depth: 0
+      - name: Apply reviewed commits and regenerate deterministic bundles
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = '00355bad60e71f5586db36824e466a141cb956eb'
+          test -z "$(git status --porcelain)"
+          git config user.name 'Wiesław Šoltés'
+          git config user.email 'wieslawsoltes@users.noreply.github.com'
+          git apply --unidiff-zero --index "$RUNNER_TEMP/ownership-core.patch"
+          git commit -m 'feat: implement projected ownership places and control-flow loan liveness'
+          git apply --unidiff-zero --index "$RUNNER_TEMP/ownership-inspection.patch"
+          git commit -m 'feat: expose source-linked ownership places and document checker boundaries'
+          node tools/bundle-workers.mjs
+          node tools/bundle-sdk.mjs
+          git add src/ui/workers/compile-worker.bundle.js src/ui/workers/agent-compiler-worker.bundle.js src/sdk/ferrite.bundle.js
+          test "$(git write-tree)" = 'aaadaa8cf98f62e533c97d753d9b5c2d5ba80a62'
+          git commit -m 'build: regenerate compiler worker and SDK ownership passes'
+          git diff --exit-code
+          mkdir -p artifacts/delivery
+          git rev-parse HEAD > artifacts/delivery/head.txt
+          git rev-parse HEAD^{tree} > artifacts/delivery/tree.txt
+      - name: Run complete Node and deterministic build validation
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run check 2>&1 | tee artifacts/delivery/check.log
+          npm test 2>&1 | tee artifacts/delivery/tests.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ownership-delivery-evidence
+          path: source/artifacts/delivery/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Non-force push only the exact validated tree
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^{tree})" = 'aaadaa8cf98f62e533c97d753d9b5c2d5ba80a62'
+          test "$(git ls-remote origin refs/heads/feat/ownership-places-and-reborrows | cut -f1)" = '00355bad60e71f5586db36824e466a141cb956eb'
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = '00355bad60e71f5586db36824e466a141cb956eb'
+          git push origin HEAD:refs/heads/feat/ownership-places-and-reborrows

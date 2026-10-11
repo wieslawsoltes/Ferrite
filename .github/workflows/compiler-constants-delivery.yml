@@ -2,7 +2,7 @@ name: Publish compiler constants continuation
 on:
   push:
     branches: [automation/compiler-associated-constants-delivery]
-    paths: ['.delivery/**', '.github/workflows/compiler-constants-delivery.yml']
+    paths: ['.compiler-transfer/**', '.github/workflows/compiler-constants-delivery.yml']
   workflow_dispatch:
 permissions:
   contents: write
@@ -12,8 +12,8 @@ jobs:
     timeout-minutes: 10
     env:
       TARGET_BRANCH: feat/compiler-associated-constants
-      EXPECTED_HEAD: edb81e9055d14b1da108380360341a6030aca20b
-      EXPECTED_TREE: cf7a4b9c55611dbc04679d8fa3259964beb86b8d
+      EXPECTED_HEAD: fb52e74d429a8ea7be1eeeb095e6471eb7c3078d
+      EXPECTED_TREE: e10fa4fd0b9ace9827fde69465fe394ea42e49d6
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,9 +24,9 @@ jobs:
           python3 - <<'PY'
           import base64, hashlib, lzma, os
           from pathlib import Path
-          encoded = Path('.delivery/compiler-constants.xz.b64').read_text().strip()
+          encoded = Path('.compiler-transfer/constants-native-fixes.xz.b64').read_text().strip()
           patch = lzma.decompress(base64.b64decode(encoded, validate=True))
-          assert hashlib.sha256(patch).hexdigest() == '9e051dd5b5f1d8aa700fa4ba733d83b3c26df595b46d07d22d7765b8f1267a0c'
+          assert hashlib.sha256(patch).hexdigest() == '0c276a699ea288b1f78eb3631661de266dfe89e3fa3f4d48bcdae5d64c9d5e07'
           Path(os.environ['RUNNER_TEMP'], 'compiler-constants.patch').write_bytes(patch)
           PY
       - uses: actions/checkout@v4
@@ -51,6 +51,6 @@ jobs:
           test "$(git write-tree)" = "$EXPECTED_TREE"
           git config user.name 'Wiesław Šoltés'
           git config user.email 'wieslawsoltes@users.noreply.github.com'
-          git commit -m 'feat: specialize Rust associated constants through checked MIR evaluation'
+          git commit -m 'fix: match native Rust constant dependencies and generic scalar patterns'
           git push origin "HEAD:refs/heads/$TARGET_BRANCH"
           git rev-parse HEAD HEAD^{tree}

@@ -1,0 +1,60 @@
+name: Publish compiler constants continuation
+on:
+  push:
+    branches: [automation/compiler-associated-constants-delivery]
+    paths: ['.delivery/**', '.github/workflows/compiler-constants-delivery.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_BRANCH: feat/compiler-associated-constants
+      EXPECTED_HEAD: edb81e9055d14b1da108380360341a6030aca20b
+      EXPECTED_TREE: cf7a4b9c55611dbc04679d8fa3259964beb86b8d
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Decode and verify source patch
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os
+          from pathlib import Path
+          encoded = Path('.delivery/compiler-constants.xz.b64').read_text().strip()
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '9e051dd5b5f1d8aa700fa4ba733d83b3c26df595b46d07d22d7765b8f1267a0c'
+          Path(os.environ['RUNNER_TEMP'], 'compiler-constants.patch').write_bytes(patch)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/compiler-associated-constants
+          path: source
+      - name: Apply and regenerate exact tree
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git apply --check --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/compiler-constants.patch"
+          git apply --index --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/compiler-constants.patch"
+          npm run build:workers
+          npm run build:sdk
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+      - name: Validate publication
+        working-directory: source
+        run: |
+          npm run check
+          node --test --test-concurrency=4 tests/*.test.js
+      - name: Commit and non-force push
+        working-directory: source
+        run: |
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git config user.name 'Wiesław Šoltés'
+          git config user.email 'wieslawsoltes@users.noreply.github.com'
+          git commit -m 'feat: specialize Rust associated constants through checked MIR evaluation'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD HEAD^{tree}

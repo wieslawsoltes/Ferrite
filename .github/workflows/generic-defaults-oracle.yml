@@ -1,0 +1,29 @@
+name: Generic defaults native oracle
+on:
+  push:
+    branches: [automation/compiler-generic-defaults-delivery]
+    paths: ['.github/workflows/generic-defaults-oracle.yml']
+permissions:
+  contents: read
+jobs:
+  oracle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Prepare official stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Retain relocatable compiler and host standard library
+        run: |
+          root="$(rustup run stable rustc --print sysroot)"
+          rustup run stable rustc --version --verbose | tee "$RUNNER_TEMP/rustc-version.txt"
+          tar -C "$root" --exclude='lib/rustlib/src' --exclude='lib/rustlib/etc' -cJf "$RUNNER_TEMP/rustc-sysroot.tar.xz" bin/rustc lib
+          sha256sum "$RUNNER_TEMP/rustc-sysroot.tar.xz" | tee "$RUNNER_TEMP/rustc-sysroot.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: generic-defaults-native-oracle
+          path: |
+            ${{ runner.temp }}/rustc-sysroot.tar.xz
+            ${{ runner.temp }}/rustc-version.txt
+            ${{ runner.temp }}/rustc-sysroot.sha256
+          compression-level: 0
+          retention-days: 3

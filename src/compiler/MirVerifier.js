@@ -35,17 +35,18 @@ export class MirVerifier {
     if (instruction.op === 'write' && !instruction.place.path.length) result.push(instruction.place.slot);
     return result;
   }
-  static verify(functions, {allowDeferredDiscriminants = false} = {}) {
+  static verify(functions, {allowDeferredDiscriminants = false, constantReferences = null} = {}) {
     const names = new Map(functions.map(fn => [fn.instance, fn]));
     if (names.size !== functions.length) throw new Diagnostic('F_MIR', 'Duplicate MIR function identity');
-    for (const fn of functions) this.function(fn, names, {allowDeferredDiscriminants});
+    for (const fn of functions) this.function(fn, names, {allowDeferredDiscriminants, constantReferences});
     return {functions: functions.length, blocks: functions.reduce((n, f) => n + f.blocks.length, 0), status: 'verified'};
   }
-  static function(fn, names, {allowDeferredDiscriminants = false} = {}) {
+  static function(fn, names, {allowDeferredDiscriminants = false, constantReferences = null} = {}) {
     const map = new Map(fn.blocks.map(block => [block.id, block]));
     const fail = (message, span) => { throw new Diagnostic('F_MIR', `${fn.instance}: ${message}`, span ?? fn.span); };
     if (map.size !== fn.blocks.length || !map.has(fn.entry)) fail('Invalid block identities');
     const operations = new Set(['const', 'read', 'borrow', 'write', 'copy', 'binary', 'unary', 'cast', 'aggregate', 'repeat', 'get', 'tag', 'payload', 'discriminant', 'builtin', 'call', 'function', 'callIndirect']);
+    if (constantReferences instanceof Map) operations.add('constantReference');
     const terms = new Set(['goto', 'branch', 'rangeSwitch', 'return', 'unreachable']);
     const register = (slot, span) => {
       if (!Number.isInteger(slot) || slot < 0 || slot >= fn.registers.length) fail(`Invalid register ${slot}`, span);
@@ -58,6 +59,9 @@ export class MirVerifier {
       for (const target of this.successors(block)) if (!map.has(target)) fail(`Edge to absent block ${target}`, block.span);
       for (const instruction of block.instructions) {
         if (!operations.has(instruction.op)) fail(`Unknown operation ${instruction.op}`, instruction.span);
+        if (instruction.op === 'constantReference' &&
+            (typeof instruction.key !== 'string' || constantReferences.get(instruction.key)?.type !== instruction.type))
+          fail('Invalid type-only constant reference identity or type', instruction.span);
         const stores = instruction.op === 'copy' || instruction.op === 'write';
         if (!stores && instruction.dest == null) fail(`Missing destination for ${instruction.op}`, instruction.span);
         if (instruction.dest != null) {

@@ -4,6 +4,7 @@ import {TypeSystem as T} from './TypeSystem.js';
 import {Lexer} from './Lexer.js';
 import {Parser} from './Parser.js';
 import {MirLowerer} from './MirLowerer.js';
+import {MirOptimizer} from './MirOptimizer.js';
 import {MirVerifier} from './MirVerifier.js';
 import {OwnershipAnalyzer} from './OwnershipAnalyzer.js';
 import {MirVirtualMachine} from '../runtime/MirVirtualMachine.js';
@@ -22,13 +23,13 @@ export class ConstantEvaluator {
     this.analyzer = analyzer; this.index = analyzer.index;
     this.maxSteps = maxSteps; this.maxExpressionSteps = maxExpressionSteps; this.maxExpressions = maxExpressions; this.maxValues = maxValues;
     this.cache = new Map(); this.active = new Set(); this.reports = [];
-    this.running = new Set();
+    this.running = new Set(); this.references = new Map();
     this.steps = 0; this.evaluations = 0; this.hits = 0; this.sequence = 0;
   }
 
-  /** Check unused concrete initializers without executing them. Type-only
-   * reference nodes live exclusively in an isolated analyzer; they never
-   * reach lowering, the query cache, debugger or emitted runtime artifacts. */
+  /** Check unused concrete initializers without executing their own values.
+   * Rust still validates surviving concrete constant operands in their MIR.
+   * Type-only dependency MIR exists exclusively in an isolated analyzer. */
   checkAssociatedDefinitions() {
     if (![...this.index.functions.values()].some(fn => fn.associatedConstant && fn.body && !fn.generics.length)) return;
     // Function items, closures, obligations and discriminants also own side tables;
@@ -39,7 +40,38 @@ export class ConstantEvaluator {
     for (const fn of a.index.functions.values()) if (fn.associatedConstant && fn.body && !fn.generics.length)
       a.instantiate(fn, [], [], fn);
     for (const instance of a.instances.values()) if (instance.fn.isConst) a.constants.validate(instance);
-    OwnershipAnalyzer.analyze({instances: [...a.instances.values()]});
+    const instances = [...a.instances.values()];
+    OwnershipAnalyzer.analyze({instances});
+    const verification = {allowDeferredDiscriminants: true, constantReferences: a.constants.references};
+    const mir = MirLowerer.lower({instances}, verification);
+    MirVerifier.verify(mir, verification);
+    const {functions} = MirOptimizer.optimize(mir, verification);
+    const roots = new Set(instances.filter(i => i.fn.associatedConstant && !i.fn.generics.length && !i.fn.defaultTrait).map(i => i.key));
+    let evaluator = null;
+    for (const fn of functions) if (roots.has(fn.instance)) for (const block of fn.blocks)
+      for (const instruction of block.instructions) if (instruction.op === 'constantReference') {
+        // Do not execute with the type-only analyzer's cached function bodies:
+        // callees there intentionally contain unresolved reference operands.
+        if (!evaluator) {
+          const maxSteps = this.maxSteps - this.steps - a.constants.steps;
+          const maxExpressions = this.maxExpressions - this.evaluations - a.constants.evaluations;
+          if (maxSteps <= 0 || maxExpressions <= 0)
+            throw new Diagnostic('F_CONST_BUDGET', 'Compilation-wide constant dependency budget exceeded', instruction.span);
+          evaluator = new this.analyzer.constructor(this.analyzer.ast, {mode: 'library',
+            maxInstances: this.analyzer.maxInstances,
+            constEvaluation: {...this.analyzer.constEvaluationOptions, maxSteps, maxExpressions}});
+        }
+        const reference = a.constants.references.get(instruction.key);
+        const declaration = evaluator.index.functions.get(reference.fn.name);
+        evaluator.constants.evaluate(declaration.body.tail, declaration.module, declaration.returnType, declaration,
+          instruction.key, instruction, declaration.owner, {declaration, explicit: reference.arguments});
+      }
+    // Definition dependencies share the compilation-wide budget, not a separate
+    // allowance per initializer (the isolated analyzer otherwise owns all state).
+    this.steps += a.constants.steps + (evaluator?.constants.steps ?? 0);
+    this.evaluations += a.constants.evaluations + (evaluator?.constants.evaluations ?? 0);
+    if (this.steps > this.maxSteps || this.evaluations > this.maxExpressions)
+      throw new Diagnostic('F_CONST_BUDGET', 'Compilation-wide constant evaluation budget exceeded');
   }
 
   constant(declaration, use = declaration) {

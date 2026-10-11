@@ -14,12 +14,6 @@ export class PatternAnalyzer {
     if (pattern.name.includes('::') || pattern.qualifiedTrait) {
       // Constructor resolution must retain its own diagnostics and visibility.
       if (a.index.constructorFor(pattern.name, module, pattern)) return null;
-      const parameters = new Set(context.instance.fn.generics.map(g => g.name));
-      const owner = pattern.name.split('::').slice(0, -1).join('::');
-      const raw = [pattern.qualifiedSelf, pattern.qualifiedTrait, ...(pattern.ownerTypeArguments ?? []),
-        owner === 'Self' ? context.methodScope.normalize('Self') : owner].filter(Boolean).join(',');
-      if ([...parameters].some(name => T.substitute(raw, new Map([[name, '_']])) !== raw))
-        throw new Diagnostic('E0158', 'Generic associated constants cannot be used in patterns', pattern.span);
       const resolved = a.implementations.associated(pattern, context);
       if (resolved?.fn.associatedConstant) return AssociatedConstant.evaluate(a, resolved, pattern, context).expression;
     }

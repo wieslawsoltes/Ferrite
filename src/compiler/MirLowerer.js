@@ -1,16 +1,18 @@
+import {Diagnostic} from './Diagnostic.js';
 import {TypeSystem as T} from './TypeSystem.js';
 import {AssigneeLowerer} from './assignments/AssigneeLowerer.js';
 import {LiteralValue} from './LiteralValue.js';
 import {PatternLowerer} from './patterns/PatternLowerer.js';
 /** Typed register MIR with explicit control flow; this IR is executed, not illustrative AST JSON. */
 export class MirLowerer {
-  constructor(instance) {
+  constructor(instance, {constantReferences = null} = {}) {
+    this.constantReferences = constantReferences;
     this.instance = instance; this.patterns = new PatternLowerer(this);
     this.registers = instance.locals.map(local => ({type: local.type, name: local.name, span: local.span}));
     this.blocks = []; this.loops = []; this.sequence = 0;
     this.current = this.newBlock('entry', instance.fn);
   }
-  static lower(semantic) { return semantic.instances.map(instance => new MirLowerer(instance).lower()); }
+  static lower(semantic, options) { return semantic.instances.map(instance => new MirLowerer(instance, options).lower()); }
   newBlock(label, node) {
     const block = {id: `bb${this.blocks.length}`, label, span: node?.span, instructions: [], terminator: null};
     this.blocks.push(block); return block;
@@ -76,6 +78,11 @@ export class MirLowerer {
       return this.emit('aggregate', {form: 'enum', values, tag: node.variant}, node, node.type);
     }
     switch (node.kind) {
+      case 'constantReference': {
+        if (!(this.constantReferences instanceof Map) || this.constantReferences.get(node.key)?.type !== node.type)
+          throw new Diagnostic('F_MIR', 'Type-only constant reference escaped definition checking', node.span);
+        return this.emit('constantReference', {key: node.key}, node, node.type);
+      }
       case 'constValue': return this.expr(node.value);
       case 'literal': return this.literal(node.value, node.type, node);
       case 'variable': return node.constant ? this.expr(node.constant) : this.emit('read', {place: this.place(node), copy: !borrowed && node.copy}, node, node.type);

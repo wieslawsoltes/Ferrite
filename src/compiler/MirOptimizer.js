@@ -4,7 +4,7 @@ import {MirVerifier} from './MirVerifier.js';
 
 /** Local constant folding plus constant-branch and unreachable-block elimination. */
 export class MirOptimizer {
-  static optimize(input) {
+  static optimize(input, verificationOptions) {
     const functions = structuredClone(input), changes = [], runtime = new Runtime();
     for (const fn of functions) {
       for (const block of fn.blocks) {
@@ -42,7 +42,7 @@ export class MirOptimizer {
       removed.forEach(b => changes.push({kind: 'unreachable block', function: fn.instance, block: b.id, span: b.span}));
       fn.blocks = fn.blocks.filter(b => live.has(b.id));
     }
-    MirVerifier.verify(functions);
+    MirVerifier.verify(functions, verificationOptions);
     return {functions, changes};
   }
 }

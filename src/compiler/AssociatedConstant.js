@@ -1,3 +1,4 @@
+import {ConstantPatternProof} from './ConstantPatternProof.js';
 import {Diagnostic} from './Diagnostic.js';
 import {TypeSystem as T} from './TypeSystem.js';
 
@@ -27,11 +28,14 @@ export class AssociatedConstant {
     const arguments_ = fn.generics.map(g => mapping.get(g.name));
     if (arguments_.some(type => !type || /\b_\b/.test(type)))
       throw new Diagnostic('E0282', `Cannot infer implementing type for ${node.name}`, node.span);
+    const key = 'associated:' + JSON.stringify([fn.name, arguments_]);
     if (analyzer.constants.checkingDefinition) {
       const type = analyzer.formal(fn, fn.returnType, mapping, node);
-      return {type, expression: {kind: 'constantReference', name: fn.name, arguments: arguments_, type, span: node.span}};
+      analyzer.constants.references.set(key, {fn, arguments: arguments_, type});
+      return {type, expression: {kind: 'constantReference', key, name: fn.name, arguments: arguments_, type, span: node.span,
+        ...(analyzer.constants.provingPattern ? ConstantPatternProof.origin(analyzer, resolved, node, context) : {})}};
     }
-    const key = 'associated:' + JSON.stringify([fn.name, arguments_]);
+    if (node.kind?.endsWith('Pattern')) ConstantPatternProof.check(analyzer, resolved, node, context, arguments_);
     return analyzer.constants.evaluate(fn.body.tail, fn.module, fn.returnType, fn, key, node, fn.owner,
       {declaration: fn, explicit: arguments_});
   }

@@ -2,10 +2,10 @@ import {Diagnostic} from '../Diagnostic.js';
 import {TypeSystem as T} from '../TypeSystem.js';
 import {ConditionChain} from './ConditionChain.js';
 
-/** Structured flow for condition chains, on the existing whole-local ownership
+/** Structured flow for condition chains, on the shared projection-sensitive ownership
  * domain. Failure edges retain effects already performed, never effects of a
  * skipped operand. Loop headers reach a bounded fixed point over backedges.
- * This does not introduce projection-sensitive loans or claim rustc NLL. */
+ * Local liveness comes from the backward CFG solver; this is not full rustc NLL. */
 export class ConditionOwnership {
   static MAX_WORK = 1_048_576;
   static MAX_DEPTH = 64;
@@ -17,32 +17,41 @@ export class ConditionOwnership {
     if (this.a.conditionWork > ConditionOwnership.MAX_WORK)
       throw new Diagnostic('F_CONDITION_LIMIT', 'Condition ownership analysis exceeds its work budget', this.node.span);
   }
+  size(state) {
+    return 1 + state.moved.size + [...state.references.values()].reduce((n, roots) => n + 1 + roots.length, 0) +
+      [...state.authorities.values()].reduce((n, ids) => n + 1 + ids.length, 0) +
+      state.loans.reduce((n, loan) => n + 1 + loan.parents.length + loan.borrowers.length, 0);
+  }
   save() {
     const a = this.a;
-    this.charge(1 + a.moved.size + a.loans.length + a.references.size);
-    return {moved: new Set(a.moved), loans: a.loans.map(loan => ({...loan})),
-      references: new Map([...a.references].map(([slot, roots]) => [slot, [...roots]]))};
+    this.charge(this.size(a));
+    return {moved: new Set(a.moved), loans: a.loans.map(loan => ({...loan, borrowers: [...loan.borrowers], parents: [...loan.parents]})),
+      references: new Map([...a.references].map(([slot, roots]) => [slot, [...roots]])),
+      authorities: new Map([...a.authorities].map(([slot, ids]) => [slot, [...ids]]))};
   }
   load(state) {
     this.a.moved = new Set(state.moved);
     this.a.loans = state.loans.map(loan => ({...loan}));
     this.a.references = new Map([...state.references].map(([slot, roots]) => [slot, [...roots]]));
+    this.a.authorities = new Map([...state.authorities].map(([slot, ids]) => [slot, [...ids]]));
   }
   loanKey(loan) {
     return JSON.stringify([loan.root, loan.borrower, loan.mutable, loan.reserved, loan.via,
-      loan.callFrame?.end, loan.span?.start, loan.span?.end]);
+      loan.callFrame?.end, loan.span?.start, loan.span?.end, loan.id, loan.parents]);
   }
   join(states) {
-    const merged = {moved: new Set(), loans: [], references: new Map()}, loans = new Map();
+    const merged = {moved: new Set(), loans: [], references: new Map(), authorities: new Map()}, loans = new Map();
     for (const state of states) {
-      this.charge(1 + state.moved.size + state.loans.length + state.references.size);
+      this.charge(this.size(state));
       for (const slot of state.moved) merged.moved.add(slot);
       for (const [slot, roots] of state.references)
         merged.references.set(slot, [...new Set([...(merged.references.get(slot) ?? []), ...roots])]);
+      for (const [slot, ids] of state.authorities)
+        merged.authorities.set(slot, [...new Set([...(merged.authorities.get(slot) ?? []), ...ids])]);
       for (const loan of state.loans) {
         const key = this.loanKey(loan), old = loans.get(key);
         if (!old) loans.set(key, {...loan});
-        else old.until = Math.max(old.until, loan.until);
+        else { old.until = Math.max(old.until, loan.until); old.borrowers = [...new Set([...old.borrowers, ...loan.borrowers])]; }
       }
     }
     merged.loans = [...loans.values()];
@@ -50,27 +59,37 @@ export class ConditionOwnership {
   }
   key(state) {
     return JSON.stringify([[...state.moved].sort((a, b) => a - b),
-      state.loans.map(loan => [this.loanKey(loan), loan.until]).sort(),
-      [...state.references].map(([slot, roots]) => [slot, [...roots].sort((a, b) => a - b)]).sort((a, b) => a[0] - b[0])]);
+      state.loans.map(loan => [this.loanKey(loan), loan.until, [...loan.borrowers].sort((a,b)=>a-b)]).sort(),
+      [...state.references].map(([slot, roots]) => [slot, [...roots].sort((a, b) => a - b)]).sort((a, b) => a[0] - b[0]),
+      [...state.authorities].map(([slot, ids]) => [slot, [...ids].sort((a,b)=>a-b)]).sort((a,b)=>a[0]-b[0])]);
   }
   localSlots() {
     return new Set(this.a.instance.locals.filter(local => local.span &&
       local.span.start >= this.node.span.start && local.span.end <= this.node.span.end).map(local => local.slot));
   }
   leave(state, slots, roots = []) {
-    if (roots.some(root => slots.has(root)))
-      throw new Diagnostic('E0597', 'A condition-local value does not outlive its condition scope', this.node.span);
-    for (const [slot, targets] of state.references) {
-      if (slots.has(slot)) { state.references.delete(slot); continue; }
-      if (targets.some(root => slots.has(root)) && (this.a.lastUse.get(slot) ?? 0) > this.node.span.start)
-        throw new Diagnostic('E0597', 'A reference to a condition-local value escapes its scope', this.node.span);
+    if (roots.some(root => slots.has(this.a.places.local(root)) && !this.a.places.get(root).external)) {
+      // Tail loop/block results retain the function-return diagnostic; let
+      // chains retain their existing, more specific condition-scope diagnostic.
+      if (['labelBlock', 'loopExpr'].includes(this.node.kind) && this.node === this.a.instance.fn.body.tail)
+        this.a.checkReturn(this.node, roots, this.node);
+      throw new Diagnostic('E0597', 'A scope-local value does not outlive its control-flow result', this.node.span);
     }
-    state.moved = new Set([...state.moved].filter(slot => !slots.has(slot)));
+    const after = this.a.liveness.after(this.node);
+    for (const [slot, targets] of state.references) {
+      if (slots.has(slot)) { state.references.delete(slot); state.authorities.delete(slot); continue; }
+      if (targets.some(root => slots.has(this.a.places.local(root)) && !this.a.places.get(root).external) &&
+          (after ? this.a.liveness.has(after, slot) : (this.a.lastUse.get(slot) ?? 0) > this.node.span.end))
+        throw new Diagnostic('E0597', 'A reference to a scope-local value escapes its control-flow scope', this.node.span);
+    }
+    state.moved = new Set([...state.moved].filter(slot => !slots.has(this.a.places.local(slot))));
     state.loans = state.loans.flatMap(loan => {
-      if (!slots.has(loan.borrower)) return [loan];
-      // The enclosing assignment/return takes responsibility for an escaping
-      // pointer to an outer referent; its condition-local pointer is not kept.
-      return roots.includes(loan.root) ? [{...loan, borrower: null, until: this.node.span.end}] : [];
+      const borrowers = loan.borrowers.filter(slot => !slots.has(slot));
+      if (borrowers.length) return [{...loan, borrowers, borrower: borrowers[0]}];
+      if (!loan.borrowers.length) return [loan];
+      // Preserve an outer copy of a scoped reference. With no named borrower,
+      // the enclosing result/assignment takes responsibility for its lineage.
+      return roots.includes(loan.root) ? [{...loan, borrowers: [], borrower: null, until: this.node.span.end}] : [];
     });
     return state;
   }
@@ -87,17 +106,13 @@ export class ConditionOwnership {
       if (!roots.length) throw new Diagnostic('F_CONDITION_REFERENCE',
         'A reference condition binding requires a tracked local or parameter origin', value.span);
       if (roots.some(root => {
-        const span = a.instance.locals[root]?.span;
+        const span = a.places.get(root).external ? null : a.instance.locals[a.places.local(root)]?.span;
         return span && span.start >= value.span.start && span.end <= value.span.end;
       })) throw new Diagnostic('E0597', 'A scrutinee-local value does not outlive its condition binding', value.span);
-      a.references.set(term.binding.slot, [...roots]);
-      for (const loan of a.loans) if (roots.includes(loan.root)) {
-        loan.borrower = term.binding.slot;
-        loan.until = Math.max(loan.until, a.lastUse.get(term.binding.slot) ?? term.span.end);
-      }
+      a.attach(term.binding.slot, roots, value, value.binding?.slot ?? null);
     }
     for (const pattern of bindings) {
-      a.moved.delete(pattern.binding.slot);
+      a.initialize(pattern.binding.slot);
       a.event('initialize condition binding', pattern, pattern.binding.slot, pattern.type);
     }
   }
@@ -124,12 +139,12 @@ export class ConditionOwnership {
         'A reference-valued condition branch requires a tracked local or parameter origin', value.span);
   }
   conditional() {
-    const a = this.a, failures = [], slots = this.localSlots(), outputs = [], roots = [];
+    const a = this.a, failures = [], slots = this.localSlots(), outputs = [], roots = [], ids = [];
     if (this.terms(failures)) {
       const yes = a.block(this.node.then);
       if (this.node.then.type !== '!') {
         this.result(this.node.then, yes);
-        roots.push(...yes); outputs.push(this.leave(this.save(), slots, yes));
+        roots.push(...yes); ids.push(...a.resultLoans(this.node.then)); outputs.push(this.leave(this.save(), slots, yes));
       }
     }
     if (failures.length) {
@@ -137,10 +152,11 @@ export class ConditionOwnership {
       const no = a.value(this.node.otherwise);
       if (this.node.otherwise?.type !== '!') {
         this.result(this.node.otherwise, no);
-        roots.push(...no); outputs.push(this.leave(this.save(), slots, no));
+        roots.push(...no); ids.push(...a.resultLoans(this.node.otherwise)); outputs.push(this.leave(this.save(), slots, no));
       }
     }
     this.load(this.join(outputs));
+    a.provenance.set(this.node, [...new Set(ids)]);
     return [...new Set(roots)];
   }
   loop() {

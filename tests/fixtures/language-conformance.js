@@ -1,3 +1,4 @@
+import {ownershipPlaceCases, ownershipPlaceCompileFailCases} from './ownership-places.js';
 import {letChainCases, letChainCompileFailCases, letChainPanicCases} from './let-chains.js';
 import {nominalVarianceCases, nominalVarianceCompileFailCases} from './nominal-variance.js';
 import {relaxedSizedCases, relaxedSizedCompileFailCases} from './relaxed-sized.js';
@@ -181,3 +182,6 @@ languageCases.push(...nominalVarianceCases.map(([name, source, output]) => ({nam
 languageCases.push(...letChainCases.map(([name, source, output]) => ({name, source, output, kind: 'run'})),
   ...letChainCompileFailCases.map(([name, source]) => ({name, source, kind: 'compile-fail'})),
   ...letChainPanicCases.map(([name, source, code, output]) => ({name, source, code, output, kind: 'panic'})));
+
+languageCases.push(...ownershipPlaceCases.map(([name, source, output]) => ({name, source, output, kind: 'run'})),
+  ...ownershipPlaceCompileFailCases.map(([name, source]) => ({name, source, kind: 'compile-fail'})));

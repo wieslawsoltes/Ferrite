@@ -1,0 +1,33 @@
+name: Associated type native reference
+on:
+  push:
+    branches: [automation/associated-types-validation]
+    paths: ['.github/workflows/associated-type-reference.yml']
+permissions:
+  contents: read
+jobs:
+  reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Prepare reference compiler
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup run stable rustc --version --verbose > rustc-version.txt
+          ROOT="$(rustup run stable rustc --print sysroot)"
+          mkdir -p reference/bin reference/lib/rustlib/x86_64-unknown-linux-gnu/lib
+          cp "$ROOT/bin/rustc" reference/bin/
+          cp -a "$ROOT"/lib/*.so* reference/lib/
+          cp -a "$ROOT"/lib/rustlib/x86_64-unknown-linux-gnu/lib/* reference/lib/rustlib/x86_64-unknown-linux-gnu/lib/
+          cp rustc-version.txt reference/
+          tar -czf rust-reference.tar.gz -C reference .
+          sha256sum rust-reference.tar.gz > rust-reference.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: associated-types-rust-reference
+          path: |
+            rust-reference.tar.gz
+            rust-reference.sha256
+            rustc-version.txt
+          retention-days: 3
+          compression-level: 0

@@ -10,7 +10,8 @@ import {ImplObligations} from './ImplObligations.js';
  * The memo contains concrete, successful normalizations from this index only.
  */
 export class AssociatedTypeResolver {
-  constructor(index) {
+  constructor(index, {preserveProjections = false} = {}) {
+    this.preserveProjections = preserveProjections;
     this.index = index;
     this.enabled = [...index.traits.values()].some(trait => trait.associatedTypes.length) || index.impls.some(impl => impl.associatedTypes.length);
     this.implementations = null;
@@ -143,7 +144,7 @@ export class AssociatedTypeResolver {
     const projection = T.projectionName(self, trait, name);
     if (++this.queries > this.maxQueries || projection.length > 1000000)
       throw new Diagnostic('F_ASSOC_TYPE_LIMIT', 'Associated-type normalization budget exceeded', node?.span);
-    if (!this.implementations) return projection;
+    if (this.preserveProjections || !this.implementations) return projection;
     const symbolic = this.symbolic(self, parameters) || this.symbolic(trait, parameters);
     if (!symbolic && this.cache.has(projection)) { this.hits++; return this.cache.get(projection); }
     if (symbolic && !this.index.associatedBindings.building) {

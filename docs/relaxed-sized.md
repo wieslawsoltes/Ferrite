@@ -117,9 +117,8 @@ layouts, unsizing coercions, unsized-tail construction, `size_of`/`align_of` lay
 intrinsics, arbitrary temporary-reference lifetimes, or general reference-return
 analysis. In particular, borrowing a literal such as `&7` remains outside the
 supported temporary-borrow subset; binding it to a local before borrowing is
-covered. Rejection of a type parameter used only through recursive occurrences
-requires the separate variance/recursive-parameter analysis and is not provided
-by a finite storage-size proof.
+covered. Unused and recursive-only parameter checks are now provided by the separate
+[nominal variance pass](nominal-variance.md), not by this finite storage-size proof.
 
 GATs, lifetime/HRTB analysis, whole-body backwards inference, universal generic
 body checking, full derive expansion, complete NLL, macros, async lowering,

@@ -5,10 +5,20 @@ export type Backend = 'mir' | 'wasm' | 'javascript';
 export interface SourceSpan { file: string; start: number; end: number; line: number; column: number; endLine?: number; endColumn?: number }
 export interface Diagnostic { code: string; message: string; severity?: 'error' | 'warning'; span?: SourceSpan; notes?: string[] }
 export interface MirFunction { instance: string; blocks: unknown[]; registers: unknown[]; params: unknown[]; returnType: string; span?: SourceSpan }
+export type NominalVariance = 'bivariant' | 'covariant' | 'contravariant' | 'invariant';
+export interface NominalVarianceReport {
+  readonly declarations: readonly {readonly name: string; readonly parameters: readonly {
+    readonly name: string; readonly variance: NominalVariance; readonly used: boolean; readonly constrainedByOutput: boolean;
+  }[]}[];
+  readonly nodes: number; readonly edges: number; readonly storedFields: number; readonly work: number;
+  readonly evaluations: number; readonly refinements: number;
+  readonly equationCount: number; readonly equationEdges: number; readonly equationRefinements: number;
+}
+export interface RustSemanticSummary { nominalVariance: NominalVarianceReport; [stage: string]: unknown }
 export interface RustArtifact {
   version: string; entry: string | null; js: string; wasm: {bytes: number[]; [name: string]: unknown};
   mir: MirFunction[]; optimizedMir: MirFunction[]; diagnostics: Diagnostic[]; timings: {name: string; ms: number}[];
-  verification: unknown; ast: unknown; tokens: unknown[]; sem: unknown; [stage: string]: unknown;
+  verification: unknown; ast: unknown; tokens: unknown[]; sem: RustSemanticSummary; [stage: string]: unknown;
 }
 export interface UIAttribute { name: string; kind: 'string' | 'expression' | 'boolean'; value?: string | boolean; start: number; end: number }
 export interface UINode { id: string; kind: 'element' | 'text' | 'expression'; span: SourceSpan; start: number; end: number; tag?: string | null; value?: string; attributes?: UIAttribute[]; children?: UINode[] }

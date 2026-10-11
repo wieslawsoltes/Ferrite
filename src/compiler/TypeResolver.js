@@ -43,6 +43,7 @@ export class TypeResolver {
           return this.remember(key, result);
         }
         const {name, args} = T.application(type), arguments_ = args.map(next);
+        if (name === 'Self' && args.length) throw new Diagnostic('E0109', 'Type arguments are not allowed on Self', node?.span);
         const alias = parameters.has(name) ? null : this.find(this.index.aliases, name, module, node);
         if (alias) {
           const applied = this.index.genericDefaults.expand(alias, arguments_, {node, parameters, module});
@@ -125,19 +126,6 @@ export class TypeResolver {
   }
   /** Check stored field declarations even when no function constructs their type. */
   validateNominals() {
-    const used = (type, parameters, found) => {
-      if (T.reference(type)) return used(T.target(type), parameters, found);
-      const fn=T.function(type);if(fn){[...fn.params,fn.result].forEach(t=>used(t,parameters,found));return;}
-      const tuple = T.tuple(type); if (tuple) { tuple.forEach(t => used(t, parameters, found)); return; }
-      const array = T.array(type); if (array) return used(array.element, parameters, found);
-      const prefix=/^(Fn|FnMut|FnOnce)(?=\()/.exec(type), callable=prefix?T.function('fn'+type.slice(prefix[1].length)):null;
-      if (callable) { [...callable.params, callable.result].forEach(t => used(t, parameters, found)); return; }
-      const projection = T.projection(type);
-      if (projection) { used(projection.self, parameters, found); T.application(projection.trait).args.forEach(t => used(t, parameters, found)); return; }
-      const app = T.application(type);
-      if (parameters.has(app.name)) found.add(app.name);
-      app.args.forEach(t => used(t, parameters, found));
-    };
     for (const shape of [...this.index.structs.values(), ...this.index.enums.values()]) {
       const parameters = new Set(shape.generics.map(g => g.name));
       if (parameters.size !== shape.generics.length)
@@ -156,17 +144,12 @@ export class TypeResolver {
       }
       const fields = shape.fields?.map(field => ({type:field.type,node:field})) ??
         shape.variants.flatMap(variant => variant.fields.map((type, i) => ({type,node:variant.members?.[i] ?? variant})));
-      const found = new Set();
       for (const field of fields) {
         if (/\b_\b/.test(field.type)) throw new Diagnostic('E0121', 'Inferred placeholder types are not allowed in stored field declarations', field.node.span ?? shape.span);
         if (/\bimpl\s/.test(field.type)) throw new Diagnostic('E0562', 'impl Trait is not allowed in stored field declarations', field.node.span ?? shape.span);
-        const type = this.resolve(field.type, shape.module, shape.name, parameters, [], {...field.node, typeContext: shape});
+        const type = this.resolve(field.type, shape.module, T.traitName(shape.name, [...parameters]), parameters, [], {...field.node, typeContext: shape});
         this.validateKnown(type, parameters, {...shape,span:field.node.span ?? shape.span});
-        used(type, parameters, found);
-        for (const parameter of parameters) if (T.substitute(field.type, new Map([[parameter, '__FerriteFieldParameterUse']]), true) !== field.type) found.add(parameter);
       }
-      for (const name of parameters) if (!found.has(name) && shape.builtin !== 'phantom')
-        throw new Diagnostic('E0392', `Type parameter ${name} is never used in ${shape.name}`, shape.span);
     }
   }
   snapshot() { return {hits: this.hits, misses: this.misses, entries: this.cache.size, characters: this.characters, aliases: [...this.expansions.values()]}; }

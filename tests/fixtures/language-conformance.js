@@ -1,3 +1,4 @@
+import {nominalVarianceCases, nominalVarianceCompileFailCases} from './nominal-variance.js';
 import {relaxedSizedCases, relaxedSizedCompileFailCases} from './relaxed-sized.js';
 import {genericDefaultCases, genericDefaultCompileFailCases} from './generic-defaults.js';
 import {associatedBoundCases, associatedBoundCompileFailCases} from './associated-bounds.js';
@@ -171,3 +172,6 @@ languageCases.push(...genericDefaultCases.map(([name, source, output]) => ({name
 
 languageCases.push(...relaxedSizedCases.map(([name, source, output]) => ({name, source, output, kind: 'run'})),
   ...relaxedSizedCompileFailCases.map(([name, source]) => ({name, source, kind: 'compile-fail'})));
+
+languageCases.push(...nominalVarianceCases.map(([name, source, output]) => ({name, source, output, kind: 'run'})),
+  ...nominalVarianceCompileFailCases.map(([name, source]) => ({name, source, kind: 'compile-fail'})));

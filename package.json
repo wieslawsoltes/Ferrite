@@ -21,6 +21,7 @@
     "test:repositories": "node tools/repository-smoke.mjs",
     "test:browser-agent": "python tools/browser-agent-acceptance.py && python tools/anthropic-agent-acceptance.py",
     "test:language": "node tools/language-conformance.mjs",
+    "test:variance:native": "node tools/variance-conformance.mjs",
     "benchmark:verifier": "node tools/benchmark-verifier.mjs",
     "test:terminal": "node --test tests/terminal-*.test.js",
     "vendor:terminal": "node tools/vendor-terminal.mjs --fetch",

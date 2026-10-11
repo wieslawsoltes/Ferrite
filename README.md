@@ -21,7 +21,7 @@ Find in Files has source-linked results, include/exclude masks, explicit replace
 
 Every compiler representation uses original-file UTF-16 spans: selecting a token, AST/HIR node, symbol, obligation, ownership event, generic instance, MIR instruction, call site, diagnostic or mapped generated-JavaScript line navigates to the source. Editor selections highlight matching visible items. Edits invalidate old spans instead of navigating into obsolete source.
 
-Language continuation: [associated constants](docs/associated-constants.md), [associated types and projections](docs/associated-types.md), [equality bindings](docs/associated-bindings.md), [associated bounds and ownership proofs](docs/associated-bounds.md), [default generic type parameters](docs/generic-defaults.md), and [relaxed Sized bounds and storage checks](docs/relaxed-sized.md).
+Language continuation: [associated constants](docs/associated-constants.md), [associated types and projections](docs/associated-types.md), [equality bindings](docs/associated-bindings.md), [associated bounds and ownership proofs](docs/associated-bounds.md), [default generic type parameters](docs/generic-defaults.md), [relaxed Sized bounds and storage checks](docs/relaxed-sized.md), and [nominal variance and constrained parameters](docs/nominal-variance.md).
 
 ## Rust UI Studio and embeddable compiler
 

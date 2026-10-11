@@ -43,6 +43,7 @@ export class SemanticAnalyzer {
     this.index.associatedBindings.validateUses();
     this.index.genericDefaults.validateDefinitions(this);
     this.index.sizedTypes.validateDefinitions(this);
+    this.index.nominalVariance.validate();
   }
   static analyze(ast, options) { return new SemanticAnalyzer(ast, options).analyze(); }
   analyze() {
@@ -62,7 +63,7 @@ export class SemanticAnalyzer {
     for (const instance of this.instances.values()) if (instance.fn.isConst) this.constants.validate(instance);
     this.closures.finish();this.functionValues.finish();
     this.discriminants.annotate(this.instances.values());
-    return {sizedTypes:this.index.sizedTypes.snapshot(),genericDefaults:this.index.genericDefaults.snapshot(),associatedBindings:this.index.associatedBindings.snapshot(),associatedTypes:this.index.associatedTypes.snapshot(),traitResolution:this.implementations.traits.snapshot(),implementations: this.implementations.snapshot(), discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
+    return {nominalVariance:this.index.nominalVariance.snapshot(),sizedTypes:this.index.sizedTypes.snapshot(),genericDefaults:this.index.genericDefaults.snapshot(),associatedBindings:this.index.associatedBindings.snapshot(),associatedTypes:this.index.associatedTypes.snapshot(),traitResolution:this.implementations.traits.snapshot(),implementations: this.implementations.snapshot(), discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
       symbols: [...this.index.symbols, ...this.index.associatedTypes.symbols()], structures: this.canonicalShapes(this.index.structs).filter(shape => !shape.builtin),
       enums: this.canonicalShapes(this.index.enums), warnings: this.warnings, entry: this.entryKey,
       capabilities: {ownership: 'conservative whole-local analysis', traits: 'generic declared-trait impls and built-in bounds'}};
@@ -70,7 +71,8 @@ export class SemanticAnalyzer {
   annotate(node, type) { node.type = type; return type; }
   canonicalShapes(shapes) {
     return [...shapes.values()].map(shape=>{
-      const normalize=type=>this.index.type(type,shape.module??'',null,new Set((shape.generics??[]).map(p=>p.name)),shape);
+      const parameters=new Set((shape.generics??[]).map(p=>p.name));
+      const normalize=type=>this.index.type(type,shape.module??'',T.traitName(shape.name,[...parameters]),parameters,shape);
       return {...shape,...(shape.fields?{fields:shape.fields.map(field=>({...field,type:normalize(field.type)}))}:{}),...(shape.variants?{variants:shape.variants.map(variant=>({...variant,fields:variant.fields.map(normalize)}))}:{})};
     });
   }

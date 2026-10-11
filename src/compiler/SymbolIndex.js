@@ -2,6 +2,7 @@ import {TypeSystem as T} from './TypeSystem.js';
 import {TypeResolver} from './TypeResolver.js';
 import {GenericDefaults} from './GenericDefaults.js';
 import {SizedTypes} from './SizedTypes.js';
+import {NominalVariance} from './NominalVariance.js';
 import {Diagnostic} from './Diagnostic.js';
 import {AssociatedConstant} from './AssociatedConstant.js';
 import {AssociatedTypeResolver} from './AssociatedTypeResolver.js';
@@ -33,7 +34,8 @@ export class SymbolIndex {
     this.sizedTypes = new SizedTypes(this);
     this.sizedTypes.validateRelaxations();
     this.genericDefaults.validateSyntax();
-    if (validate) this.typeResolver.validate();
+    this.nominalVariance = new NominalVariance(this);
+    if (validate) { this.typeResolver.validate(); this.nominalVariance.validate(); }
     // Tuple/unit constructors occupy the value namespace; record types do not.
     for (const shape of this.structs.values()) if (shape.form === 'tuple' || shape.form === 'unit') {
       if (this.functions.has(shape.name) || this.constants.has(shape.name))
@@ -205,7 +207,9 @@ export class SymbolIndex {
   instantiatedType(type, declaration, mapping, node = declaration, callerParameters = new Set()) {
     const parameters = new Set((declaration.generics ?? []).map(g => g.name));
     const context = {...node, typeContext: declaration};
-    const formal = this.type(type, declaration.module, declaration.owner ?? declaration.name, parameters, context);
+    const self = ['struct', 'enum'].includes(declaration.kind)
+      ? T.traitName(declaration.name, [...parameters]) : declaration.owner ?? declaration.name;
+    const formal = this.type(type, declaration.module, self, parameters, context);
     return this.typeResolver.substitute(formal, mapping, context, callerParameters);
   }
   type(type, module, self = null, parameters = new Set(), node = null) {

@@ -114,3 +114,5 @@ dispatch. Shared native fixtures cover accepted and rejected programs; separate
 unit tests cover syntax diagnostics, immutable ASTs, query replay and bounded
 proof-cache recovery. This is not full unsized ABI, slice, coercion, variance or
 universal generic-body support.
+
+[Nominal variance](nominal-variance.md) adds declaration-owned field polarity, unused/recursive-only parameter checks, explicit output-constraint closure, and generic Self field signatures. Its native differential gate additionally observes reported variances using deterministic nominal graphs and native-only lifetime cast probes. This does not claim browser lifetime or subtyping support.

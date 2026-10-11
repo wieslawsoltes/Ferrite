@@ -58,3 +58,9 @@ exportNativeHTML(nativeBytes); decodeNativeBase64('');
 // @ts-expect-error native imports accept Wasm bytes, not a source string.
 mountNativeUI('fn main() {}', node);
 void nativeSession;
+
+// Compiler metadata is concrete and readonly, not an untyped debugging blob.
+import {compileRust as compileVariance, type NominalVariance} from 'ferrite-compiler';
+const varianceReport = compileVariance('struct S<T>(T); fn main(){}').sem.nominalVariance;
+const variancePolarity: NominalVariance | undefined = varianceReport.declarations[0]?.parameters[0]?.variance;
+void variancePolarity;

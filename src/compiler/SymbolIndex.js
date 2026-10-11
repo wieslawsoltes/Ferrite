@@ -1,6 +1,7 @@
 import {TypeSystem as T} from './TypeSystem.js';
 import {TypeResolver} from './TypeResolver.js';
 import {Diagnostic} from './Diagnostic.js';
+import {AssociatedConstant} from './AssociatedConstant.js';
 
 /** Declaration indexing and namespace resolution are independent of expression typing. */
 export class SymbolIndex {
@@ -36,6 +37,7 @@ export class SymbolIndex {
   addItems(items, module) {
     for (const original of items) {
       const item = {...original, module: original.module ?? module};
+      if (item.kind === 'impl' || item.kind === 'trait') item.methods = item.methods.map(AssociatedConstant.descriptor);
       const prefix = item.module ? item.module + '::' : '';
       this.moduleRoots.set(item.module, item.crateRoot ?? this.moduleRoots.get(item.module) ?? '');
       if (item.kind === 'mod') {
@@ -51,7 +53,7 @@ export class SymbolIndex {
       if (item.kind === 'impl') {
         const implIndex = this.impls.length; this.impls.push(item);
         for (const method of item.methods) {
-          if (method.kind !== 'fn') throw new Diagnostic('F_IMPL_ITEM', 'Associated constants and types are not yet supported', method.span);
+          if (method.kind !== 'fn') throw new Diagnostic('F_IMPL_ITEM', 'Associated types are not yet supported', method.span);
           const inherited = item.generics ?? [], names = new Set();
           for (const parameter of [...inherited, ...method.generics]) {
             if (names.has(parameter.name)) throw new Diagnostic('E0403', `Duplicate generic parameter ${parameter.name}`, method.span);
@@ -73,7 +75,7 @@ export class SymbolIndex {
       if (['struct', 'enum', 'typeAlias', 'trait'].includes(item.kind) && [this.structs, this.enums, this.aliases, this.traits].some(map => map.has(item.name))) throw new Diagnostic('E0428', `Duplicate type declaration ${item.name}`, item.span);
       if (target.has(item.name)) throw new Diagnostic('E0428', `Duplicate declaration ${item.name}`, item.span);
       target.set(item.name, item);
-      this.symbols.push({id: item.id, name: item.name, kind: item.kind, span: item.span, loc: item.loc, line: item.span?.line});
+      this.symbols.push({id: item.id, name: item.name, kind: item.associatedConstant ? 'const' : item.kind, span: item.span, loc: item.loc, line: item.span?.line});
     }
   }
   candidates(name, module = '') {

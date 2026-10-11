@@ -26,29 +26,49 @@ export class ConstantEvaluator {
     this.steps = 0; this.evaluations = 0; this.hits = 0; this.sequence = 0;
   }
 
+  /** Check unused concrete initializers without executing them. Type-only
+   * reference nodes live exclusively in an isolated analyzer; they never
+   * reach lowering, the query cache, debugger or emitted runtime artifacts. */
+  checkAssociatedDefinitions() {
+    if (![...this.index.functions.values()].some(fn => fn.associatedConstant && fn.body && !fn.generics.length)) return;
+    // Function items, closures, obligations and discriminants also own side tables;
+    // isolating just instances would leave dangling callable identities behind.
+    const a = new this.analyzer.constructor(this.analyzer.ast, {mode: 'library',
+      maxInstances: this.analyzer.maxInstances, constEvaluation: this.analyzer.constEvaluationOptions});
+    a.constants.checkingDefinition = true;
+    for (const fn of a.index.functions.values()) if (fn.associatedConstant && fn.body && !fn.generics.length)
+      a.instantiate(fn, [], [], fn);
+    for (const instance of a.instances.values()) if (instance.fn.isConst) a.constants.validate(instance);
+    OwnershipAnalyzer.analyze({instances: [...a.instances.values()]});
+  }
+
   constant(declaration, use = declaration) {
     return this.evaluate(declaration.value, declaration.module, declaration.type, declaration, `item:${declaration.name}`, use);
   }
 
-  expression(expression, module = '', expected = '_', use = expression) {
-    return this.evaluate(expression, module, expected, use, null, use);
+  expression(expression, module = '', expected = '_', use = expression, context = null) {
+    const fn = context?.instance.fn, arguments_ = context?.instance.substitution ?? new Map(Object.entries(context?.instance.typeArguments ?? {}));
+    return this.evaluate(expression, module, expected, use, null, use, fn?.owner, fn ?
+      {declaration: fn, explicit: fn.generics.map(g => arguments_.get(g.name))} : null);
   }
 
-  length(source, module = '', node = null, parameters = new Set()) {
+  length(source, module = '', node = null, parameters = new Set(), owner = null) {
     if (parameters.has(source)) return source;
     if (/^\d+$/.test(source)) {
       const value = BigInt(source);
       if (value > 0xffffffffn) throw new Diagnostic('E0080', 'Array length overflows the browser target usize (32 bits)', node?.span);
       return String(value);
     }
-    const key = `length:${module}:${source}`;
+    const declaration = node?.typeContext ?? node;
+    const scope = {generics: [], predicates: [], defaultTrait: declaration?.defaultTrait, implementedTrait: declaration?.implementedTrait};
+    const key = 'length:' + JSON.stringify([module, owner, scope.defaultTrait, scope.implementedTrait, source]);
     if (this.cache.has(key)) { this.hits++; return this.cache.get(key).expression.value; }
     const parser = new Parser(Lexer.tokenize(source, {file: node?.span?.file ?? '<array-length>'}));
     const expression = parser.expr(); parser.c.eat('EOF');
     // Type names are canonical strings. Reparsed length syntax is attributed to
     // the original declaration, never to invented offsets in a generated file.
     if (node?.span) this.reanchor(expression, node.span);
-    return this.evaluate(expression, module, 'usize', node ?? expression, key).expression.value;
+    return this.evaluate(expression, module, 'usize', node ?? expression, key, node ?? expression, owner, {declaration: scope, explicit: []}).expression.value;
   }
 
   reanchor(node, span) {
@@ -58,20 +78,23 @@ export class ConstantEvaluator {
     for (const [key, value] of Object.entries(node)) if (!['span', 'loc'].includes(key)) this.reanchor(value, span);
   }
 
-  evaluate(expression, module, expected, origin, key = null, use = origin, owner = null) {
+  evaluate(expression, module, expected, origin, key = null, use = origin, owner = null, specialization = null) {
     if (key && this.cache.has(key)) { this.hits++; return this.cache.get(key); }
     if (key && this.active.has(key)) throw new Diagnostic('E0391', 'Cycle in constant evaluation', use?.span, [{message: [...this.active, key].join(' → '), span: origin?.span}]);
     if (++this.evaluations > this.maxExpressions || this.active.size >= 128) throw new Diagnostic('F_CONST_BUDGET', 'Constant evaluation expression/dependency budget exceeded', origin?.span);
-    const name = `$const$${this.sequence++}`, rootKey = `${name}<>`;
-    const fn = {kind: 'fn', name, localName: name, module, isConst: true, constRoot: true, owner,
-      generics: [], predicates: [], params: [], returnType: expected, attributes: [], visibility: 'private',
+    const name = `$const$${this.sequence++}`; let rootKey = null;
+    const fn = {...specialization?.declaration, kind: 'fn', name, localName: name, module, isConst: true, constRoot: true, owner,
+      generics: specialization?.declaration.generics ?? [], predicates: specialization?.declaration.predicates ?? [],
+      params: [], returnType: expected, attributes: [], visibility: 'private',
       span: origin?.span ?? expression.span, id: `${expression.id}:const-root`,
       body: {kind: 'block', id: `${expression.id}:const-body`, span: expression.span, body: [], tail: structuredClone(expression)}};
-    const queryCache = this.analyzer.queryCache;
+    const queryCache = this.analyzer.queryCache, checkingDefinition = this.checkingDefinition;
+    this.checkingDefinition = false;
     if (key) this.active.add(key);
     this.analyzer.queryCache = null;
     try {
-      const instance = this.analyzer.instantiate(fn, [], [], origin ?? expression);
+      const instance = this.analyzer.instantiate(fn, [], specialization?.explicit ?? [], use ?? origin ?? expression);
+      rootKey = instance.key;
       const reachable = this.reachable(instance);
       for (const current of reachable) this.validate(current);
       OwnershipAnalyzer.analyze({instances: reachable});
@@ -119,8 +142,8 @@ export class ConstantEvaluator {
         value: this.preview(machine.result, machine.runtime), span: origin?.span ?? expression.span});
       return result;
     } finally {
-      this.analyzer.queryCache = queryCache;
-      this.analyzer.instances.delete(rootKey);
+      this.analyzer.queryCache = queryCache; this.checkingDefinition = checkingDefinition;
+      if (rootKey) this.analyzer.instances.delete(rootKey);
       if (key) this.active.delete(key);
     }
   }

@@ -9,7 +9,7 @@ export class FunctionValueAnalyzer {
     this.a=analyzer;this.index=analyzer.index;this.records=new Map();this.interned=new Map();this.aliases=new Map();this.sequence=0;this.closureAdapters=new Map();
   }
   static requiresFreshQueries(ast,index) {
-    const names=new Set([...index.functions.keys(),...index.structs.keys()]);
+    const names=new Set([...index.functions.values()].filter(fn=>!fn.associatedConstant).map(fn=>fn.name).concat([...index.structs.keys()]));
     for(const declaration of index.enums.values())for(const variant of declaration.variants)if((variant.form??(variant.fields.length?'tuple':'unit'))==='tuple')names.add(variant.name);
     for(const imports of index.imports.values())for(const alias of imports.keys())names.add(alias);
     for(const name of [...names])names.add(name.split('::').at(-1));

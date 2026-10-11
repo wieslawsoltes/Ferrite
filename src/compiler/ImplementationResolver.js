@@ -162,6 +162,8 @@ export class ImplementationResolver {
   }
   associated(node, context) {
     if(node.qualifiedTrait) {
+      if (node.name.slice('__qualified::'.length).includes('::'))
+        throw new Diagnostic('E0223', 'Associated type projections in value paths are not supported', node.span);
       const type=this.a.normalize(node.qualifiedSelf,context,node);
       const module=context.instance.fn.module;
       const trait=this.traits.hierarchy.canonical(node.qualifiedTrait,module,node,new Set(context.instance.substitution.keys()),type);
@@ -173,7 +175,7 @@ export class ImplementationResolver {
     }
     const separator = node.name.lastIndexOf('::'); if (separator < 0) return null;
     let owner = node.name.slice(0, separator);
-    const boundTraits = context.methodScope?.traits(owner);
+    const boundTraits = context.methodScope?.traits(owner === 'Self' ? context.methodScope.normalize('Self') : owner);
     const method = node.name.slice(separator + 2), module = context.instance.fn.module;
     if (owner === 'Self') owner = context.instance.fn.owner;
     else owner = T.substitute(owner, context.instance.substitution ?? new Map(Object.entries(context.instance.typeArguments)));

@@ -4,7 +4,7 @@ import {ImplTypePattern} from './ImplTypePattern.js';
 import {ImplObligations} from './ImplObligations.js';
 import {TraitHierarchy} from './TraitHierarchy.js';
 
-/** Per-analysis, bounded solver for declared (non-parameterized) user traits.
+/** Per-analysis, bounded solver for declared, optionally parameterized user traits.
  * Trait identities are canonical declaration names, not their last path segment.
  * This is inductive proof: an obligation in progress is never proof of itself. */
 export class TraitImplementationResolver {
@@ -35,11 +35,11 @@ export class TraitImplementationResolver {
       const traitRequirements=new ImplObligations(this.a,{target:'Self',impl:traitDeclaration},traitDeclaration);
       for(const generic of traitParameters)traitRequirements.validate(generic.name,trait);
       for(const method of trait.methods) {
-        if(method.kind!=='fn')throw new Diagnostic('F_TRAIT_ITEM','Associated types and constants require their trait continuation',method.span);
-        if(seen.has(method.localName))throw new Diagnostic('E0428',`Duplicate trait method ${method.localName}`,method.span);
+        if(method.kind!=='fn')throw new Diagnostic('F_TRAIT_ITEM','Associated types require their trait continuation',method.span);
+        if(seen.has(method.localName))throw new Diagnostic('E0428',`Duplicate associated item ${method.localName}`,method.span);
         seen.add(method.localName);
-        if(method.isConst)throw new Diagnostic('E0379','Trait methods cannot be const',method.span);
-        if(method.visibility==='pub')throw new Diagnostic('E0449','Trait methods inherit the trait visibility',method.span);
+        if(method.isConst&&!method.associatedConstant)throw new Diagnostic('E0379','Trait methods cannot be const',method.span);
+        if(method.visibility==='pub')throw new Diagnostic('E0449','Trait items inherit the trait visibility',method.span);
         const parameters=new Set(['Self',...traitParameters.map(g=>g.name),...method.generics.map(g=>g.name)]);
         if(parameters.size!==method.generics.length+traitParameters.length+1)throw new Diagnostic('E0403','Duplicate trait method parameter',method.span);
         const declaration={...method,module:trait.module,unsizedSelf:true,generics:[{name:'Self',bounds:[identity]},...traitParameters,...method.generics],predicates:[...(trait.predicates??[]),...(method.predicates??[])]};
@@ -98,10 +98,11 @@ export class TraitImplementationResolver {
     const declared=new Map(trait.methods.map(method=>[method.localName,method]));
     for(const [name,fn] of entry.methods) {
       const expected=declared.get(name);
-      if(!expected)throw new Diagnostic('E0407',`${name} is not a member of ${trait.name}`,fn.span);
-      if(fn.isConst)throw new Diagnostic('E0379','Trait implementation methods cannot be const',fn.span);
+      if(!expected)throw new Diagnostic(fn.associatedConstant?'E0438':'E0407',`${name} is not a member of ${trait.name}`,fn.span);
+      if(!!fn.associatedConstant!==!!expected.associatedConstant)throw new Diagnostic(fn.associatedConstant?'E0323':'E0324',`Associated item kind differs from ${trait.name}::${name}`,fn.span);
+      if(fn.isConst&&!fn.associatedConstant)throw new Diagnostic('E0379','Trait implementation methods cannot be const',fn.span);
       // SymbolIndex assigns effective visibility; inspect the original declaration.
-      if(impl.methods.find(method=>method.localName===name)?.visibility==='pub')throw new Diagnostic('E0449','Trait impl methods cannot declare visibility',fn.span);
+      if(impl.methods.find(method=>method.localName===name)?.visibility==='pub')throw new Diagnostic('E0449','Trait impl items cannot declare visibility',fn.span);
       const actual=fn.generics.slice(fn.implGenericCount??0);
       if(actual.length!==expected.generics.length)throw new Diagnostic('E0049',`Generic arity differs from ${trait.name}::${name}`,fn.span);
       if(fn.params.length!==expected.params.length)throw new Diagnostic('E0050',`Parameter count differs from ${trait.name}::${name}`,fn.span);

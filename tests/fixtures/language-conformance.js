@@ -1,3 +1,4 @@
+import {associatedConstantCases, associatedConstantCompileFailCases} from './associated-constants.js';
 import {parameterizedTraitCases,parameterizedTraitCompileFailCases} from './parameterized-traits.js';
 import {supertraitCases as recoveredSupertraitCases, supertraitCompileFailCases as recoveredSupertraitCompileFailCases} from './recovered-supertraits.js';
 import {supertraitCases, supertraitCompileFailCases} from './supertraits.js';
@@ -147,3 +148,6 @@ languageCases.push(...receiverReborrowPanicCases.map(([name,source,code,output])
 
 languageCases.push(...parameterizedTraitCases.map(([name, source, output]) => ({name, source, output, kind:'run'})),
   ...parameterizedTraitCompileFailCases.map(([name, source]) => ({name, source, kind:'compile-fail'})));
+
+languageCases.push(...associatedConstantCases.map(([name, source, output]) => ({name, source, output, kind: 'run'})),
+  ...associatedConstantCompileFailCases.map(([name, source]) => ({name, source, kind: 'compile-fail'})));

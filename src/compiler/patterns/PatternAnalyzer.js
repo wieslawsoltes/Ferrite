@@ -1,3 +1,4 @@
+import {AssociatedConstant} from '../AssociatedConstant.js';
 import {EnumRecordAnalyzer} from '../EnumRecordAnalyzer.js';
 import {Diagnostic} from '../Diagnostic.js';
 import {TypeSystem as T} from '../TypeSystem.js';
@@ -6,12 +7,41 @@ import {TypeSystem as T} from '../TypeSystem.js';
 export class PatternAnalyzer {
   constructor(analyzer) { this.analyzer = analyzer; }
 
+  constant(pattern, context, required) {
+    const a = this.analyzer, module = context.instance.fn.module;
+    const global = a.index.resolve(a.index.constants, pattern.name, module, pattern, false);
+    if (global) return a.constants.constant(global, pattern).expression;
+    if (pattern.name.includes('::') || pattern.qualifiedTrait) {
+      // Constructor resolution must retain its own diagnostics and visibility.
+      if (a.index.constructorFor(pattern.name, module, pattern)) return null;
+      const parameters = new Set(context.instance.fn.generics.map(g => g.name));
+      const owner = pattern.name.split('::').slice(0, -1).join('::');
+      const raw = [pattern.qualifiedSelf, pattern.qualifiedTrait, ...(pattern.ownerTypeArguments ?? []),
+        owner === 'Self' ? context.methodScope.normalize('Self') : owner].filter(Boolean).join(',');
+      if ([...parameters].some(name => T.substitute(raw, new Map([[name, '_']])) !== raw))
+        throw new Diagnostic('E0158', 'Generic associated constants cannot be used in patterns', pattern.span);
+      const resolved = a.implementations.associated(pattern, context);
+      if (resolved?.fn.associatedConstant) return AssociatedConstant.evaluate(a, resolved, pattern, context).expression;
+    }
+    if (required) throw new Diagnostic('E0158', 'Expected a scalar constant path', pattern.span);
+    return null;
+  }
+
+  constructorArguments(pattern, owner, type, context) {
+    if (!pattern.ownerTypeArguments) return;
+    if (pattern.ownerTypeArguments.length !== owner.generics.length)
+      throw new Diagnostic('E0107', `Wrong number of pattern type arguments for ${owner.name}`, pattern.span);
+    const actual = T.application(type).args;
+    pattern.ownerTypeArguments.forEach((argument, index) =>
+      T.unify(actual[index], this.analyzer.normalize(argument, context, pattern), new Map(), pattern));
+  }
+
   analyze(pattern, type, context, mutable = false, bindings = new Map(), names = new Set(), reuse = false) {
     pattern.type = type;
     if (pattern.kind === 'variantPattern' && !pattern.items.length) {
-      const constant = this.analyzer.index.resolve(this.analyzer.index.constants, pattern.name, context.instance.fn.module, pattern, false);
-      if (constant) {
-        const literal = this.analyzer.constants.constant(constant, pattern).expression;
+      const literal = this.constant(pattern, context, false);
+      if (literal) {
+        if (pattern.tupleSyntax) throw new Diagnostic('E0532', 'A constant pattern cannot use constructor parentheses', pattern.span);
         if (literal.kind !== 'literal') throw new Diagnostic('F_PATTERN_CONST', 'Aggregate constant patterns require structural equality support', pattern.span);
         pattern.kind = 'literal'; pattern.value = literal.value; pattern.type = literal.type;
       }
@@ -76,8 +106,7 @@ export class PatternAnalyzer {
         for (const key of ['from', 'to']) {
           const endpoint = pattern[key];
           if (endpoint.kind === 'bindingPattern' || endpoint.kind === 'variantPattern') {
-            const constant = this.analyzer.index.resolve(this.analyzer.index.constants, endpoint.name, context.instance.fn.module, endpoint);
-            pattern[key] = structuredClone(this.analyzer.constants.constant(constant, endpoint).expression);
+            pattern[key] = structuredClone(this.constant(endpoint, context, true));
           }
           T.unify(type, this.analyzer.infer(pattern[key], context, type), new Map(), pattern[key]);
           if (pattern[key].kind !== 'literal') throw new Diagnostic('E0158', 'Range endpoint must be a scalar constant', endpoint.span);
@@ -120,10 +149,12 @@ export class PatternAnalyzer {
       }
       case 'structPattern': {
         const constructor = this.analyzer.index.constructorFor(pattern.name.startsWith('Self::') ? context.instance.fn.owner + pattern.name.slice(4) : pattern.name, context.instance.fn.module, pattern);
+        if (constructor?.kind === 'enum') this.constructorArguments(pattern, constructor.owner, type, context);
         if (constructor?.kind === 'enum') return EnumRecordAnalyzer.pattern(this.analyzer, pattern, constructor, type, context, mutable, bindings, names, reuse);
         const shape = this.analyzer.index.resolve(this.analyzer.index.structs, T.application(this.analyzer.index.type(pattern.name, context.instance.fn.module, context.instance.fn.owner)).name, context.instance.fn.module, pattern);
         const app = T.application(type);
         if (app.name !== shape.name) throw new Diagnostic('E0308', `Pattern ${shape.name} does not match ${type}`, pattern.span);
+        this.constructorArguments(pattern, shape, type, context);
         const substitution = new Map(shape.generics.map((g, i) => [g.name, app.args[i]]));
         const fields = new Set();
         for (const field of pattern.fields) {
@@ -142,6 +173,7 @@ export class PatternAnalyzer {
         const constructor = this.analyzer.index.constructorFor(pattern.name === 'Self' ? context.instance.fn.owner : pattern.name.startsWith('Self::') ? context.instance.fn.owner + pattern.name.slice(4) : pattern.name, context.instance.fn.module, pattern);
         const app = T.application(type);
         if (!constructor || constructor.owner.name !== app.name) throw new Diagnostic('E0532', `Pattern ${pattern.name} does not match ${type}`, pattern.span);
+        this.constructorArguments(pattern, constructor.owner, type, context);
         if (constructor.kind === 'struct') {
           if (Boolean(pattern.tupleSyntax) !== (constructor.form === 'tuple'))
             throw new Diagnostic('E0532', `Expected ${constructor.form === 'tuple' ? 'tuple' : 'unit'} constructor pattern for ${pattern.name}`, pattern.span);

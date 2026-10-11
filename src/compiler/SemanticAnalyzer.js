@@ -1,3 +1,4 @@
+import {AssociatedConstant} from './AssociatedConstant.js';
 import {inferDataMethod} from './DataMethods.js';
 import {TraitMethodScope} from './TraitMethodScope.js';
 import {ImplementationResolver} from './ImplementationResolver.js';
@@ -19,6 +20,7 @@ import {ClosureAnalyzer} from './closures/ClosureAnalyzer.js';
 /** Monomorphized typed HIR. Every local has an identity independent of its spelling. */
 export class SemanticAnalyzer {
   constructor(ast, {entry = 'main', mode = 'run', maxInstances = 2048, queryCache = null, constEvaluation = {}} = {}) {
+    this.ast = ast; this.constEvaluationOptions = constEvaluation;
     this.index = new SymbolIndex(ast, {validate: false});
     // Synthesized closure declarations belong to this analysis session. Never replay
     // cached callers without their anonymous declaration/capture environment.
@@ -38,6 +40,7 @@ export class SemanticAnalyzer {
   static analyze(ast, options) { return new SemanticAnalyzer(ast, options).analyze(); }
   analyze() {
     this.discriminants.validate();
+    this.constants.checkAssociatedDefinitions();
     for (const constant of this.index.constants.values()) this.constants.constant(constant);
     if (this.mode !== 'library') {
       const main = this.index.resolve(this.index.functions, this.entry, '', null);
@@ -45,7 +48,7 @@ export class SemanticAnalyzer {
       this.entryKey = this.instantiate(main, [], [], main).key;
     }
     // Rust checks unreachable declarations too, not just the application call graph.
-    for (const fn of this.index.functions.values()) if (fn.body && !fn.generics.length) {
+    for (const fn of this.index.functions.values()) if (fn.body && !fn.generics.length && !fn.associatedConstant) {
       const types = fn.params.map(p => this.index.type(p.type, fn.module, fn.owner));
       this.instantiate(fn, types, [], fn);
     }
@@ -108,7 +111,7 @@ export class SemanticAnalyzer {
   formal(fn, type, substitution = new Map(), node = fn) {
     const parameters = new Set(substitution.keys());
     const owner = fn.defaultTrait ? fn.owner : fn.owner ? this.index.type(fn.owner, fn.module, null, parameters, node) : null;
-    const expanded = this.index.type(type, fn.module, owner, parameters, node);
+    const expanded = this.index.type(type, fn.module, owner, parameters, fn.implementedTrait || fn.defaultTrait ? {...node, typeContext: fn} : node);
     // Resolve declaration names at the definition site before substituting types
     // inferred at the call site. Those types are already canonical: re-resolving
     // them here would incorrectly require the callee to name a private closure
@@ -203,7 +206,7 @@ export class SemanticAnalyzer {
       if(abstractReturn&&!this.hasBound(inferred,abstractReturn))throw new Diagnostic('E0277',`Returned type does not implement ${abstractReturn}`,copy.body.span);
       instance.returnType=inferred;
     }else T.unify(instance.returnType, actual, new Map(), copy.body);
-    if (fn.implGenericCount && new AssigneeAnalyzer(this, ctx).carriesReference(instance.returnType))
+    if (fn.implGenericCount && !fn.associatedConstant && new AssigneeAnalyzer(this, ctx).carriesReference(instance.returnType))
       throw new Diagnostic('F_IMPL_REFERENCE', 'Reference-carrying generic method results require interprocedural loan tracking', node.span);
     instance.locals = ctx.locals;
     delete instance.substitution;
@@ -225,7 +228,7 @@ export class SemanticAnalyzer {
     let type;
     switch (node.kind) {
       case 'constBlock': {
-        const result = this.constants.expression(node.value, ctx.instance.fn.module, expected ?? '_', node);
+        const result = this.constants.expression(node.value, ctx.instance.fn.module, expected ?? '_', node, ctx);
         node.kind = 'constValue'; node.value = structuredClone(result.expression); type = result.type; break;
       }
       case 'assign': case 'return': case 'break': case 'continue':
@@ -261,6 +264,10 @@ export class SemanticAnalyzer {
         const associated = this.implementations.associated(node, ctx);
         const fn = associated?.fn ?? this.index.resolve(this.index.functions,node.name,ctx.instance.fn.module,node,false);
         if(fn?.implIndex!==undefined&&!associated)throw new Diagnostic('E0599',`No applicable in-scope method '${node.name}'`,node.span);
+        if(fn?.associatedConstant) {
+          const result = AssociatedConstant.evaluate(this, associated, node, ctx, expected);
+          node.constant = structuredClone(result.expression); type = result.type; break;
+        }
         if(fn){type=this.functionValues.create(node,fn,ctx,expected,associated ? this.implementations.explicit(associated, node, ctx) : null);break;}
         throw new Diagnostic('E0425', `Unresolved identifier '${node.name}'`, node.span);
       }
@@ -283,7 +290,7 @@ export class SemanticAnalyzer {
         type = `[${itemType};${node.items.length}]`; break;
       }
       case 'repeatArray': {
-        const evaluated = this.constants.expression(node.count, ctx.instance.fn.module, 'usize', node.count);
+        const evaluated = this.constants.expression(node.count, ctx.instance.fn.module, 'usize', node.count, ctx);
         node.count = structuredClone(evaluated.expression);
         const count = Number(node.count.value);
         if (!Number.isSafeInteger(count) || count < 0 || count > 100000) throw new Diagnostic('F0202', 'Array length exceeds the budget', node.span);
@@ -566,6 +573,11 @@ export class SemanticAnalyzer {
     const associated = this.implementations.associated(callee, ctx);
     const fn = associated?.fn ?? this.index.resolve(this.index.functions, name, ctx.instance.fn.module, node);
     if(fn.implIndex!==undefined&&!associated)throw new Diagnostic('E0599',`No applicable in-scope method '${name}'`,node.span);
+    if(fn.associatedConstant) {
+      const type = this.infer(callee, ctx);
+      if (this.functionValues.pointer(type)) return this.functionValues.callPointer(node, ctx, type);
+      throw new Diagnostic('E0618', `${name} is not callable`, node.span);
+    }
     const explicit = associated ? this.implementations.explicit(associated, callee, ctx) :
       (callee.typeArguments ?? []).map(t => this.normalize(t, ctx, callee));
     const result = this.invoke(node, ctx, fn, explicit, expected);
@@ -574,6 +586,7 @@ export class SemanticAnalyzer {
     return result;
   }
   invoke(node, ctx, fn, explicit = [], expected = null, typedArguments = new Map()) {
+    if(fn.associatedConstant)throw new Diagnostic('E0599', `${fn.localName} is an associated constant, not a method`, node.span);
     if (fn.params.length !== node.args.length) throw new Diagnostic('E0061', `${fn.localName ?? fn.name} expects ${fn.params.length} argument(s)`, node.span);
     const mapping = new Map(fn.generics.map((g, i) => [g.name, explicit[i] === '_' ? null : explicit[i] ?? null]));
     // Result context is an inference input, not a cast, and never rewrites an

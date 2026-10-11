@@ -68,3 +68,5 @@ shared reads during reservation but rejecting conflicting writes and live aliase
 Borrow instructions validate and capture the storage location before evaluating
 arguments. See [Receiver reborrows](receiver-reborrows.md) for supported origins,
 evaluation ordering and the conservative reference-result boundary.
+
+Associated constants have [dedicated resolution, CTFE and isolation coverage](associated-constants.md), shared unchanged with the installed-rustc differential corpus.

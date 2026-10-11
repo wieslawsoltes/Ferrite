@@ -115,7 +115,7 @@ export class Parser {
     if (this.c.match('<')) type += '<' + this.list('>', () => this.type()).join(',') + '>';
     return type;
   }
-  item(owner = null, trait = null) {
+  item(owner = null, trait = null, traitDeclaration = false) {
     const start = this.c.peek(), attributes = this.attributes();
     const visibility = this.c.match('pub') ? 'pub' : 'private';
     if (this.c.is('const') && this.c.peek(1).value === 'fn') { this.c.take(); this.c.take(); return [this.fn(start, {owner, trait, attributes, visibility, isConst: true})]; }
@@ -185,13 +185,14 @@ export class Parser {
       if (this.c.match(':') && !this.c.is('{') && !this.c.is('where')) { do { bounds.push(this.bound()); } while (this.c.match('+') && !this.c.is('{') && !this.c.is('where')); }
       const predicates = this.whereClause();
       this.c.eat('{'); const methods = [];
-      while (!this.c.is('}')) methods.push(...this.item('Self', name));
+      while (!this.c.is('}')) methods.push(...this.item('Self', name, true));
       this.c.eat('}'); return [this.c.node('trait', start, {name, generics, bounds, predicates, methods, visibility, attributes})];
     }
     if (this.c.match('const')) {
-      const name = this.c.identifier(); this.c.eat(':'); const type = this.type(); this.c.eat('=');
-      const value = this.expr(); this.c.eat(';');
-      return [this.c.node('const', start, {name, type, value, visibility, attributes})];
+      const name = this.c.identifier(); this.c.eat(':'); const type = this.type();
+      const value = this.c.match('=') ? this.expr() : null; this.c.eat(';');
+      if (!value && !traitDeclaration) throw new Diagnostic('E0046', 'A constant definition requires an initializer', start.span);
+      return [this.c.node('const', start, {name, type, value, visibility, attributes, owner, trait})];
     }
     if (this.c.match('mod')) {
       const name = this.c.identifier();
@@ -341,7 +342,16 @@ export class Parser {
     if (this.c.match('[')) return this.c.node('arrayPattern', start, {items: this.list(']', () => this.pattern())});
     if (this.c.match('mut')) return this.c.node('bindingPattern', start, {name: this.c.identifier(), mutable: true});
     if (['number', 'string', 'char', 'byte'].includes(start.kind) || ['true', 'false', '-'].includes(start.value)) return this.expr(10);
-    const name = this.path();
+    let name, qualifiedSelf, qualifiedTrait, ownerTypeArguments;
+    if (this.c.match('<')) {
+      qualifiedSelf = this.type(); this.c.eat('as'); qualifiedTrait = this.type();
+      this.c.eat('>'); this.c.eat('::'); name = '__qualified::' + this.path();
+    } else name = this.path();
+    if (this.c.match('::')) {
+      this.c.eat('<'); ownerTypeArguments = this.list('>', () => this.type());
+      if (this.c.match('::')) name += '::' + this.path();
+    }
+    const pathDetails = {qualifiedSelf, qualifiedTrait, ownerTypeArguments};
     if (this.c.match('{')) {
       const fields = []; let rest = false;
       while (!this.c.is('}')) {
@@ -352,10 +362,10 @@ export class Parser {
         fields.push({name: key, pattern});
         if (!this.c.match(',')) break;
       }
-      this.c.eat('}'); return this.c.node('structPattern', start, {name, fields, rest});
+      this.c.eat('}'); return this.c.node('structPattern', start, {name, fields, rest, ...pathDetails});
     }
-    if (this.c.match('(')) return this.c.node('variantPattern', start, {name, tupleSyntax: true, items: this.list(')', () => this.pattern())});
-    return this.c.node(name.includes('::') || name === 'None' ? 'variantPattern' : 'bindingPattern', start, {name, items: []});
+    if (this.c.match('(')) return this.c.node('variantPattern', start, {name, tupleSyntax: true, items: this.list(')', () => this.pattern()), ...pathDetails});
+    return this.c.node(name.includes('::') || name === 'None' ? 'variantPattern' : 'bindingPattern', start, {name, items: [], ...pathDetails});
   }
   expr(minimum = 0, allowRecord = true) {
     if (++this.depth > 256) throw new Diagnostic('F0102', 'Expression nesting limit exceeded', this.c.peek().span);

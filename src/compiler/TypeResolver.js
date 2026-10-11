@@ -10,7 +10,8 @@ export class TypeResolver {
   }
   resolve(type, module = '', self = null, parameters = new Set(), stack = [], node = null) {
     if (typeof type !== 'string') throw new Diagnostic('F_TYPE', 'A type must have a structural name', node?.span);
-    const key = JSON.stringify([module, self, [...parameters].sort(), type]);
+    const declaration = node?.typeContext ?? node;
+    const key = JSON.stringify([module, self, [...parameters].sort(), type, declaration?.defaultTrait, declaration?.implementedTrait]);
     if (this.cache.has(key)) { this.hits++; return this.cache.get(key); }
     if (stack.length > this.maxDepth) throw new Diagnostic('E0391', 'Type alias expansion exceeded the recursion budget', node?.span);
     this.misses++;
@@ -20,7 +21,7 @@ export class TypeResolver {
     else if (T.reference(type)) result = (type.startsWith('&mut ') ? '&mut ' : '&') + next(T.target(type));
     else if (T.function(type)) {const fn=T.function(type);result=T.functionName(fn.params.map(next),next(fn.result));}
     else if (T.tuple(type)) result = T.tupleName(T.tuple(type).map(next));
-    else if (T.array(type)) { const {element, length} = T.array(type); const size = this.index.constantEvaluator?.length(length, module, node, parameters) ?? length; result = `[${next(element)};${size}]`; }
+    else if (T.array(type)) { const {element, length} = T.array(type); const size = this.index.constantEvaluator?.length(length, module, node, parameters, self) ?? length; result = `[${next(element)};${size}]`; }
     else {
       const prefix=/^(Fn|FnMut|FnOnce)(?=\()/.exec(type), callable=prefix?T.function('fn'+type.slice(prefix[1].length)):null;
       if (callable) result = `${prefix[1]}(${callable.params.map(next).join(',')})->${next(callable.result)}`;

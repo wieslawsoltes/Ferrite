@@ -21,6 +21,8 @@ Find in Files has source-linked results, include/exclude masks, explicit replace
 
 Every compiler representation uses original-file UTF-16 spans: selecting a token, AST/HIR node, symbol, obligation, ownership event, generic instance, MIR instruction, call site, diagnostic or mapped generated-JavaScript line navigates to the source. Editor selections highlight matching visible items. Edits invalidate old spans instead of navigating into obsolete source.
 
+Language continuation: [associated constants, checked evaluation and current limits](docs/associated-constants.md).
+
 ## Rust UI Studio and embeddable compiler
 
 Create a **Project → Rust UI application**, or add a **UI View** from the toolbar or

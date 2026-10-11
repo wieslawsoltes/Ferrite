@@ -1,0 +1,41 @@
+name: Retain native compiler oracle
+on:
+  push:
+    branches: [automation/compiler-let-chain-validation]
+    paths: ['.github/workflows/export-compiler-oracle.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  oracle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install the official native Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup run stable rustc --version --verbose > oracle-version.txt
+      - name: Retain relocatable compiler, libraries, and provenance
+        run: |
+          set -euo pipefail
+          root="$(rustup run stable rustc --print sysroot)"
+          mkdir -p oracle/bin oracle/lib/rustlib/x86_64-unknown-linux-gnu
+          cp "$root/bin/rustc" "$root/bin/rustfmt" oracle/bin/
+          cp -L "$root"/lib/*.so* oracle/lib/
+          cp -a "$root/lib/rustlib/x86_64-unknown-linux-gnu/lib" oracle/lib/rustlib/x86_64-unknown-linux-gnu/
+          cp oracle-version.txt oracle/
+          oracle/bin/rustc --version --verbose
+          printf 'fn main(){println!("oracle ok");}\n' > smoke.rs
+          oracle/bin/rustc --edition=2024 smoke.rs -o smoke
+          test "$(./smoke)" = 'oracle ok'
+          tar -I 'xz -T2 -3' -cf native-rust-oracle.tar.xz oracle
+          sha256sum native-rust-oracle.tar.xz > native-rust-oracle.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-rust-oracle
+          path: |
+            native-rust-oracle.tar.xz
+            native-rust-oracle.sha256
+            oracle-version.txt
+          compression-level: 0
+          retention-days: 3

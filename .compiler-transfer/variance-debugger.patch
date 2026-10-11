@@ -1,0 +1,46 @@
+diff --git a/tests/ui-framework-compiler.test.js b/tests/ui-framework-compiler.test.js
+index c610b6d..4e51449 100644
+--- a/tests/ui-framework-compiler.test.js
++++ b/tests/ui-framework-compiler.test.js
+@@ -29,12 +29,39 @@ for (const backend of ['mir', 'wasm', 'javascript']) {
+   });
+ }
+ 
+-test('MIR event debugger steps an owned callback and releases temporary handles', () => {
++test('MIR event debugger steps an owned callback and releases temporary handles', async t => {
+   const ui = createUIRuntime(), container = createDocument().createElement('main');
+   const session = new UISession(UICompiler.compile(UI_SAMPLES.counter), {runtime: ui}).mount(container);
++  t.after(() => session.dispose());
+   session.armDebugger(); elements(container, 'button')[1].dispatchEvent(new Event('click'));
+   assert.ok(session.debugger.vm); assert.equal(elements(container, 'output')[0].textContent, '0');
+-  const step = session.debug('step'); assert.ok(step.state); session.debug('continue'); assert.equal(elements(container, 'output')[0].textContent, '1');
++  const step = session.debug('step'); assert.ok(step.state);
++  let failCompletion;
++  const completed = new Promise((resolve, reject) => {
++    const timeout = setTimeout(() => finish(Error('UI debugger did not complete')), 15000);
++    const unsubscribe = session.subscribe(event => {
++      if (event.type === 'debug-complete') finish();
++      else if (event.type === 'debug-error') finish(Error(event.error?.message ?? event.reason));
++    });
++    function finish(error) { clearTimeout(timeout); unsubscribe(); error ? reject(error) : resolve(); }
++    failCompletion = finish;
++  });
++  // Force the first Continue slice to yield, even on a fast machine. The clock
++  // is restored before the scheduled continuation; no sleeps or CPU load needed.
++  let time = performance.now();
++  const clock = t.mock.method(performance, 'now', () => time += 9);
++  try {
++    session.debug('continue');
++    assert.equal(session.inspectDebugger().status, 'running');
++    assert.equal(elements(container, 'output')[0].textContent, '0');
++  } catch (error) {
++    failCompletion(error);
++  } finally {
++    clock.mock.restore();
++    await completed;
++  }
++  assert.equal(elements(container, 'output')[0].textContent, '1');
++  assert.equal(session.debugger.vm, null);
+   assert.equal(session.handles.size, 1); session.debug('stop'); session.dispose();
+ });
+ test('retained borrowed captures, wrong callback types and entry signatures reject', () => {

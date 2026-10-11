@@ -1,0 +1,53 @@
+name: Native associated binding probes
+on:
+  push:
+    branches: [automation/compiler-associated-bindings]
+    paths: ['.github/workflows/binding-native-probes.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Install matching stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Capture native evidence
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess, tempfile
+          d='trait A{type Item;}struct S;impl A for S{type Item=i32;}'
+          cases={
+            'alias-mismatched-bound': 'trait A{type Item;}struct S;impl A for S{type Item=bool;}type V<T:A<Item=i32>>=T::Item;fn main(){let x:V<S>=true;println!("{}",x);}',
+            'alias-no-parameter-use': 'trait A{type Item;}type V<T:A<Item=i32>>=i32;fn main(){}',
+            'method-omits-equality': d+'trait B{fn f<T:A<Item=i32>>(t:T,x:T::Item)->i32;}impl B for S{fn f<U:A>(t:U,x:U::Item)->i32{x}}fn main(){println!("{}",S::f(S,42));}',
+            'conflicting-unused-bounds': d+'fn f<T:A<Item=i32>>(x:T)where T:A<Item=bool>{}fn main(){}',
+            'equality-cycle': 'trait A{type Item;}fn f<T:A<Item=U::Item>,U:A<Item=T::Item>>(x:T::Item){}fn main(){}',
+            'same-item-through-child': 'trait A{type Item;}trait B:A{type Item;}fn f<T:B<Item=i32>>(x:T){}fn main(){}',
+            'independent-concrete-predicate': d+'fn f()where S:A<Item=bool>{}fn main(){}',
+            'associated-bound-nested-refinement': 'trait A{type Item:B<Out=i32>;}trait B{type Out;}struct S;struct V;impl A for S{type Item=V;}impl B for V{type Out=i32;}fn f<T:A>(x:<<T as A>::Item as B>::Out)->i32{x}fn main(){println!("{}",f::<S>(42));}',
+            'alias-forward-bound': d+'type V<T:A<Item=i32>>=T::Item;fn f<T:A>(x:T::Item)->V<T>{x}fn main(){println!("{}",f::<S>(42));}',
+            'input-not-inferred-from-fixed-item': d+'fn f<T:A<Item=i32>>(x:T::Item)->i32{x}fn main(){f(42);}',
+            'where-projection-equality': 'trait A{type Item;}trait B{type Out;}struct S;struct V;impl A for S{type Item=V;}impl B for V{type Out=i32;}fn f<T:A>(x:<<T as A>::Item as B>::Out)->i32 where T::Item:B<Out=i32>{x}fn main(){println!("{}",f::<S>(42));}',
+            'generic-parameter-equality-chain': d+'trait B{type Out;}struct V;impl B for V{type Out=i32;}fn f<T:A<Item=U::Out>,U:B<Out=i32>>(x:T::Item)->i32{x}fn main(){println!("{}",f::<S,V>(42));}',
+            'direct-equality-to-self': 'trait A{type Item;}fn f<T:A<Item=T>>(x:T::Item)->T{x}fn main(){}',
+            'duplicate-redundant-binding': d+'fn f<T:A<Item=i32,Item=i32>>(x:T){}fn main(){}',
+            'strict-method-requirement': d+'trait B{fn f<T:A>(t:T);}impl B for S{fn f<U:A<Item=i32>>(t:U){}}fn main(){}',
+            'same-named-generic-item': d+'fn f<Item,T:A<Item=Item>>(x:T::Item,t:T)->Item{x}fn main(){println!("{}",f(42,S));}'
+          }
+          report={'rustc':subprocess.check_output(['rustup','run','stable','rustc','--version','--verbose'],text=True),'cases':[]}
+          with tempfile.TemporaryDirectory() as directory:
+            source=pathlib.Path(directory,'fixture.rs'); binary=pathlib.Path(directory,'fixture')
+            for name,code in cases.items():
+              source.write_text(code)
+              result=subprocess.run(['rustup','run','stable','rustc',str(source),'--edition=2024','-A','warnings','-C','overflow-checks=on','-o',str(binary)],capture_output=True,text=True,timeout=30)
+              execution=subprocess.run([str(binary)],capture_output=True,text=True,timeout=5) if result.returncode==0 else None
+              item={'name':name,'source':code,'accepted':result.returncode==0,'diagnostics':result.stderr,'output':execution.stdout if execution else None}
+              report['cases'].append(item);print(json.dumps(item),flush=True)
+          pathlib.Path('native-binding-probes.json').write_text(json.dumps(report,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-binding-probes
+          path: native-binding-probes.json
+          retention-days: 7

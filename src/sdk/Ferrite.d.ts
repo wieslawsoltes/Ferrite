@@ -14,11 +14,31 @@ export interface NominalVarianceReport {
   readonly evaluations: number; readonly refinements: number;
   readonly equationCount: number; readonly equationEdges: number; readonly equationRefinements: number;
 }
+/** Function-instance-local ownership identities; IDs can change after source edits. */
+export interface OwnershipPlace {
+  readonly id: number; readonly root: number; readonly local: number; readonly name: string;
+  readonly path: readonly (string | null)[]; readonly external: boolean;
+}
+export interface OwnershipEvent {
+  readonly kind: string; readonly slot: number; readonly place: number; readonly name?: string;
+  readonly detail: string; readonly span: Readonly<SourceSpan>;
+}
+/** Local-use liveness, not a universal lifetime/region constraint solution. */
+export interface OwnershipLivenessReport {
+  readonly nodes: number; readonly edges: number; readonly bitsetWords: number;
+  readonly iterations: number; readonly work: number;
+}
+export interface OwnershipReport {
+  readonly instance: string; readonly span: Readonly<SourceSpan>; readonly model: string;
+  readonly places: readonly OwnershipPlace[]; readonly placeWork: number;
+  readonly liveness: OwnershipLivenessReport; readonly events: readonly OwnershipEvent[];
+  readonly conditions?: {readonly work: number; readonly loopIterations: number};
+}
 export interface RustSemanticSummary { nominalVariance: NominalVarianceReport; [stage: string]: unknown }
 export interface RustArtifact {
   version: string; entry: string | null; js: string; wasm: {bytes: number[]; [name: string]: unknown};
   mir: MirFunction[]; optimizedMir: MirFunction[]; diagnostics: Diagnostic[]; timings: {name: string; ms: number}[];
-  verification: unknown; ast: unknown; tokens: unknown[]; sem: RustSemanticSummary; [stage: string]: unknown;
+  verification: unknown; ast: unknown; tokens: unknown[]; sem: RustSemanticSummary; readonly ownership: readonly OwnershipReport[]; [stage: string]: unknown;
 }
 export interface UIAttribute { name: string; kind: 'string' | 'expression' | 'boolean'; value?: string | boolean; start: number; end: number }
 export interface UINode { id: string; kind: 'element' | 'text' | 'expression'; span: SourceSpan; start: number; end: number; tag?: string | null; value?: string; attributes?: UIAttribute[]; children?: UINode[] }

@@ -67,7 +67,7 @@ export class SemanticAnalyzer {
     return {nominalVariance:this.index.nominalVariance.snapshot(),sizedTypes:this.index.sizedTypes.snapshot(),genericDefaults:this.index.genericDefaults.snapshot(),associatedBindings:this.index.associatedBindings.snapshot(),associatedTypes:this.index.associatedTypes.snapshot(),traitResolution:this.implementations.traits.snapshot(),implementations: this.implementations.snapshot(), discriminants: this.discriminants.snapshot(), functionItems:this.functionValues.snapshot(),constants: this.constants.snapshot(), typeResolution: this.index.typeResolver.snapshot(), patterns: this.patternReports, closures:this.closures.snapshot(), instances: [...this.instances.values()], obligations: this.obligations,
       symbols: [...this.index.symbols, ...this.index.associatedTypes.symbols()], structures: this.canonicalShapes(this.index.structs).filter(shape => !shape.builtin),
       enums: this.canonicalShapes(this.index.enums), warnings: this.warnings, entry: this.entryKey,
-      capabilities: {ownership: 'conservative whole-local analysis', traits: 'generic declared-trait impls and built-in bounds'}};
+      capabilities: {ownership: 'projection-sensitive places and CFG local liveness; not full Rust NLL', traits: 'generic declared-trait impls and built-in bounds'}};
   }
   annotate(node, type) { node.type = type; return type; }
   canonicalShapes(shapes) {

@@ -32,7 +32,7 @@ and host-assisted WebAssembly, with optimization enabled or disabled.
 ## Reservation, activation and address evaluation
 
 Compiler-inserted mutable method receivers use two phases within the existing
-conservative whole-local loan checker. Reservation precedes arguments, permits
+[projection-sensitive loan checker and CFG local-liveness solver](ownership-places.md). Reservation precedes arguments, permits
 reads, and rejects an overlapping live mutable loan. After arguments finish,
 activation rejects remaining conflicting loans. This admits `r.set(r.get()+1)`
 without allowing mutation of the receiver during argument evaluation. Shared

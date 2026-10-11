@@ -26,7 +26,7 @@ Native file updates are applied atomically to the virtual workspace without chan
 
 ## Compatibility limits
 
-Ferrite's ownership model is conservative whole-local analysis, not full rustc NLL. General trait/associated-type solving, complete lifetime/const generics, higher-ranked closure semantics, async/generators and user macros are not implemented by the browser backend. Native Cargo is used for such programs. The IDE does not claim pixel-perfect or full functional JetBrains RustRover parity.
+Ferrite's ownership pass uses interned places, projection-sensitive explicit field moves, a backward typed-HIR local-liveness CFG and forward structured loan/move state. It is not full rustc NLL or a proof of Rust memory safety; see [ownership places and remaining boundaries](ownership-places.md). General trait/associated-type solving, complete lifetime/const generics, higher-ranked closure semantics, async/generators and user macros are not implemented by the browser backend. Native Cargo is used for such programs. The IDE does not claim pixel-perfect or full functional JetBrains RustRover parity.
 
 ## Repository and parallel boundaries
 

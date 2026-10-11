@@ -23,8 +23,9 @@ modes, slice patterns and general structural constant equality remain unfinished
 Typed tuple/array/record/constructor assignment, checked const functions, inline
 const and computed array sizes are implemented; general range values and const
 generics remain separate work.
-The move/loan analysis is conservative and whole-local, not full field-sensitive
-rustc NLL. Passing tests must never be described as a soundness or compatibility
+Explicit field places now support partial moves, disjoint loans, CFG local liveness
+and reborrow lineage. Full pattern move paths, region inference and general
+reference carriers remain incomplete; see [ownership places](ownership-places.md). Passing tests must never be described as a soundness or compatibility
 proof for arbitrary Rust.
 
 ## Backend, tooling and project handling

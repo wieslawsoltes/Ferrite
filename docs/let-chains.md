@@ -78,8 +78,8 @@ The default limits are 256 operands per chain, 64 nested ownership analyses,
 128 header iterations, and 1,048,576 charged ownership operations per function
 instance. The operation budget charges state sizes, not just iteration count.
 Reference-storage inspection has its own depth and type-count guards. This is a
-finite whole-local domain: state snapshot work also depends on the number of
-tracked locals/loans, and is not claimed to be linear in source size. Limit
+finite place/loan domain: state snapshot work also depends on the number of
+tracked places, borrower identities and loan ancestors, and is not claimed to be linear in source size. Limit
 failures are diagnostics; failed ownership results are not cached as success.
 
 ## Explicit compatibility boundaries
@@ -88,8 +88,9 @@ This is not a full Rust borrow checker or an edition implementation. The browser
 parser accepts the syntax in its supported dialect; per-crate edition gating was
 not added. Differential fixtures explicitly use native Rust edition 2024.
 
-The existing whole-local model remains conservative about partial moves and
-last-use loans. It is not general NLL, reference/slice pattern match ergonomics,
+The shared checker now uses [projection-sensitive explicit field places and CFG local
+liveness](ownership-places.md). Pattern scrutinee moves remain conservative. It is
+not general NLL, reference/slice pattern match ergonomics,
 full lifetime/HRTB analysis, or observable `Drop`/temporary-destruction ordering.
 The syntax feature does not add custom destructors or a native memory ABI.
 

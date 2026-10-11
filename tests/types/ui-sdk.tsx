@@ -64,3 +64,17 @@ import {compileRust as compileVariance, type NominalVariance} from 'ferrite-comp
 const varianceReport = compileVariance('struct S<T>(T); fn main(){}').sem.nominalVariance;
 const variancePolarity: NominalVariance | undefined = varianceReport.declarations[0]?.parameters[0]?.variance;
 void variancePolarity;
+
+import {type OwnershipPlace, type OwnershipReport, type OwnershipLivenessReport} from 'ferrite-compiler';
+const ownershipArtifact = compileVariance('fn main(){let p=(1,2);println!("{}",p.0);}');
+const ownershipReport: OwnershipReport = ownershipArtifact.ownership[0];
+const ownershipPlace: OwnershipPlace = ownershipReport.places[0];
+const ownershipLive: OwnershipLivenessReport = ownershipReport.liveness;
+const placePath: readonly (string | null)[] = ownershipPlace.path;
+// @ts-expect-error ownership report arrays are readonly public metadata.
+ownershipArtifact.ownership.push(ownershipReport);
+// @ts-expect-error interned paths cannot be modified through the SDK types.
+ownershipPlace.path.push('field');
+// @ts-expect-error work counters are readonly metadata.
+ownershipLive.work = 0;
+void placePath;

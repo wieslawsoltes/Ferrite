@@ -1,0 +1,69 @@
+name: Publish associated binding continuation
+on:
+  push:
+    branches: [automation/compiler-associated-bindings]
+    paths: ['.binding-transfer/**', '.github/workflows/binding-delivery.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_BRANCH: feat/compiler-associated-bindings
+      EXPECTED_HEAD: ca961e8e65967ffd75a9d6263eba3bab7703eaba
+      EXPECTED_TREE: cf95c5fe7cb26552760cf2ca0a94612a14a7efb2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Decode and verify source patch
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os
+          from pathlib import Path
+          parts = sorted(Path('.binding-transfer').glob('part-*.b64'))
+          assert len(parts) == 4
+          encoded = ''.join(part.read_text().strip() for part in parts)
+          assert len(encoded) == 23256
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '029b6fdb349c1663fc3b00a0b8655a8807d0ee499844747930aa1d339749d48f'
+          Path(os.environ['RUNNER_TEMP'], 'bindings.patch').write_bytes(patch)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/compiler-associated-bindings
+      - name: Apply and regenerate exact tree
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git apply --check --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/bindings.patch"
+          git apply --index --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/bindings.patch"
+          npm run build:workers
+          npm run build:sdk
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+      - name: Validate publication
+        run: |
+          set -o pipefail
+          npm run check 2>&1 | tee "$RUNNER_TEMP/bindings-check.log"
+          node --test --test-concurrency=4 tests/*.test.js > "$RUNNER_TEMP/bindings-tests.log" 2>&1
+          tail -n 12 "$RUNNER_TEMP/bindings-tests.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: binding-delivery-diagnostics
+          path: |
+            ${{ runner.temp }}/bindings-check.log
+            ${{ runner.temp }}/bindings-tests.log
+          retention-days: 7
+      - name: Commit and non-force push
+        run: |
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git config user.name 'Wiesław Šoltés'
+          git config user.email 'wieslawsoltes@users.noreply.github.com'
+          git commit -m 'feat: implement associated type equality bindings and directed output inference'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD HEAD^{tree}

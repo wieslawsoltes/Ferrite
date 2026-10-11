@@ -13,16 +13,18 @@ jobs:
       - name: Prepare native Rust compiler
         run: |
           rustup toolchain install stable --profile minimal
-          rustup run stable rustc --version --verbose > rustc-version.txt
+          rustup run stable rustc --version --verbose > "$RUNNER_TEMP/rustc-version.txt"
           TOOLCHAIN=$(dirname "$(dirname "$(rustup which --toolchain stable rustc)")")
-          tar -C "$TOOLCHAIN" -cJf rustc-native-oracle.tar.xz bin/rustc lib/librustc_driver*.so lib/libLLVM*.so* lib/rustlib/x86_64-unknown-linux-gnu/lib
+          cd "$TOOLCHAIN"
+          XZ_OPT=-T2 tar -cJf "$RUNNER_TEMP/rustc-native-oracle.tar.xz" bin/rustc lib/librustc_driver*.so lib/libLLVM*.so* lib/rustlib/x86_64-unknown-linux-gnu/lib
+          cd "$RUNNER_TEMP"
           sha256sum rustc-native-oracle.tar.xz > rustc-native-oracle.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: rustc-native-oracle
           path: |
-            rustc-native-oracle.tar.xz
-            rustc-native-oracle.sha256
-            rustc-version.txt
+            ${{ runner.temp }}/rustc-native-oracle.tar.xz
+            ${{ runner.temp }}/rustc-native-oracle.sha256
+            ${{ runner.temp }}/rustc-version.txt
           compression-level: 0
           retention-days: 7

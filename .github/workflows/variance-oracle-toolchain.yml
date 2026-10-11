@@ -1,0 +1,28 @@
+name: Retain variance native oracle
+on:
+  push:
+    branches: [automation/compiler-variance-delivery]
+    paths: ['.github/workflows/variance-oracle-toolchain.yml']
+permissions:
+  contents: read
+jobs:
+  oracle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Prepare native oracle
+        run: |
+          rustup toolchain install stable --profile minimal
+          root="$(rustup run stable rustc --print sysroot)"
+          rustup run stable rustc --version --verbose > rustc-version.txt
+          tar -C "$root" -cJf rustc-oracle.tar.xz bin/rustc lib
+          sha256sum rustc-oracle.tar.xz > rustc-oracle.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: variance-rustc-oracle
+          path: |
+            rustc-oracle.tar.xz
+            rustc-oracle.sha256
+            rustc-version.txt
+          retention-days: 3
+          compression-level: 0

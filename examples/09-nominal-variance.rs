@@ -35,7 +35,9 @@ fn invoke(callback: Callback<u8>) -> u8 {
 }
 
 fn main() {
-    let reader: Reader<Byte, u8> = Reader { source: Byte(7) };
+    let reader: Reader<Byte, u8> = Reader {
+        source: Byte(7),
+    };
     let callback = Callback {
         value: reader.read(),
         call: invoke,

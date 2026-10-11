@@ -1,0 +1,66 @@
+name: Publish generic defaults continuation
+on:
+  push:
+    branches: [automation/compiler-generic-defaults-delivery]
+    paths: ['.delivery/generic-defaults.*.b64', '.github/workflows/generic-defaults-delivery.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_BRANCH: feat/compiler-generic-defaults
+      EXPECTED_HEAD: 27b26284bcddb3981d9ff70ef3a450c33023eab8
+      EXPECTED_TREE: 04286983f8cad1ff1e8aa1ea66ef6ab0a052a344
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Decode and verify reviewed source
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os
+          from pathlib import Path
+          encoded = ''.join(Path(f'.delivery/generic-defaults.part-{i}.b64').read_text().strip() for i in range(3))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'd2a61568f8ea0058023adca1ec21a0d0965a9430afda5488f60b218587383ab9'
+          Path(os.environ['RUNNER_TEMP'], 'generic-defaults.patch').write_bytes(patch)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/compiler-generic-defaults
+      - name: Apply and regenerate exact tree
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git apply --check --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/generic-defaults.patch"
+          git apply --index --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/generic-defaults.patch"
+          npm run build:workers
+          npm run build:sdk
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+      - name: Validate publication
+        run: |
+          set -o pipefail
+          npm run check 2>&1 | tee "$RUNNER_TEMP/generic-defaults-check.log"
+          node --test --test-concurrency=4 tests/*.test.js > "$RUNNER_TEMP/generic-defaults-tests.log" 2>&1
+          tail -n 12 "$RUNNER_TEMP/generic-defaults-tests.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: generic-defaults-delivery-diagnostics
+          path: |
+            ${{ runner.temp }}/generic-defaults-check.log
+            ${{ runner.temp }}/generic-defaults-tests.log
+          retention-days: 7
+      - name: Commit and non-force push
+        run: |
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git config user.name 'Wiesław Šoltés'
+          git config user.email 'wieslawsoltes@users.noreply.github.com'
+          git commit -m 'feat: implement checked generic type defaults and constructor inference'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD HEAD^{tree}

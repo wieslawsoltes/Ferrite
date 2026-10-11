@@ -44,8 +44,18 @@ jobs:
           test "$(git write-tree)" = "$EXPECTED_TREE"
       - name: Validate publication
         run: |
-          npm run check
-          node --test --test-concurrency=4 tests/*.test.js
+          set -o pipefail
+          npm run check 2>&1 | tee "$RUNNER_TEMP/compiler-check.log"
+          node --test --test-concurrency=4 tests/*.test.js > "$RUNNER_TEMP/compiler-tests.log" 2>&1
+          tail -n 12 "$RUNNER_TEMP/compiler-tests.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compiler-delivery-diagnostics
+          path: |
+            ${{ runner.temp }}/compiler-check.log
+            ${{ runner.temp }}/compiler-tests.log
+          retention-days: 7
       - name: Commit and non-force push
         run: |
           test "$(git write-tree)" = "$EXPECTED_TREE"

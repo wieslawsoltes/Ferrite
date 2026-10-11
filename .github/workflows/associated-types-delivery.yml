@@ -10,8 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      EXPECTED_HEAD: 92f7ea29a9879687644103b70eb8d765ea4b004c
-      EXPECTED_TREE: c885d3e7103fb8e12f6f9ab41a1c3ae24cf08215
+      EXPECTED_HEAD: 2200710b05f06f78836ec95e8b619a4f53204fe0
+      EXPECTED_TREE: 413e79ea3985e11e92f6ce85887541f2361fe7a3
       TARGET_BRANCH: feat/compiler-associated-types
     steps:
       - uses: actions/checkout@v4
@@ -23,9 +23,9 @@ jobs:
           python3 - <<'PY'
           import base64, hashlib, lzma, os
           from pathlib import Path
-          text = ''.join(Path(f'.compiler-transfer/types.{i}.b64').read_text().strip() for i in range(1, 4))
+          text = Path('.compiler-transfer/types-scope.b64').read_text().strip()
           patch = lzma.decompress(base64.b64decode(text, validate=True))
-          assert hashlib.sha256(patch).hexdigest() == 'f141bf643bd94a2d8d4e4b0c7da14d560bd157b44cd5662c6526e2df2d8c7d78'
+          assert hashlib.sha256(patch).hexdigest() == '6a5e00367ca7e97ccdec0c0847701ede93e50790745f33d06e47360e4409bef5'
           Path(os.environ['RUNNER_TEMP'], 'associated-types.patch').write_bytes(patch)
           PY
       - uses: actions/checkout@v4
@@ -60,6 +60,6 @@ jobs:
           test "$(git write-tree)" = "$EXPECTED_TREE"
           git config user.name 'Wiesław Šoltés'
           git config user.email 'wieslawsoltes@users.noreply.github.com'
-          git commit -m 'feat: normalize Rust associated types through checked trait contracts'
+          git commit -m 'fix: preserve native Rust projection method scope and symbolic dispatch'
           git push origin "HEAD:refs/heads/$TARGET_BRANCH"
           git rev-parse HEAD HEAD^{tree}

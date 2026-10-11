@@ -1,4 +1,5 @@
 import {Diagnostic} from './Diagnostic.js';
+import {ConditionOwnership} from './conditions/ConditionOwnership.js';
 import {TypeSystem as T} from './TypeSystem.js';
 
 /** Conservative, whole-local moves and last-use loans. Not a replacement for rustc NLL. */
@@ -14,6 +15,7 @@ export class OwnershipAnalyzer {
       const analyzer = new OwnershipAnalyzer(instance);
       analyzer.block(instance.fn.body);
       return {instance: instance.key, span: instance.fn.span, events: analyzer.events,
+        ...(analyzer.conditionWork ? {conditions: {work: analyzer.conditionWork, loopIterations: analyzer.conditionIterations ?? 0}} : {}),
         model: 'Conservative whole-local moves and last-use loans (not rustc NLL)'};
     });
   }
@@ -148,10 +150,17 @@ export class OwnershipAnalyzer {
     if (node.kind === 'return') { this.returnValue(node.value, node); return []; }
     if (node.kind === 'break') {
       const roots = this.value(node.value);
-      this.controls.findLast(frame => frame.id === node.controlTarget)?.roots.push(...roots);
+      const frame = this.controls.findLast(frame => frame.id === node.controlTarget);
+      frame?.roots.push(...roots);
+      if (frame?.flow) frame.breaks.push(frame.flow.save());
       return [];
     }
-    if (node.kind === 'continue') return [];
+    if (node.kind === 'continue') {
+      const frame = this.controls.findLast(frame => frame.id === node.controlTarget);
+      if (frame?.flow) frame.continues.push(frame.flow.save());
+      return [];
+    }
+    if (node.kind === 'ifChain' || node.kind === 'whileChain') return ConditionOwnership.analyze(this, node);
     if (node.kind === 'ifExpr' || node.kind === 'ifLet') {
       this.value(node.kind === 'ifLet' ? node.value : node.condition);
       const before = new Set(this.moved), yesRoots = this.block(node.then), yes = new Set(this.moved);
@@ -226,7 +235,7 @@ export class OwnershipAnalyzer {
         this.value(node.value, true, node.binding?.slot);
         if (node.binding) { this.moved.delete(node.binding.slot); this.event('initialize', node, node.binding.slot, node.binding.type); }
       } else if (node.kind === 'assign') this.assignment(node);
-      else if (['return', 'break', 'continue', 'while', 'whileLet', 'for'].includes(node.kind)) this.value(node);
+      else if (['return', 'break', 'continue', 'while', 'whileLet', 'whileChain', 'for'].includes(node.kind)) this.value(node);
       else if (node.value) this.value(node.value);
     }
     const roots = this.value(block.tail);

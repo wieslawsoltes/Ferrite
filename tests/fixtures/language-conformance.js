@@ -1,3 +1,4 @@
+import {letChainCases, letChainCompileFailCases, letChainPanicCases} from './let-chains.js';
 import {nominalVarianceCases, nominalVarianceCompileFailCases} from './nominal-variance.js';
 import {relaxedSizedCases, relaxedSizedCompileFailCases} from './relaxed-sized.js';
 import {genericDefaultCases, genericDefaultCompileFailCases} from './generic-defaults.js';
@@ -175,3 +176,8 @@ languageCases.push(...relaxedSizedCases.map(([name, source, output]) => ({name, 
 
 languageCases.push(...nominalVarianceCases.map(([name, source, output]) => ({name, source, output, kind: 'run'})),
   ...nominalVarianceCompileFailCases.map(([name, source]) => ({name, source, kind: 'compile-fail'})));
+
+// The same condition-chain source reaches every browser backend and native Rust.
+languageCases.push(...letChainCases.map(([name, source, output]) => ({name, source, output, kind: 'run'})),
+  ...letChainCompileFailCases.map(([name, source]) => ({name, source, kind: 'compile-fail'})),
+  ...letChainPanicCases.map(([name, source, code, output]) => ({name, source, code, output, kind: 'panic'})));

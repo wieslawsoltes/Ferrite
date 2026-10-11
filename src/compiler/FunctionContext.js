@@ -14,6 +14,7 @@ export class FunctionContext {
   control(node) {
     const frame = node.label ? this.loops.findLast(loop => loop.label === node.label) : this.loops.at(-1);
     if (!frame) throw new Diagnostic(node.label ? 'E0426' : 'E0268', node.label ? `Undeclared label ${node.label}` : `${node.kind} outside a loop`, node.span);
+    if (!node.label && frame.condition) throw new Diagnostic('E0590', `Unlabeled ${node.kind} in a while condition`, node.span);
     if (!node.label && frame.kind === 'block') throw new Diagnostic('E0695', `Unlabeled ${node.kind} inside a labeled block`, node.span);
     if (node.kind === 'continue' && frame.kind === 'block') throw new Diagnostic('E0696', 'Cannot continue a labeled block', node.span);
     node.controlTarget = frame.id;

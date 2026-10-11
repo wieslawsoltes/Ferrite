@@ -2,10 +2,11 @@ import {Diagnostic} from './Diagnostic.js';
 import {Lexer} from './Lexer.js';
 import {TokenCursor} from './TokenCursor.js';
 import {AttributeParser} from './AttributeParser.js';
+import {ConditionChain} from './conditions/ConditionChain.js';
 
 const PRECEDENCE = {'||': 1, '&&': 2, '|': 3, '^': 4, '&': 5, '==': 6, '!=': 6,
   '<': 6, '>': 6, '<=': 6, '>=': 6, '<<': 7, '>>': 7, '+': 8, '-': 8, '*': 9, '/': 9, '%': 9};
-const BLOCK_EXPRESSIONS = new Set(['ifExpr', 'ifLet', 'match', 'block', 'loopExpr', 'labelBlock', 'while', 'whileLet', 'for']);
+const BLOCK_EXPRESSIONS = new Set(['ifExpr', 'ifLet', 'ifChain', 'match', 'block', 'loopExpr', 'labelBlock', 'while', 'whileLet', 'whileChain', 'for']);
 const ASSIGNMENTS = new Set(['=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '<<=', '>>=']);
 
 /** Recursive-descent items/statements and Pratt expressions with complete source spans. */
@@ -356,13 +357,9 @@ export class Parser {
   loopLike(start, label = null) {
     if (this.c.match('loop')) return this.c.node('loopExpr', start, {then: this.block(), label});
     if (this.c.match('while')) {
-      if (this.c.match('let')) {
-        const pattern = this.pattern(); this.c.eat('=');
-        const value = this.expr(0, false), then = this.block();
-        return this.c.node('whileLet', start, {pattern, value, then, label});
-      }
-      const condition = this.expr(0, false), then = this.block();
-      return this.c.node('while', start, {condition, then, label});
+      const condition = this.condition(), then = this.block();
+      return this.c.node(condition.kind === 'chain' ? 'whileChain' : condition.kind === 'let' ? 'whileLet' : 'while',
+        start, {...condition.fields, then, label});
     }
     if (this.c.match('for')) {
       const pattern = this.pattern(false); this.c.eat('in');
@@ -443,10 +440,13 @@ export class Parser {
     if (this.c.match('(')) return this.c.node('variantPattern', start, {name, tupleSyntax: true, items: this.list(')', () => this.pattern()), ...pathDetails});
     return this.c.node(name.includes('::') || name === 'None' ? 'variantPattern' : 'bindingPattern', start, {name, items: [], ...pathDetails});
   }
-  expr(minimum = 0, allowRecord = true) {
+  condition() {
+    return ConditionChain.classify(this.expr(0, false, true));
+  }
+  expr(minimum = 0, allowRecord = true, allowConditionLet = false) {
     if (++this.depth > 256) throw new Diagnostic('F0102', 'Expression nesting limit exceeded', this.c.peek().span);
     try {
-      let left = this.prefix(allowRecord);
+      let left = this.prefix(allowRecord, allowConditionLet);
       while (true) {
         const start = left;
         if (allowRecord && this.c.is('{') && left.kind === 'variable' &&
@@ -506,19 +506,31 @@ export class Parser {
         if (this.c.is('as') && minimum <= 10) { this.c.take(); left = this.c.node('cast', start, {value: left, target: this.type()}); continue; }
         if (this.c.match('?')) { left = this.c.node('try', start, {value: left}); continue; }
         if (minimum === 0 && ASSIGNMENTS.has(this.c.peek().value)) {
+          if (allowConditionLet && ConditionChain.hasLet(left))
+            throw new Diagnostic('E0003', 'Parenthesize assignment expressions used in a let-chain condition', this.c.peek().span);
           const op = this.c.take().value;
           left = this.c.node('assign', start, {target: left, op, value: this.expr(0, allowRecord)}); continue;
         }
         const precedence = PRECEDENCE[this.c.peek().value];
         if (precedence == null || precedence < minimum) break;
         const op = this.c.take().value;
-        left = this.c.node('binary', start, {left, op, right: this.expr(precedence + 1, allowRecord)});
+        left = this.c.node('binary', start, {left, op, right: this.expr(precedence + 1, allowRecord, allowConditionLet && ['&&', '||'].includes(op))});
       }
       return left;
     } finally { this.depth--; }
   }
-  prefix(allowRecord) {
+  prefix(allowRecord, allowConditionLet = false) {
     const start = this.c.peek();
+    if (this.c.is('let')) {
+      if (!allowConditionLet)
+        throw new Diagnostic('E0003', 'A let condition is only allowed at the top level of an if or while condition', start.span);
+      this.c.take();
+      const pattern = this.pattern(); this.c.eat('=');
+      // Lazy boolean operators delimit the scrutinee. Parenthesized expressions
+      // parse in their own unrestricted expression context, never as let terms.
+      const value = this.expr(PRECEDENCE['&&'] + 1, false);
+      return this.c.node('letCondition', start, {pattern, value});
+    }
     if (this.c.match('<')) {
       const qualifiedSelf = this.type(); this.c.eat('as');
       const qualifiedTrait = this.type(); this.c.eat('>'); this.c.eat('::');
@@ -533,15 +545,10 @@ export class Parser {
     if (this.c.is('{')) return this.block();
     if (this.c.match('const')) return this.c.node('constBlock', start, {value: this.block()});
     if (this.c.match('if')) {
-      if (this.c.match('let')) {
-        const pattern = this.pattern(); this.c.eat('=');
-        const value = this.expr(0, false), then = this.block();
-        const otherwise = this.c.match('else') ? (this.c.is('if') ? this.expr() : this.block()) : null;
-        return this.c.node('ifLet', start, {pattern, value, then, otherwise});
-      }
-      const condition = this.expr(0, false), then = this.block();
+      const condition = this.condition(), then = this.block();
       const otherwise = this.c.match('else') ? (this.c.is('if') ? this.expr() : this.block()) : null;
-      return this.c.node('ifExpr', start, {condition, then, otherwise});
+      return this.c.node(condition.kind === 'chain' ? 'ifChain' : condition.kind === 'let' ? 'ifLet' : 'ifExpr',
+        start, {...condition.fields, then, otherwise});
     }
     if (this.c.match('match')) {
       const value = this.expr(0, false); this.c.eat('{'); const arms = [];

@@ -133,7 +133,7 @@ export class TraitMethodScope {
     else if (node.kind === 'tuple') origin = T.tupleName(node.items.map(item => this.of(item)));
     else if (node.kind === 'array') origin = `[${this.of(node.items[0])};${node.items.length}]`;
     else if (node.kind === 'block') origin = this.of(node.tail);
-    else if (node.kind === 'ifExpr' || node.kind === 'ifLet') origin = this.join([node.then, node.otherwise], origin);
+    else if (node.kind === 'ifExpr' || node.kind === 'ifLet' || node.kind === 'ifChain') origin = this.join([node.then, node.otherwise], origin);
     else if (node.kind === 'match') origin = this.join(node.arms.map(arm => arm.body), origin);
     else if (node.kind === 'try') origin = T.application(this.of(node.value)).args[0] ?? origin;
     else if (node.builtin === 'clone') origin = this.of(node.args[0]);

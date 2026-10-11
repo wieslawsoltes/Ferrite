@@ -116,3 +116,11 @@ proof-cache recovery. This is not full unsized ABI, slice, coercion, variance or
 universal generic-body support.
 
 [Nominal variance](nominal-variance.md) adds declaration-owned field polarity, unused/recursive-only parameter checks, explicit output-constraint closure, and generic Self field signatures. Its native differential gate additionally observes reported variances using deterministic nominal graphs and native-only lifetime cast probes. This does not claim browser lifetime or subtyping support.
+
+[Rust 2024 condition chains](let-chains.md) add ordered mixed boolean/pattern
+conditions, explicit lexical binding scopes, single-failure-arm MIR lowering and
+bounded whole-local ownership fixed points. Shared exact-source fixtures cover
+short-circuit effects, const evaluation, captures, labels, reference scopes and
+irrefutable alternative ownership checks. Capability limits for aggregate loan
+origins, return-reference provenance and backward integer inference remain
+separate from the native rejection corpus. No existing CI gate is removed.

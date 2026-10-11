@@ -1,3 +1,4 @@
+import {ConditionChain} from './conditions/ConditionChain.js';
 import {DefaultArgumentInference} from './DefaultArgumentInference.js';
 import {ProjectionInference} from './ProjectionInference.js';
 import {AssociatedConstant} from './AssociatedConstant.js';
@@ -260,7 +261,7 @@ export class SemanticAnalyzer {
         node.kind = 'constValue'; node.value = structuredClone(result.expression); type = result.type; break;
       }
       case 'assign': case 'return': case 'break': case 'continue':
-      case 'while': case 'whileLet': case 'for': return this.statement(node, ctx);
+      case 'while': case 'whileLet': case 'whileChain': case 'for': return this.statement(node, ctx);
       case 'functionPointer':case 'functionCoercion':type=node.pointerSignature;break;
       case 'functionItem': type=this.functionValues.canonical(node.itemType);break;
       case 'closure': type=this.closures.create(node,ctx);break;
@@ -420,6 +421,17 @@ export class SemanticAnalyzer {
         type = node.target; break;
       }
       case 'block': return this.block(node, ctx, expected);
+      case 'ifChain': {
+        let yes;
+        ctx.push();
+        try {
+          this.conditionChain(node, ctx);
+          yes = this.block(node.then, ctx, expected);
+        } finally { ctx.pop(); }
+        const no = node.otherwise ? this.infer(node.otherwise, ctx, expected) : '()';
+        type = node.otherwise ? this.functionValues.join([node.then, node.otherwise], ctx, node) : T.join(yes, no, node);
+        break;
+      }
       case 'ifLet': {
         const scrutinee = this.infer(node.value, ctx);
         ctx.push(); this.pattern(node.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value));
@@ -475,6 +487,8 @@ export class SemanticAnalyzer {
     this.annotate(node, type);
     node.copy = ctx.methodScope.copyOf(node) ?? this.hasTrait(type, 'Copy');
     if(this.closures.get(type)?.node.borrowCarrier)node.borrowCarrier=true;
+    if (node.kind === 'ifChain' && !T.reference(type) && !node.borrowCarrier && ConditionChain.containsReferences(this, type))
+      throw new Diagnostic('F_CONDITION_REFERENCE', 'Reference-carrying condition results require projection-sensitive loan origins', node.span);
     return this.annotate(node, type);
   }
   construct(node, constructor, args, ctx, expected) {
@@ -508,6 +522,39 @@ export class SemanticAnalyzer {
   pattern(pattern, type, ctx, mutable = false, origin = type) {
     this.patterns.analyze(pattern, type, ctx, mutable);
     ctx.methodScope.bindPattern(pattern, origin);
+  }
+  /** Each scrutinee is checked before introducing its own pattern names. */
+  conditionChain(node, ctx) {
+    for (const term of ConditionChain.terms(node)) {
+      if (term.kind !== 'letCondition') {
+        T.unify('bool', this.infer(term, ctx, 'bool'), new Map(), term);
+        continue;
+      }
+      const type = this.infer(term.value, ctx);
+      this.pattern(term.pattern, type, ctx, false, ctx.methodScope.of(term.value));
+      const bindings = ConditionChain.bindings(term.pattern);
+      for (const pattern of bindings) {
+        pattern.copy = ctx.methodScope.copyOf({kind: 'variable', binding: pattern.binding, type: pattern.type}) ?? this.hasTrait(pattern.type, 'Copy');
+      }
+      const pending = [term.pattern];
+      while (pending.length) {
+        const pattern = pending.pop();
+        if (pattern.kind === 'atPattern') {
+          if (!pattern.binder.copy && ConditionChain.bindings(pattern.pattern).some(binding => !binding.copy))
+            throw new Diagnostic('E0382', "An '@' condition cannot move both a value and a non-Copy part", pattern.span);
+          pending.push(pattern.pattern);
+        }
+        if (pattern.items) pending.push(...pattern.items);
+        if (pattern.fields) pending.push(...pattern.fields.map(field => field.pattern));
+      }
+      term.irrefutable = this.checkCoverage([term.pattern], type, term).exhaustive;
+      term.moves = bindings.some(pattern => !pattern.copy);
+      term.binding = term.pattern.kind === 'bindingPattern' ? term.pattern.binding : null;
+      if (bindings.length && ConditionChain.containsReferences(this, type) &&
+          (!term.binding || !T.reference(type) && !term.value.borrowCarrier))
+        throw new Diagnostic('F_CONDITION_REFERENCE', 'Destructuring reference-carrying values in a condition requires projection-sensitive loan origins', term.span);
+      term.type = 'bool';
+    }
   }
   checkCoverage(patterns, type, node, required = false) {
     const report = {...this.coverage.analyze(patterns, type, node), type, span: node.span};
@@ -780,6 +827,19 @@ export class SemanticAnalyzer {
         type = '!'; break;
       }
       case 'expression': this.infer(node.value, ctx); type = node.value.type === '!' ? '!' : '()'; break;
+      case 'whileChain': {
+        ctx.push();
+        // Explicit labels can target this loop even while checking its header;
+        // Rust rejects unlabeled exits from a while condition (E0590).
+        const frame = {kind: 'while', id: node.id, label: node.label, type: '!', condition: true};
+        ctx.loops.push(frame);
+        try {
+          this.conditionChain(node, ctx);
+          frame.condition = false;
+          T.unify('()', this.block(node.then, ctx, '()'), new Map(), node.then);
+        } finally { ctx.loops.pop(); ctx.pop(); }
+        break;
+      }
       case 'whileLet': {
         const scrutinee = this.infer(node.value, ctx);
         ctx.push(); this.pattern(node.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value));

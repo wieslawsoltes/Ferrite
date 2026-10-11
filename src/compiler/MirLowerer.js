@@ -1,3 +1,4 @@
+import {ConditionChain} from './conditions/ConditionChain.js';
 import {Diagnostic} from './Diagnostic.js';
 import {TypeSystem as T} from './TypeSystem.js';
 import {AssigneeLowerer} from './assignments/AssigneeLowerer.js';
@@ -112,6 +113,7 @@ export class MirLowerer {
         return this.emit('cast', {value, targetType: node.target}, node, node.type);
       }
       case 'block': return this.block(node);
+      case 'ifChain': return this.ifChain(node);
       case 'ifLet': {
         const value = this.expr(node.value), condition = this.patternTest(node.pattern, value);
         return this.conditional(condition, () => { this.bind(node.pattern, value); return this.block(node.then); },
@@ -122,7 +124,7 @@ export class MirLowerer {
       case 'loopExpr': return this.loopExpression(node);
       case 'labelBlock': return this.labeledBlock(node);
       case 'assign': case 'return': case 'break': case 'continue':
-      case 'while': case 'whileLet': case 'for': this.statement(node); return this.current ? this.unit(node) : null;
+      case 'while': case 'whileLet': case 'whileChain': case 'for': this.statement(node); return this.current ? this.unit(node) : null;
       case 'match': return this.matchExpression(node);
       case 'try': {
         const value = this.expr(node.value), tag = this.emit('tag', {value}, node, '&str');
@@ -186,6 +188,54 @@ export class MirLowerer {
     if (fallsThrough || frame.hasBreak) this.current = done;
     else done.terminator = {kind: 'unreachable', span: node.span};
     return result;
+  }
+  /** One shared failure edge; a pattern publishes bindings only on success.
+   * No duplicated else AST, recursive expansion, or runtime condition opcode. */
+  conditionChain(node, failure) {
+    let failures = 0;
+    for (const term of ConditionChain.terms(node)) {
+      if (!this.current) break;
+      const pattern = term.kind === 'letCondition' ? term.pattern : null;
+      const value = this.expr(pattern ? term.value : term, !!pattern);
+      if (!this.current) break;
+      const condition = pattern ? this.patternTest(pattern, value) : value;
+      const next = this.newBlock(pattern ? 'let-chain pattern matched' : 'let-chain condition satisfied', term);
+      this.branch(condition, next, failure, term); failures++;
+      this.current = next;
+      if (pattern) this.bind(pattern, value, term);
+    }
+    return failures;
+  }
+  ifChain(node) {
+    const failure = this.newBlock('let-chain failure', node), done = this.newBlock('let-chain merge', node);
+    const result = this.register(node.type, node);
+    const failures = this.conditionChain(node, failure);
+    let reaches = false;
+    if (this.current) {
+      const yes = this.block(node.then);
+      if (this.current) { this.move(result, yes, node.then); this.goto(done, node.then); reaches = true; }
+    }
+    if (failures) {
+      this.current = failure;
+      const no = this.expr(node.otherwise);
+      if (this.current) { this.move(result, no, node.otherwise ?? node); this.goto(done, node); reaches = true; }
+    } else failure.terminator = {kind: 'unreachable', span: node.span};
+    if (reaches) this.current = done;
+    else { done.terminator = {kind: 'unreachable', span: node.span}; this.current = null; }
+    return result;
+  }
+  whileChain(node) {
+    const test = this.newBlock('while-chain test', node), done = this.newBlock('while-chain exit', node);
+    const frame = {id: node.id, break: done, continue: test, result: null, hasBreak: false};
+    this.goto(test, node); this.current = test; this.loops.push(frame);
+    let failures;
+    try {
+      failures = this.conditionChain(node, done);
+      if (this.current) this.block(node.then);
+      if (this.current) this.goto(test, node);
+    } finally { this.loops.pop(); }
+    if (failures || frame.hasBreak) this.current = done;
+    else { done.terminator = {kind: 'unreachable', span: node.span}; this.current = null; }
   }
   whileLet(node) {
     const test = this.newBlock('while-let test', node), body = this.newBlock('pattern matched', node), done = this.newBlock('while-let exit', node);
@@ -272,6 +322,7 @@ export class MirLowerer {
         this.goto(frame.break, node); break;
       }
       case 'continue': this.goto(this.loops.findLast(loop => loop.id === node.controlTarget).continue, node); break;
+      case 'whileChain': this.whileChain(node); break;
       case 'whileLet': this.whileLet(node); break;
       case 'while': this.whileLoop(node); break;
       case 'for': this.forLoop(node); break;

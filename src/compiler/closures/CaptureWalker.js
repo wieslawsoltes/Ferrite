@@ -26,6 +26,16 @@ export class CaptureWalker {
     if (node.kind === 'field' || node.kind === 'index') return {...node, object: walk(node.object, names, use), ...(node.index ? {index: walk(node.index)} : {})};
     if (node.kind === 'closure') return {...node, body: walk(node.body, new Set([...names, ...node.params.map(p => p.name)]), 'consume')};
     if (node.kind === 'for') return {...node, from: walk(node.from), to: walk(node.to), then: walk(node.then, new Set([...names, ...this.bindings(node.pattern)]))};
+    if (node.kind === 'ifChain' || node.kind === 'whileChain') {
+      const scope = new Set(names);
+      const conditions = node.conditions.map(term => {
+        if (term.kind !== 'letCondition') return walk(term, scope);
+        const value = walk(term.value, scope, this.bindings(term.pattern).length ? 'consume' : 'read');
+        this.bindings(term.pattern).forEach(name => scope.add(name));
+        return {...term, value};
+      });
+      return {...node, conditions, then: walk(node.then, scope), otherwise: walk(node.otherwise)};
+    }
     if (node.kind === 'ifLet' || node.kind === 'whileLet') return {...node, value: walk(node.value, names, 'consume'),
       then: walk(node.then, new Set([...names, ...this.bindings(node.pattern)])), otherwise: walk(node.otherwise)};
     if (node.kind === 'match') return {...node, value: walk(node.value, names, 'consume'), arms: node.arms.map(arm => {

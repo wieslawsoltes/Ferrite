@@ -13,13 +13,14 @@ jobs:
     env:
       TARGET_BRANCH: feat/compiler-nominal-variance
       EXPECTED_HEAD: 3479b9d29529070b8196d7497c6f673c1bd320a5
-      EXPECTED_TREE: 009c2defe27486750c5af6dd4d288f072b460405
+      PREVIOUS_TREE: 009c2defe27486750c5af6dd4d288f072b460405
+      EXPECTED_TREE: fa7dd561d8f912ea472daa94caec3f69805280a0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Decode and verify source patch
+      - name: Decode and verify source patches
         run: |
           python3 - <<'PY'
           import base64, hashlib, lzma, os
@@ -27,9 +28,7 @@ jobs:
           encoded = ''.join(Path(f'.compiler-transfer/variance.{i}.b64').read_text().strip() for i in range(3))
           patch = lzma.decompress(base64.b64decode(encoded, validate=True))
           assert hashlib.sha256(patch).hexdigest() == 'bc0ae47edc9e7c9fc40f89960cef2c3eb068b199b526fe5a7dae9755c0dde8bc'
-          # Apply the separately committed trailing-empty-line correction to the
-          # transfer patch. Both input and final patch hashes are checked; the
-          # source still passes strict git apply and staged whitespace checks.
+          # Reconstruct the separately committed trailing-empty-line correction.
           start = patch.index(b'diff --git a/tests/fixtures/nominal-variance.js ')
           end = patch.index(b'diff --git ', start + 1)
           block = patch[start:end]
@@ -38,15 +37,27 @@ jobs:
           patch = patch[:start] + block + patch[end:]
           assert hashlib.sha256(patch).hexdigest() == 'f2e9b2b1d5f6b3076887728a253c8bbc6eb5b3e5e8847adb36d77e32028e16b1'
           Path(os.environ['RUNNER_TEMP'], 'variance.patch').write_bytes(patch)
+          fix = Path('.compiler-transfer/variance-debugger.patch').read_bytes()
+          assert hashlib.sha256(fix).hexdigest() == 'adde5c19a990e9653ba42f06004a8b02212cd396973d866171ead4472a037812'
+          Path(os.environ['RUNNER_TEMP'], 'variance-debugger.patch').write_bytes(fix)
           PY
       - uses: actions/checkout@v4
         with:
           ref: feat/compiler-nominal-variance
+          fetch-depth: 0
       - name: Apply and regenerate exact tree
         run: |
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          git apply --check --whitespace=error-all "$RUNNER_TEMP/variance.patch"
-          git apply --index --whitespace=error-all "$RUNNER_TEMP/variance.patch"
+          if test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"; then
+            git apply --check --whitespace=error-all "$RUNNER_TEMP/variance.patch"
+            git apply --index --whitespace=error-all "$RUNNER_TEMP/variance.patch"
+          else
+            # A previous queued publisher may have committed the exact pre-fix
+            # tree. Only that verified single-parent continuation is accepted.
+            test "$(git rev-parse HEAD^{tree})" = "$PREVIOUS_TREE"
+            test "$(git rev-parse HEAD^)" = "$EXPECTED_HEAD"
+          fi
+          git apply --check --whitespace=error-all "$RUNNER_TEMP/variance-debugger.patch"
+          git apply --index --whitespace=error-all "$RUNNER_TEMP/variance-debugger.patch"
           npm run build:workers
           npm run build:sdk
           git add -A
@@ -71,6 +82,6 @@ jobs:
           test "$(git write-tree)" = "$EXPECTED_TREE"
           git config user.name 'Wiesław Šoltés'
           git config user.email 'wieslawsoltes@users.noreply.github.com'
-          git commit -m 'feat: infer nominal variance and validate constrained type parameters'
+          git commit -m 'feat: infer nominal variance with deterministic debugger regressions'
           git push origin "HEAD:refs/heads/$TARGET_BRANCH"
           git rev-parse HEAD HEAD^{tree}

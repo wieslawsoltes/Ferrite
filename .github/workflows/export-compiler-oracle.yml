@@ -22,7 +22,7 @@ jobs:
           mkdir -p oracle/bin oracle/lib/rustlib/x86_64-unknown-linux-gnu
           cp "$root/bin/rustc" "$root/bin/rustfmt" oracle/bin/
           cp -L "$root"/lib/*.so* oracle/lib/
-          cp -a "$root/lib/rustlib/x86_64-unknown-linux-gnu/lib" oracle/lib/rustlib/x86_64-unknown-linux-gnu/
+          cp -a "$root/lib/rustlib/x86_64-unknown-linux-gnu/lib" "$root/lib/rustlib/x86_64-unknown-linux-gnu/bin" oracle/lib/rustlib/x86_64-unknown-linux-gnu/
           cp oracle-version.txt oracle/
           oracle/bin/rustc --version --verbose
           printf 'fn main(){println!("oracle ok");}\n' > smoke.rs

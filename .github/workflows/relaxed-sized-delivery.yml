@@ -1,0 +1,66 @@
+name: Publish relaxed sizing continuation
+on:
+  push:
+    branches: [automation/compiler-relaxed-sized-delivery]
+    paths: ['.delivery/**', '.github/workflows/relaxed-sized-delivery.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_BRANCH: feat/compiler-relaxed-sized
+      EXPECTED_HEAD: ee10dcf10f3e4db3fc1ebeed8b7e478159b35701
+      EXPECTED_TREE: 9459192bfd5e478028ad62eed7300975b3eb4551
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Decode and verify source patch
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os
+          from pathlib import Path
+          encoded = ''.join(Path(f'.delivery/sized-{i:02d}.b64').read_text().strip() for i in (1, 2))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'c509b88fef7f8e512606e01d12c603f14aa42d319c9852d9821aa27fada12e9d'
+          Path(os.environ['RUNNER_TEMP'], 'relaxed-sized.patch').write_bytes(patch)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/compiler-relaxed-sized
+      - name: Apply and regenerate exact tree
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git apply --check --whitespace=error-all "$RUNNER_TEMP/relaxed-sized.patch"
+          git apply --index --whitespace=error-all "$RUNNER_TEMP/relaxed-sized.patch"
+          npm run build:workers
+          npm run build:sdk
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+      - name: Validate publication
+        run: |
+          set -o pipefail
+          npm run check 2>&1 | tee "$RUNNER_TEMP/sized-check.log"
+          node --test --test-concurrency=4 tests/*.test.js > "$RUNNER_TEMP/sized-tests.log" 2>&1
+          tail -n 12 "$RUNNER_TEMP/sized-tests.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sized-delivery-diagnostics
+          path: |
+            ${{ runner.temp }}/sized-check.log
+            ${{ runner.temp }}/sized-tests.log
+          retention-days: 7
+      - name: Commit and non-force push
+        run: |
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git config user.name 'Wiesław Šoltés'
+          git config user.email 'wieslawsoltes@users.noreply.github.com'
+          git commit -m 'feat: check relaxed Sized bounds with declaration-owned storage proofs'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD HEAD^{tree}

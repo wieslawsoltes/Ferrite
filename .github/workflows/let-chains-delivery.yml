@@ -1,0 +1,67 @@
+name: Publish Rust 2024 let chains
+on:
+  push:
+    branches: [automation/compiler-let-chain-validation]
+    paths: ['.compiler-transfer/let-chains.*.b64', '.github/workflows/let-chains-delivery.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_BRANCH: feat/compiler-rust2024-let-chains
+      EXPECTED_HEAD: b4b8676ac2960a146728adc71f3205bdc09410b2
+      EXPECTED_TREE: 6863b39a20e04e49a36e61ac13f5b6c3489a6459
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Decode and verify reviewed source patch
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os
+          from pathlib import Path
+          encoded = ''.join(Path('.compiler-transfer', f'let-chains.{i:02d}.b64').read_text().strip() for i in range(2))
+          assert len(encoded) == 24972
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'ce730cde0e8b52f47517190f60f12b3d792a2c6badb0fbee24e701d0f2bd27e1'
+          Path(os.environ['RUNNER_TEMP'], 'let-chains.patch').write_bytes(patch)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/compiler-rust2024-let-chains
+      - name: Apply and regenerate exact reviewed tree
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git apply --check --whitespace=error-all "$RUNNER_TEMP/let-chains.patch"
+          git apply --index --whitespace=error-all "$RUNNER_TEMP/let-chains.patch"
+          npm run build:workers
+          npm run build:sdk
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+      - name: Validate publication
+        run: |
+          set -o pipefail
+          npm run check 2>&1 | tee "$RUNNER_TEMP/let-chains-check.log"
+          node --test --test-concurrency=4 tests/*.test.js > "$RUNNER_TEMP/let-chains-tests.log" 2>&1
+          tail -n 12 "$RUNNER_TEMP/let-chains-tests.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: let-chains-delivery-diagnostics
+          path: |
+            ${{ runner.temp }}/let-chains-check.log
+            ${{ runner.temp }}/let-chains-tests.log
+          retention-days: 7
+      - name: Commit and non-force push
+        run: |
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git config user.name 'Wiesław Šoltés'
+          git config user.email 'wieslawsoltes@users.noreply.github.com'
+          git commit -m 'feat: implement Rust 2024 let chains with bounded control-flow ownership'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD HEAD^{tree}

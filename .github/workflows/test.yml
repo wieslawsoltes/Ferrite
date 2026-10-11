@@ -55,6 +55,8 @@ jobs:
           npm run test:ui:native
       - name: Differentially validate language semantics against installed rustc
         run: npm run test:language
+      - name: Verify inferred nominal variance with native subtype probes
+        run: npm run test:variance:native
       - name: Exercise installed Cargo over an offline local workspace
         run: |
           npm run test:native

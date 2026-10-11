@@ -623,7 +623,7 @@ export class SemanticAnalyzer {
     const receiver = node.callee.object, method = node.callee.field;
     const original = this.infer(receiver, ctx), base = T.reference(original) && original !== '&str' ? T.target(original) : original;
     const app = T.application(base), array = /^\[(.+);\d+\]$/.exec(base);
-    const resolved = this.implementations.lookup(base, method, ctx.instance.fn.module, node,ctx.instance.fn,ctx.methodScope.traits(ctx.methodScope.of(receiver)));
+    const resolved = this.implementations.lookup(base, method, ctx.instance.fn.module, node,ctx.instance.fn,ctx.methodScope.selection(ctx.methodScope.of(receiver)));
     if(!resolved){const dataType=inferDataMethod(this,node,ctx,original,base,expected);if(dataType)return dataType;}
     const builtins = ['len', 'clone', 'push', 'pop', 'push_str', 'to_string', 'unwrap', 'is_some', 'is_none', 'is_ok', 'is_err'];
     if (!resolved && builtins.includes(method)) {

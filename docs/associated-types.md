@@ -106,7 +106,11 @@ evaluation order remains the original source order. Delayed failures preserve
 field-specific diagnostic spans and messages. Ferrite's existing strict literal
 range checks still apply.
 
-A symbolic associated origin retains the methods afforded by its declared bounds.
+A symbolic associated origin retains the method evidence afforded by its declared
+bounds, but this does not import those traits into lexical scope. Unlike a bare
+generic parameter, a projection needs the method-providing trait in scope even
+when a where clause explicitly repeats its bound. Qualified trait calls remain
+available without an import.
 An inherent method available only on a particular concrete substitution cannot
 replace the trait method selected by generic code. Origins are propagated through
 generic helper results and trait method results; the latter use the **trait
@@ -197,3 +201,14 @@ commit. No runtime scheduling or assertion semantics were weakened.
 References: [Rust Reference: associated items](https://doc.rust-lang.org/reference/items/associated-items.html),
 [qualified paths](https://doc.rust-lang.org/reference/paths.html#qualified-paths),
 [rustc literal-overflow lint](https://doc.rust-lang.org/rustc/lints/listing/deny-by-default.html#overflowing-literals).
+
+## Native method-scope regression
+
+The initial native differential run rejected a program accepted by the browser
+compiler: an associated-type bound had incorrectly granted lexical trait scope.
+The original source is retained as an E0599 compile-fail regression alongside
+accepted imported and qualified-call variants. Additional native probes cover
+explicit projection bounds, concrete where clauses, generic parameter bounds,
+supertrait evidence, and protection against concrete inherent-method leakage.
+Method selection keeps the original symbolic evidence separate from lexical
+visibility and from the concrete implementation used for code generation.

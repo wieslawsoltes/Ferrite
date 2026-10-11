@@ -58,6 +58,19 @@ export class TraitMethodScope {
     return traits ? new Set([...traits].map(trait =>
       this.a.index.typeResolver.substitute(trait, this.substitution, this.fn))) : null;
   }
+  /** Only bare type parameters receive Rust's bound-first method lookup.
+   * A projection carries proof of its bounds, but their traits still need to be
+   * in lexical scope. Keep those two facts distinct from its concrete layout. */
+  selection(origin) {
+    if (!this.active || !origin) return null;
+    origin = this.normalize(origin);
+    while (T.reference(origin)) origin = T.target(origin);
+    const parameter = this.parameters.has(origin) || origin === 'Self';
+    const abstract = parameter || !!T.projection(origin) &&
+      this.a.index.associatedTypes.symbolic(origin, this.parameters);
+    const traits = this.traits(origin);
+    return abstract || traits ? {traits: traits ?? new Set(), parameter, abstract} : null;
+  }
   remember(node, origin) { if (this.active && node && origin) this.expressions.set(node, origin); }
   bind(binding, origin) { if (this.active && binding && origin) this.bindings.set(binding, origin); }
   of(node) {

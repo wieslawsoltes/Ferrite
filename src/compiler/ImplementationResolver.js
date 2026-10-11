@@ -155,24 +155,32 @@ export class ImplementationResolver {
       if (!prove(normalize(predicate.type), this.traits.hierarchy.canonical(normalize(bound), entry.impl.module, entry.impl))) return false;
     return true;
   }
-  lookup(type, method, module, node, context=null, boundTraits=null, requiredTrait=null) {
+  lookup(type, method, module, node, context=null, scope=null, requiredTrait=null) {
     this.lookups++;
+    const boundTraits = scope?.traits ?? null;
     const candidates = [...(this.byOwner.get(this.head(type))?.get(method) ?? []),...(this.byOwner.get('*')?.get(method) ?? [])], matches = [];
     let boundFailure = false;
     const query = ImplTypePattern.parse(type, new Set(), 'query:');
     for (const entry of candidates) {
       this.candidatesExamined++;
+      if (scope?.abstract && !entry.trait) continue;
       if(requiredTrait && entry.trait?.name!==T.application(requiredTrait).name)continue;
       let mapping = this.match(entry, type, query);
       if (!mapping) continue;
       if(entry.trait) {
-        const scoped=[...(requiredTrait?[requiredTrait]:boundTraits??[])].filter(bound=>T.application(bound).name===entry.trait.name);
+        const scoped=[...(requiredTrait?[requiredTrait]:scope?.abstract?boundTraits??[]:[])].filter(bound=>T.application(bound).name===entry.trait.name);
+        // Instantiation must not invent methods absent from the symbolic
+        // declaration, nor turn associated-type evidence into a trait import.
+        if (scope?.abstract && !requiredTrait && !scoped.length) continue;
+        if (!requiredTrait && !scope?.parameter &&
+            entry.trait.name !== T.application(context?.implementedTrait ?? '').name &&
+            !this.inScope(entry.trait, module)) continue;
         if(scoped.length) {
           const matched=scoped.map(bound=>this.traits.match(entry,type,bound)).filter(Boolean);
           if(!matched.length)continue;
           if(matched.length>1)throw new Diagnostic('E0283',`Multiple trait applications select ${method}`,node.span);
           mapping=matched[0];
-        } else if(entry.trait.name!==T.application(context?.implementedTrait??'').name && !this.inScope(entry.trait,module))continue;
+        }
       }
       if (!this.applicable(entry, mapping)) { boundFailure = true; continue; }
       const fn=entry.methods.get(method);
@@ -182,7 +190,7 @@ export class ImplementationResolver {
       }
       matches.push({fn,mapping});
     }
-    const defaults=boundTraits?matches.filter(candidate=>boundTraits.has(T.substitute(candidate.fn.implementedTrait??'',candidate.mapping))):context?.defaultTrait?matches.filter(candidate=>candidate.fn.implementedTrait===context.defaultTrait):[];
+    const defaults=scope?.abstract?matches.filter(candidate=>boundTraits.has(T.substitute(candidate.fn.implementedTrait??'',candidate.mapping))):context?.defaultTrait?matches.filter(candidate=>candidate.fn.implementedTrait===context.defaultTrait):[];
     const inherent = matches.filter(candidate => !candidate.fn.implementedTrait), selected = defaults.length?defaults:inherent.length ? inherent : matches;
     if (selected.length > 1) throw new Diagnostic('E0034', `Multiple applicable methods named ${method} for ${type}`, node.span);
     if (!selected.length) {
@@ -213,7 +221,7 @@ export class ImplementationResolver {
     }
     const separator = node.name.lastIndexOf('::'); if (separator < 0) return null;
     let owner = node.name.slice(0, separator);
-    const boundTraits = context.methodScope?.traits(owner === 'Self' ? context.methodScope.normalize('Self') : owner);
+    const scope = context.methodScope?.selection(owner === 'Self' ? context.methodScope.normalize('Self') : owner);
     const method = node.name.slice(separator + 2), module = context.instance.fn.module;
     if (owner === 'Self') owner = context.instance.fn.owner;
     else owner = T.substitute(owner, context.instance.substitution ?? new Map(Object.entries(context.instance.typeArguments)));
@@ -227,13 +235,13 @@ export class ImplementationResolver {
       if(!T.numeric(owner)&&!['bool','char','str','String'].includes(owner)&&
         !T.reference(owner)&&!T.tuple(owner)&&!T.array(owner)&&!T.function(owner))return null;
       if(node.ownerTypeArguments?.length)throw new Diagnostic('E0107','This implementing type has no type arguments',node.span);
-      return this.lookup(owner,method,module,node,context.instance.fn,boundTraits);
+      return this.lookup(owner,method,module,node,context.instance.fn,scope);
     }
     const explicit = node.ownerTypeArguments?.map(type => this.a.normalize(type, context, node));
     const args = explicit ?? (app.args.length ? app.args : declaration.generics.map(() => '_'));
     if (args.length !== declaration.generics.length) throw new Diagnostic('E0107', `Wrong number of type arguments for ${app.name}`, node.span);
     const type = this.index.type(app.name + (args.length ? `<${args.join(',')}>` : ''), module, context.instance.fn.owner, new Set(), node);
-    const result = this.lookup(type, method, module, node,context.instance.fn,boundTraits);
+    const result = this.lookup(type, method, module, node,context.instance.fn,scope);
     if (!result) throw new Diagnostic('E0599', `No associated function ${method} for ${type}`, node.span);
     return result;
   }

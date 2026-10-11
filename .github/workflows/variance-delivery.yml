@@ -1,0 +1,66 @@
+name: Publish nominal variance continuation
+on:
+  push:
+    branches: [automation/compiler-variance-delivery]
+    paths: ['.compiler-transfer/**', '.github/workflows/variance-delivery.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_BRANCH: feat/compiler-nominal-variance
+      EXPECTED_HEAD: 3479b9d29529070b8196d7497c6f673c1bd320a5
+      EXPECTED_TREE: 1e06090a3f1f95da6d239a20d744bc620debbe70
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Decode and verify source patch
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os
+          from pathlib import Path
+          encoded = ''.join(Path(f'.compiler-transfer/variance.{i}.b64').read_text().strip() for i in range(3))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'bc0ae47edc9e7c9fc40f89960cef2c3eb068b199b526fe5a7dae9755c0dde8bc'
+          Path(os.environ['RUNNER_TEMP'], 'variance.patch').write_bytes(patch)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/compiler-nominal-variance
+      - name: Apply and regenerate exact tree
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git apply --check --whitespace=error-all "$RUNNER_TEMP/variance.patch"
+          git apply --index --whitespace=error-all "$RUNNER_TEMP/variance.patch"
+          npm run build:workers
+          npm run build:sdk
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+      - name: Validate publication
+        run: |
+          set -o pipefail
+          npm run check 2>&1 | tee "$RUNNER_TEMP/variance-check.log"
+          node --test --test-concurrency=4 tests/*.test.js > "$RUNNER_TEMP/variance-tests.log" 2>&1
+          tail -n 12 "$RUNNER_TEMP/variance-tests.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: variance-delivery-diagnostics
+          path: |
+            ${{ runner.temp }}/variance-check.log
+            ${{ runner.temp }}/variance-tests.log
+          retention-days: 7
+      - name: Commit and non-force push
+        run: |
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git config user.name 'Wiesław Šoltés'
+          git config user.email 'wieslawsoltes@users.noreply.github.com'
+          git commit -m 'feat: infer nominal variance and validate constrained type parameters'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD HEAD^{tree}

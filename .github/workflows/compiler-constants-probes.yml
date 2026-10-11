@@ -1,0 +1,58 @@
+name: Native associated constant probes
+on:
+  push:
+    branches: [automation/compiler-associated-constants-delivery]
+    paths: ['.github/workflows/compiler-constants-probes.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Prepare matching stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Run native dependency and generic-pattern probes
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, subprocess, tempfile
+          cases = {
+            'unused-independent-panic': 'struct S;impl S{const N:i32=1/0;}fn main(){}',
+            'unused-alias-panic': 'struct S;impl S{const N:i32=1/0;const M:i32=Self::N;}fn main(){}',
+            'unused-expression-dependency': 'struct S;impl S{const N:i32=1/0;const M:i32=Self::N+0;}fn main(){}',
+            'unused-dead-branch-dependency': 'struct S;impl S{const N:i32=1/0;const M:i32=if true{7}else{Self::N};}fn main(){}',
+            'unused-direct-cycle': 'struct S;impl S{const N:i32=Self::M;const M:i32=Self::N;}fn main(){}',
+            'unused-expression-cycle': 'struct S;impl S{const N:i32=Self::M+0;const M:i32=Self::N+0;}fn main(){}',
+            'unused-const-call-panic': 'const fn bad()->i32{1/0}struct S;impl S{const N:i32=bad();}fn main(){}',
+            'unused-generic-dependency': 'struct S<T>(T);impl<T>S<T>{const N:i32=1/0;const M:i32=Self::N;}fn main(){}',
+            'unused-generic-cycle': 'struct S<T>(T);impl<T>S<T>{const N:i32=Self::M;const M:i32=Self::N;}fn main(){}',
+            'unused-trait-default-panic': 'trait A{const N:i32=1/0;}struct S;impl A for S{}fn main(){}',
+            'unused-trait-default-dependency': 'trait A{const N:i32=1/0;const M:i32=Self::N;}struct S;impl A for S{}fn main(){}',
+            'pattern-literal': 'struct S<T>(T);impl<T>S<T>{const N:i32=7;}fn f<T>(n:i32)->i32{match n{S::<T>::N=>1,_=>0}}fn main(){println!("{}",f::<bool>(7));}',
+            'pattern-arithmetic': 'struct S<T>(T);impl<T>S<T>{const N:i32=3+4;}fn f<T>(n:i32)->i32{match n{S::<T>::N=>1,_=>0}}fn main(){println!("{}",f::<bool>(7));}',
+            'pattern-block': 'struct S<T>(T);impl<T>S<T>{const N:i32={let n=7;n};}fn f<T>(n:i32)->i32{match n{S::<T>::N=>1,_=>0}}fn main(){println!("{}",f::<bool>(7));}',
+            'pattern-const-call': 'const fn seven()->i32{7}struct S<T>(T);impl<T>S<T>{const N:i32=seven();}fn f<T>(n:i32)->i32{match n{S::<T>::N=>1,_=>0}}fn main(){println!("{}",f::<bool>(7));}',
+            'pattern-generic-const-call': 'const fn seven<T>()->i32{7}struct S<T>(T);impl<T>S<T>{const N:i32=seven::<T>();}fn f<T>(n:i32)->i32{match n{S::<T>::N=>1,_=>0}}fn main(){println!("{}",f::<bool>(7));}',
+            'pattern-self-dependency': 'struct S<T>(T);impl<T>S<T>{const M:i32=7;const N:i32=Self::M;}fn f<T>(n:i32)->i32{match n{S::<T>::N=>1,_=>0}}fn main(){println!("{}",f::<bool>(7));}',
+            'pattern-dependent-trait-constant': 'trait A{const N:i32;}impl A for bool{const N:i32=7;}struct S<T>(T);impl<T:A>S<T>{const N:i32=T::N;}fn f<T:A>(n:i32)->i32{match n{S::<T>::N=>1,_=>0}}fn main(){println!("{}",f::<bool>(7));}',
+            'pattern-dead-generic-dependency': 'trait A{const N:i32;}impl A for bool{const N:i32=7;}struct S<T>(T);impl<T:A>S<T>{const N:i32=if true{7}else{T::N};}fn f<T:A>(n:i32)->i32{match n{S::<T>::N=>1,_=>0}}fn main(){println!("{}",f::<bool>(7));}',
+            'pattern-blanket-trait': 'trait A{const N:i32;}struct S<T>(T);impl<T>A for S<T>{const N:i32=7;}fn f<T>(n:i32)->i32{match n{<S<T> as A>::N=>1,_=>0}}fn main(){println!("{}",f::<bool>(7));}',
+            'pattern-default-trait': 'trait A{const N:i32=7;}struct S<T>(T);impl<T>A for S<T>{}fn f<T>(n:i32)->i32{match n{<S<T> as A>::N=>1,_=>0}}fn main(){println!("{}",f::<bool>(7));}'
+          }
+          report = {'rustc': subprocess.check_output(['rustup','run','stable','rustc','--version','--verbose'],text=True), 'cases': []}
+          with tempfile.TemporaryDirectory() as d:
+            source=pathlib.Path(d,'fixture.rs');binary=pathlib.Path(d,'fixture')
+            for name,code in cases.items():
+              source.write_text(code)
+              result=subprocess.run(['rustup','run','stable','rustc',str(source),'--edition=2024','-A','warnings','-A','unconditional_panic','-A','arithmetic_overflow','-C','overflow-checks=on','-o',str(binary)],capture_output=True,text=True,timeout=30)
+              execution=subprocess.run([str(binary)],capture_output=True,text=True,timeout=5) if result.returncode==0 else None
+              item={'name':name,'source':code,'accepted':result.returncode==0,'diagnostics':result.stderr,'output':execution.stdout if execution else None}
+              report['cases'].append(item)
+              print(json.dumps(item),flush=True)
+          pathlib.Path('native-constant-probes.json').write_text(json.dumps(report,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-constant-probes
+          path: native-constant-probes.json
+          retention-days: 7

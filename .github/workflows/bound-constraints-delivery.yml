@@ -1,0 +1,66 @@
+name: Publish associated bound continuation
+on:
+  push:
+    branches: [automation/compiler-bound-constraints-delivery]
+    paths: ['.compiler-transfer/**', '.github/workflows/bound-constraints-delivery.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_BRANCH: feat/compiler-associated-bound-constraints
+      EXPECTED_HEAD: d9930ce91621edfaff83f02f98f14745d04c4b3e
+      EXPECTED_TREE: be40789f771b2a2e4ae0d3c177c01f587876f80b
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Decode and verify source patch
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os
+          from pathlib import Path
+          encoded = ''.join(Path(f'.compiler-transfer/bounds-{n}.b64').read_text().strip() for n in (1, 2, 3))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'd1b6bd1f8b6f84b7f17ee892d6034b7d84a8723c7825758ad032c8199b4b69a6'
+          Path(os.environ['RUNNER_TEMP'], 'bound-constraints.patch').write_bytes(patch)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/compiler-associated-bound-constraints
+      - name: Apply and regenerate exact tree
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git apply --check --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/bound-constraints.patch"
+          git apply --index --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/bound-constraints.patch"
+          npm run build:workers
+          npm run build:sdk
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+      - name: Validate publication
+        run: |
+          set -o pipefail
+          npm run check 2>&1 | tee "$RUNNER_TEMP/bounds-check.log"
+          node --test --test-concurrency=4 tests/*.test.js > "$RUNNER_TEMP/bounds-tests.log" 2>&1
+          tail -n 12 "$RUNNER_TEMP/bounds-tests.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bounds-delivery-diagnostics
+          path: |
+            ${{ runner.temp }}/bounds-check.log
+            ${{ runner.temp }}/bounds-tests.log
+          retention-days: 7
+      - name: Commit and non-force push
+        run: |
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git config user.name 'Wiesław Šoltés'
+          git config user.email 'wieslawsoltes@users.noreply.github.com'
+          git commit -m 'feat: elaborate associated bounds with symbolic ownership proofs'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD HEAD^{tree}

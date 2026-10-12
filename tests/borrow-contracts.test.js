@@ -129,3 +129,14 @@ test('unrepresented nested result regions cannot silently discard local lifetime
   // solve its missing inner result region. Keep it out of conformance counts.
   assert.throws(() => compile(source), {code: 'F_BORROW_CONTRACT'});
 });
+
+
+test('generic direct-input traversal is charged even without dereference layers', () => {
+  const source = 'fn same<T>(x:T)->T{x}fn main(){let x=42;println!("{}",*same(&x));}';
+  const before = BorrowContract.MAX_WORK, cache = new SemanticQueryCache();
+  try {
+    BorrowContract.MAX_WORK = 0;
+    assert.throws(() => compile(source, {queryCache: cache}), {code: 'F_OWNERSHIP_LIMIT'});
+  } finally { BorrowContract.MAX_WORK = before; }
+  cache.beginBuild(); assert.equal(output(compile(source, {queryCache: cache})), '42\n');
+});

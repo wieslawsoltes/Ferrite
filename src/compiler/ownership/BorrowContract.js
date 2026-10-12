@@ -42,6 +42,7 @@ export class BorrowContract {
       contract.kind = 'generic';
       const depths = [];
       for (let i = 0; i < formals.length; i++) {
+        charge(0);
         let formal = formals[i], actual = types[i], depth = 0;
         while (T.reference(formal)) {
           charge(++depth); formal = T.target(formal);
@@ -53,7 +54,6 @@ export class BorrowContract {
           // Containers and function types can carry the same generic lifetime
           // too. Do not silently discard a dependency just because its storage
           // path is not represented by the direct-reference domain.
-          charge(0);
           if (T.substitute(formals[i], new Map([[declared, '!']]), true) !== formals[i])
             contract.error = 'F_BORROW_CONTRACT';
         }

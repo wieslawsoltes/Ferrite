@@ -127,8 +127,10 @@ Generic method bodies still use Ferrite's existing **monomorphized checking**:
 this increment does not prove an unused generic body is valid for every type
 satisfying its bounds. General parametric body checking and a complete trait solver
 are separate work. Generic trait implementations currently report
-`F_GENERIC_TRAIT_IMPL`; reference-carrying generic method results report
-`F_IMPL_REFERENCE` until interprocedural loan tracking is available. Owned values,
+`F_GENERIC_TRAIT_IMPL` for unsupported shapes. The
+[call-contract continuation](borrow-contracts.md) supports tracked direct-reference
+generic method results; aggregate reference-carrying results still report
+`F_IMPL_REFERENCE`. Owned values,
 Copy projections and scalar stores through supported mutable receivers work.
 
 Associated types/constants, const/lifetime impl parameters, full trait scope and

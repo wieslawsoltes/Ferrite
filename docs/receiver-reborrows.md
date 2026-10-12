@@ -67,15 +67,16 @@ contains execution, compile-failure and pre-panic-output cases. Unit tests also
 inspect receiver parameter types, immutable query replay, loan events, and the
 runtime's captured-location contract.
 
-This is not full Rust NLL, region inference, projection-sensitive borrow checking,
-or a general reborrow-tree implementation. It covers compiler-inserted
-user-method receivers with tracked local/parameter origins. Untracked receiver
-reference origins report `F_REBORROW_REFERENCE`; reference-carrying results from
-automatically borrowed user methods report `F_IMPL_REFERENCE` until their
-interprocedural loan tracking is implemented. General reference transfers,
-function-argument coercion, overloaded operators and builtin method fast paths
-retain their existing documented limits. This does not certify all safe Rust
-programs or replace native rustc's borrow checker.
+The shared checker now supports projected places, explicit reborrow ancestry and
+[direct-reference return contracts](borrow-contracts.md), but not full Rust NLL or
+universal region inference. Calls on returned direct references retain tracked
+argument origins. Direct-reference method results no longer have the old blanket
+`F_IMPL_REFERENCE` restriction; aggregate reference carriers retain that boundary.
+Reference-shaped argument reborrows now share the reservation/activation machinery.
+Untracked receiver origins still report `F_REBORROW_REFERENCE`. Complete coercions,
+overloaded operators, builtin fast paths, lifetime subtyping and arbitrary aggregate
+reference transfers remain separate work. This is not a safety certification for
+unrestricted Rust or a replacement for native rustc's full borrow checker.
 
 The reservation/activation distinction follows the Rust compiler development
 guide: https://rustc-dev-guide.rust-lang.org/borrow_check/two_phase_borrows.html

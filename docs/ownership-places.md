@@ -87,8 +87,9 @@ becomes usable again when the child is no longer live.
 
 Copying or transferring a tracked reference preserves its loan lineage, including
 all live shared copies. Reassigning a reference detaches its old borrower identity.
-Compiler-inserted two-phase method receivers retain reservation and activation
-checks. Explicit source mutable borrows are active immediately. Call argument
+Compiler-inserted two-phase method receivers and reference-shaped call arguments
+retain reservation and activation checks. [Direct-reference call contracts](borrow-contracts.md)
+retain selected input loans through function/method results. Explicit source mutable borrows are active immediately. Call argument
 loans remain protected for the duration of the call, including nested calls.
 
 ## Work budgets, queries and inspection
@@ -117,10 +118,12 @@ reference representation are unchanged by this analysis.
 
 There is no full lifetime syntax/region constraint solver, universal generic-body
 borrow checking, higher-ranked lifetime reasoning, complete outlives/drop checking,
-Polonius implementation, or complete two-phase coercion/call-argument semantics.
+Polonius implementation, or complete coercion/call-argument semantics. The
+[call-contract continuation](borrow-contracts.md) adds reference-shaped argument
+reborrows and signature-owned direct-reference results, not arbitrary region equations.
 The analysis does not establish interprocedural alias relationships between
 independently supplied reference parameters. General aggregate reference carriers,
-reference-valued fields, arbitrary interprocedural returned-reference origins and
+reference-valued fields, interprocedural origins outside direct-reference contracts and
 all pattern-bound references need further work. Existing targeted origin checks
 remain in force, but not every unsupported reference-carrying path is diagnosed;
 this pass must not be described as complete or sound for unrestricted Rust.

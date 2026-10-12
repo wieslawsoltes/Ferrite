@@ -95,8 +95,10 @@ full lifetime/HRTB analysis, or observable `Drop`/temporary-destruction ordering
 The syntax feature does not add custom destructors or a native memory ABI.
 
 Direct reference bindings/results must have tracked local or parameter origins.
-Destructuring/storing reference-carrying aggregates and interprocedural
-reference-return origins are not implemented by this pass. Those cases fail with
+[Direct-reference call contracts](borrow-contracts.md) now propagate supported
+function/method return origins through condition operands and results.
+Destructuring/storing reference-carrying aggregates still needs broader dataflow.
+The condition pass rejects its unsupported aggregate carriers with
 `F_CONDITION_REFERENCE` rather than silently treating an unknown origin as safe;
 capability-boundary tests are kept out of the native compile-fail corpus. A
 reference result whose referent is known to be condition-local fails with E0597.

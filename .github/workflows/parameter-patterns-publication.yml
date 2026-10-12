@@ -1,0 +1,65 @@
+name: Publish checked parameter patterns
+on:
+  push:
+    branches: [automation/parameter-patterns-publication]
+    paths: ['.publication/parameter-patterns-*.b64', '.github/workflows/parameter-patterns-publication.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_BRANCH: feat/ownership-parameter-patterns
+      EXPECTED_HEAD: 84e844cd1b5c0a918268e6b3eb3b3299493d6393
+      EXPECTED_TREE: 2f88885b00243004415db75816e4ead48d40db6d
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Decode and verify reviewed source patch
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os
+          from pathlib import Path
+          encoded = ''.join(Path(f'.publication/parameter-patterns-{i}.b64').read_text().strip() for i in range(1, 5))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '0092acf87196705192f0749d79669c8708296160ee6043a89b6bc30bbd82bb09'
+          Path(os.environ['RUNNER_TEMP'], 'parameter-patterns.patch').write_bytes(patch)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/ownership-parameter-patterns
+      - name: Reproduce reviewed source and deterministic bundles
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git apply --check --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/parameter-patterns.patch"
+          git apply --index --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/parameter-patterns.patch"
+          npm run build:workers
+          npm run build:sdk
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+      - name: Validate unchanged source gates
+        run: |
+          npm run check > "$RUNNER_TEMP/parameter-check.log" 2>&1
+          node --test --test-concurrency=4 tests/*.test.js > "$RUNNER_TEMP/parameter-tests.log" 2>&1
+          tail -n 12 "$RUNNER_TEMP/parameter-tests.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parameter-patterns-publication-evidence
+          path: |
+            ${{ runner.temp }}/parameter-check.log
+            ${{ runner.temp }}/parameter-tests.log
+          retention-days: 7
+      - name: Commit verified content and non-force push
+        run: |
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git config user.name 'Wiesław Šoltés'
+          git config user.email 'wieslawsoltes@users.noreply.github.com'
+          git commit -m 'feat: check ownership-aware function and closure parameter patterns' -m 'Publish the reviewed implementation from local commit b2db557d7c9b601429090f863bf6b3b65d37ec55. The separately authenticated CI gate follows in the next commit. Source tree, patch checksum, deterministic bundles and all regression tests are verified before this non-force push.'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD HEAD^{tree}

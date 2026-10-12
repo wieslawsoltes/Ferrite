@@ -38,6 +38,8 @@ export interface ReferenceContract {
 export interface OwnershipReport {
   readonly instance: string; readonly span: Readonly<SourceSpan>; readonly model: string;
   readonly places: readonly OwnershipPlace[]; readonly placeWork: number;
+  /** Charged typed-pattern planning and binding work; not runtime work. */
+  readonly patternWork: number;
   readonly liveness: OwnershipLivenessReport; readonly events: readonly OwnershipEvent[];
   readonly conditions?: {readonly work: number; readonly loopIterations: number};
   readonly referenceContract: ReferenceContract | null;

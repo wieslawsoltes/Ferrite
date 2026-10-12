@@ -99,3 +99,9 @@ if (contract) {
   void sourceIndex;
 }
 void contractKind;
+
+// Pattern analysis work is readonly checker metadata, never a runtime control.
+declare const ownershipPatternReport: import('ferrite-compiler').OwnershipReport;
+const patternWork: number = ownershipPatternReport.patternWork;
+// @ts-expect-error callers cannot mutate checker accounting.
+ownershipPatternReport.patternWork = 0;

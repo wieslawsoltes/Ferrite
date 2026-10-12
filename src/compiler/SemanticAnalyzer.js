@@ -525,6 +525,19 @@ export class SemanticAnalyzer {
   pattern(pattern, type, ctx, mutable = false, origin = type) {
     this.patterns.analyze(pattern, type, ctx, mutable);
     ctx.methodScope.bindPattern(pattern, origin);
+    for (const item of ConditionChain.bindings(pattern))
+      item.copy = ctx.methodScope.copyOf({kind: 'variable', binding: item.binding, type: item.type}) ?? this.hasTrait(item.type, 'Copy');
+    const pending = [pattern];
+    while (pending.length) {
+      const item = pending.pop();
+      if (item.kind === 'atPattern') {
+        if (!item.binder.copy && ConditionChain.bindings(item.pattern).some(binding => !binding.copy))
+          throw new Diagnostic('E0382', "An '@' pattern cannot move both a value and a non-Copy part", item.span);
+        pending.push(item.pattern);
+      }
+      if (item.items) pending.push(...item.items);
+      if (item.fields) pending.push(...item.fields.map(field => field.pattern));
+    }
   }
   /** Each scrutinee is checked before introducing its own pattern names. */
   conditionChain(node, ctx) {

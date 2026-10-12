@@ -3,6 +3,7 @@ import {Diagnostic} from './Diagnostic.js';
 import {ConditionOwnership} from './conditions/ConditionOwnership.js';
 import {OwnershipLiveness} from './ownership/OwnershipLiveness.js';
 import {OwnershipFlow} from './ownership/OwnershipFlow.js';
+import {PatternOwnership} from './ownership/PatternOwnership.js';
 import {PlaceTable} from './ownership/PlaceTable.js';
 import {TypeSystem as T} from './TypeSystem.js';
 
@@ -13,7 +14,7 @@ export class OwnershipAnalyzer {
     this.instance = instance; this.places = new PlaceTable(instance);
     this.provenance = new WeakMap(); this.valueOrigins = new WeakMap(); this.authorities = new Map(); this.loanSites = new WeakMap(); this.nextLoan = 0;
     this.lastUse = new Map(); this.moved = new Set(); this.loans = []; this.references = new Map(); this.events = [];
-    this.controls = []; this.callFrame = null;
+    this.controls = []; this.callFrame = null; this.patterns = new PatternOwnership(this);
     this.scan(instance.fn.body);
     this.liveness = new OwnershipLiveness(instance); this.pendingDestinations = []; this.activeCalls = []; this.constructing = new Set();
   }
@@ -25,7 +26,7 @@ export class OwnershipAnalyzer {
       return {instance: instance.key, span: instance.fn.span, events: analyzer.events,
         ...(analyzer.conditionWork ? {conditions: {work: analyzer.conditionWork, loopIterations: analyzer.conditionIterations ?? 0}} : {}),
         places: analyzer.places.snapshot(), placeWork: analyzer.places.work, liveness: analyzer.liveness.snapshot(),
-        referenceContract: instance.referenceContract ?? null,
+        referenceContract: instance.referenceContract ?? null, patternWork: analyzer.patterns.work,
         model: 'Projection-sensitive moves, CFG local liveness and reborrow authority (not full rustc NLL)'};
     });
   }
@@ -155,8 +156,10 @@ export class OwnershipAnalyzer {
     if (mode === 'reserve mutably') return loan.mutable;
     return true;
   }
-  referenceAccess(node, mode = 'read') {
-    this.expire(node);
+  referenceAccess(node, mode = 'read', expire = true) {
+    if (expire) this.expire(node);
+    if (mode !== 'read' && this.guardBindings?.has(node.binding?.slot))
+      throw new Diagnostic(mode === 'move' ? 'E0507' : 'E0594', 'A pattern binding cannot be moved or mutated in its guard', node.span);
     for (const root of this.referenceRoots(node)) {
       const conflict = this.loans.find(loan => this.places.overlaps(loan.root, root) && !this.permitted(loan, node.binding ? node.binding.slot : this.resultLoans(node)) &&
         this.conflicts(loan, mode));
@@ -171,13 +174,18 @@ export class OwnershipAnalyzer {
   }
   access(node, mode = 'read', via = null) {
     this.expire(node);
-    for (const root of this.roots(node)) {
+    this.accessPlaces(this.roots(node), node, mode, via);
+  }
+  accessPlaces(roots, node, mode = 'read', via = null, commitMove = true) {
+    for (const root of roots) {
+      if (mode !== 'read' && (this.guardBindings?.has(this.places.local(root)) || typeof via === 'number' && this.guardBindings?.has(via)))
+        throw new Diagnostic(mode === 'move' ? 'E0507' : 'E0594', 'A pattern binding cannot be moved or mutated in its guard', node.span);
       if ([...this.moved].some(moved => this.places.overlaps(root, moved)))
         throw new Diagnostic('E0382', `Use of moved or partially moved value '${this.places.name(root)}'`, node.span);
       const conflict = this.loans.find(loan => this.places.overlaps(loan.root, root) && !this.permitted(loan, via) && this.conflicts(loan, mode));
       if (conflict) throw new Diagnostic(mode === 'read' ? 'E0503' : 'E0502', `Cannot ${mode} '${this.places.name(root)}' while it is borrowed`, node.span,
         [{message: 'Loan starts here', span: conflict.span}]);
-      if (mode === 'move') { this.moved.add(root); this.event('move', node, root); }
+      if (mode === 'move' && commitMove) { this.moved.add(root); this.event('move', node, root); }
     }
   }
   value(node, consume = true, destination = null) {
@@ -361,21 +369,17 @@ export class OwnershipAnalyzer {
   block(block) {
     for (const node of block.body) {
       this.expire(node);
-      if (node.kind === 'let') {
+      if (node.kind === 'let' && node.binding && !node.otherwise) {
+        this.value(node.value, true, node.binding.slot);
+        this.initialize(node.binding.slot); this.event('initialize', node, node.binding.slot, node.binding.type);
+      } else if (node.kind === 'let') {
+        const prepared = this.patterns.prepare(node.value);
+        this.patterns.inspect(node.pattern, prepared);
         if (node.otherwise) {
-          // Evaluate the initializer once before the pattern test. The else
-          // branch diverges and must not erase loans on the successful edge.
-          const flow = new OwnershipFlow(this, node);
-          this.value(node.value, false, node.binding?.slot);
-          const success = flow.save(); this.block(node.otherwise); flow.load(success);
-          if (!node.value.copy) {
-            if (this.indirect(node.value)) throw new Diagnostic('E0507', 'Cannot move a non-Copy binding out of a reference', node.value.span);
-            if (this.indexed(node.value)) throw new Diagnostic('E0508', 'Cannot move a non-Copy indexed binding', node.value.span);
-            this.access(node.value, 'move');
-            if (T.reference(node.value.type) && node.value.binding) this.referenceAccess(node.value, 'move');
-          }
-        } else this.value(node.value, true, node.binding?.slot);
-        if (node.binding) { this.initialize(node.binding.slot); this.event('initialize', node, node.binding.slot, node.binding.type); }
+          const flow = new OwnershipFlow(this, node), success = flow.save();
+          this.block(node.otherwise); flow.load(success);
+        }
+        this.patterns.bind(node.pattern, prepared);
       } else if (node.kind === 'assign') this.assignment(node);
       else if (['return', 'break', 'continue', 'while', 'whileLet', 'whileChain', 'for'].includes(node.kind)) this.value(node);
       else if (node.value) this.value(node.value);

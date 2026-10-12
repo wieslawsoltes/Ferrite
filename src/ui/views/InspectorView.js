@@ -70,7 +70,7 @@ export class InspectorView {
   ownership(items){
     for(const item of items){
       const card=this.card(item.instance,item.model,item.span), live=item.liveness;
-      if(live)card.append(Dom.element('p','card-detail',`${item.places?.length??0} places · ${live.nodes} liveness nodes · ${live.edges} edges · ${live.work} liveness work units · ${item.placeWork??0} place work units`));
+      if(live)card.append(Dom.element('p','card-detail',`${item.places?.length??0} places · ${live.nodes} liveness nodes · ${live.edges} edges · ${live.work} liveness work units · ${item.placeWork??0} place work units · ${item.patternWork??0} pattern work units`));
       this.table(['Event','Place','Source'],item.events.map(e=>({cells:[e.kind??e.action??'check',item.places?.[e.place]?.name??e.name??e.local??e.binding??'',Dom.sourceLabel(e.span)],span:e.span})));
     }
   }

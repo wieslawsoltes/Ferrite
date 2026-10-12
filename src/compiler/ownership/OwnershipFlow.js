@@ -7,10 +7,13 @@ import {Diagnostic} from '../Diagnostic.js';
 export class OwnershipFlow extends ConditionOwnership {
   conditional() {
     const a = this.a, node = this.node;
-    a.value(node.condition ?? node.value);
+    const prepared = node.kind === 'ifLet' ? a.patterns.prepare(node.value) : null;
+    if (prepared) a.patterns.inspect(node.pattern, prepared);
+    else a.value(node.condition);
     const before = this.save(), outputs = [], roots = [], ids = [], slots = this.localSlots();
     for (const branch of [node.then, node.otherwise]) {
       this.load(before);
+      if (prepared && branch === node.then) a.patterns.bind(node.pattern, prepared);
       const result = a.value(branch);
       if (branch?.type !== '!') {
         roots.push(...result); ids.push(...a.resultLoans(branch));
@@ -29,21 +32,26 @@ export class OwnershipFlow extends ConditionOwnership {
   }
   match() {
     const a = this.a, node = this.node;
-    a.value(node.value);
+    const prepared = a.patterns.prepare(node.value);
     const outputs = [], roots = [], ids = [], slots = this.localSlots();
     let remaining = this.save();
     for (const arm of node.arms) {
-      this.load(remaining); a.value(arm.guard);
+      this.load(remaining); a.patterns.inspect(arm.pattern, prepared);
+      if (arm.guard) {
+        a.patterns.bind(arm.pattern, prepared, false);
+        a.patterns.guard(arm.pattern, prepared, arm.guard, () => a.value(arm.guard));
+      }
       // A false guard can mutate/move outer state before the next pattern is
       // attempted. Pattern failure instead preserves the prior state.
       const guarded = this.save();
       if (arm.guard?.type !== '!') {
+        a.patterns.bind(arm.pattern, prepared);
         const result = a.value(arm.body);
         if (arm.body.type !== '!') {
           outputs.push(this.leave(this.save(), slots, result)); roots.push(...result); ids.push(...a.resultLoans(arm.body));
         }
       }
-      remaining = arm.guard && arm.guard.type !== '!' ? this.join([remaining, guarded]) : remaining;
+      remaining = arm.guard && arm.guard.type !== '!' ? this.join([remaining, this.leave(guarded, slots)]) : remaining;
     }
     this.load(this.join(outputs)); a.provenance.set(node, [...new Set(ids)]);
     return [...new Set(roots)];
@@ -66,8 +74,11 @@ export class OwnershipFlow extends ConditionOwnership {
       a.controls.push(frame);
       let tail = [], fallthrough, failures = [];
       try {
-        if (node.condition || node.kind === 'whileLet') a.value(node.condition ?? node.value);
+        const prepared = node.kind === 'whileLet' ? a.patterns.prepare(node.value) : null;
+        if (prepared) a.patterns.inspect(node.pattern, prepared);
+        else if (node.condition) a.value(node.condition);
         if (['for', 'while', 'whileLet'].includes(node.kind)) failures.push(this.save());
+        if (prepared) a.patterns.bind(node.pattern, prepared);
         tail = a.block(node.then);
         if (node.then.type !== '!') {
           if (node.kind === 'labelBlock') fallthrough = this.save();

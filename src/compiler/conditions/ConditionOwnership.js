@@ -93,15 +93,8 @@ export class ConditionOwnership {
     });
     return state;
   }
-  bind(term, roots) {
-    const a = this.a, value = term.value;
-    if (term.moves) {
-      if (value.kind === 'unary' && value.op === '*' || value.autoDeref)
-        throw new Diagnostic('E0507', 'Cannot move a non-Copy condition binding out of a reference', value.span);
-      a.access(value, 'move');
-      if (T.reference(value.type) && value.binding) a.referenceAccess(value, 'move');
-    }
-    const bindings = ConditionChain.bindings(term.pattern);
+  bind(term, prepared) {
+    const a = this.a, value = term.value, roots = prepared.origins;
     if (term.binding && (T.reference(value.type) && value.type !== '&str' || value.borrowCarrier)) {
       if (!roots.length) throw new Diagnostic('F_CONDITION_REFERENCE',
         'A reference condition binding requires a tracked local or parameter origin', value.span);
@@ -109,23 +102,21 @@ export class ConditionOwnership {
         const span = a.places.get(root).external ? null : a.instance.locals[a.places.local(root)]?.span;
         return span && span.start >= value.span.start && span.end <= value.span.end;
       })) throw new Diagnostic('E0597', 'A scrutinee-local value does not outlive its condition binding', value.span);
-      a.attach(term.binding.slot, roots, value, value.binding?.slot ?? null);
     }
-    for (const pattern of bindings) {
-      a.initialize(pattern.binding.slot);
-      a.event('initialize condition binding', pattern, pattern.binding.slot, pattern.type);
-    }
+    a.patterns.bind(term.pattern, prepared);
   }
   terms(failures) {
     for (const term of ConditionChain.terms(this.node)) {
       this.charge();
       const pattern = term.kind === 'letCondition' ? term.pattern : null;
       const value = pattern ? term.value : term;
-      const roots = this.a.value(value, !pattern);
+      const prepared = pattern ? this.a.patterns.prepare(value) : null;
+      if (pattern) this.a.patterns.inspect(pattern, prepared);
+      else this.a.value(value);
       if (value.type === '!') return false;
       if (!pattern || !term.irrefutable) failures.push(this.save());
       if (pattern) {
-        this.bind(term, roots);
+        this.bind(term, prepared);
         // rustc still checks an if-chain's alternative continuation when a
         // pattern is irrefutable, with the successful binding's move effects.
         if (term.irrefutable) failures.push(this.save());

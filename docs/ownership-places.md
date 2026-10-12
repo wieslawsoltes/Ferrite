@@ -47,9 +47,9 @@ fields following potentially equal indices. Indices themselves may alias even
 when their source expressions are different constants. Non-Copy moves through
 references or indexed collections remain errors.
 
-This precision applies to explicit field places. General destructuring patterns
-still use the existing conservative whole-scrutinee move handling; there is no
-complete pattern move-path construction or drop-flag elaboration in this change.
+This precision also applies to [by-value pattern moves](pattern-ownership.md):
+local/conditional/match bindings select tuple, record, enum and array projections.
+Reference-pattern ergonomics and drop-flag elaboration remain separate work.
 
 ## Control-flow local liveness
 
@@ -108,7 +108,7 @@ state/work budgets, 64 nested control-flow analyses and at most 128 loop iterati
 These are resource limits, not a promise of a particular compilation time.
 
 Reports expose `places`, `placeWork`, `liveness` graph/work counts, and source-linked
-ownership `events`. Events keep their original `slot` and additionally contain a
+ownership `events`. The pattern continuation also exposes `patternWork`. Events keep their original `slot` and additionally contain a
 `place` ID. IDs are function-instance-local and should not be treated as stable
 across source edits. The optional existing `conditions` counters also include work
 performed by ordinary structured forward flow. Runtime MIR operations and runtime
@@ -129,7 +129,7 @@ remain in force, but not every unsupported reference-carrying path is diagnosed;
 this pass must not be described as complete or sound for unrestricted Rust.
 
 Custom `Drop`, observable temporary destruction order, precise destructor liveness,
-move/drop flags, partial pattern moves, pinning, unsafe aliasing/provenance, async
+move/drop flags, reference-pattern ergonomics, pinning, unsafe aliasing/provenance, async
 suspension borrowing and a complete native ABI are not supplied by this increment.
 The broader language, standard library, macro and native-code generation boundaries
 also remain. Native-valid unsupported cases must stay separate from native

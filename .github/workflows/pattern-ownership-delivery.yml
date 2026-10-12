@@ -1,0 +1,66 @@
+name: Publish projected pattern ownership
+on:
+  push:
+    branches: [automation/pattern-ownership-delivery]
+    paths: ['.github/workflows/pattern-ownership-delivery.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_BRANCH: feat/ownership-pattern-projections
+      EXPECTED_HEAD: 1e38cfbf54e8ad8ec916e6f99eb154470f275727
+      EXPECTED_TREE: 3f55466cd63eb140d1aa0f4119d4f2e0e8ff49a8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Decode and verify reviewed source patch
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os
+          from pathlib import Path
+          encoded = ''.join(Path(f'.delivery/pattern-source-{i}.b64').read_text().strip() for i in (1, 2))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'd52f1cde68a96e1c4153f33db3fd07de0762f6a3f9f3a81a4beb26593bc3ae27'
+          Path(os.environ['RUNNER_TEMP'], 'pattern-ownership.patch').write_bytes(patch)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/ownership-pattern-projections
+      - name: Apply and regenerate exact reviewed tree
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git apply --check --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/pattern-ownership.patch"
+          git apply --index --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/pattern-ownership.patch"
+          npm run build:workers
+          npm run build:sdk
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+      - name: Validate publication
+        run: |
+          set -o pipefail
+          npm run check 2>&1 | tee "$RUNNER_TEMP/pattern-check.log"
+          node --test --test-concurrency=4 tests/*.test.js > "$RUNNER_TEMP/pattern-tests.log" 2>&1
+          tail -n 12 "$RUNNER_TEMP/pattern-tests.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pattern-ownership-publication-diagnostics
+          path: |
+            ${{ runner.temp }}/pattern-check.log
+            ${{ runner.temp }}/pattern-tests.log
+          retention-days: 7
+      - name: Commit and non-force push
+        run: |
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git config user.name 'Wiesław Šoltés'
+          git config user.email 'wieslawsoltes@users.noreply.github.com'
+          git commit -m 'feat: check projected pattern moves and freeze match-guard bindings' -m 'Add analyzer-local bounded projection plans across bindings, let-else, matches, loops and let chains. Retain direct-reference result loans, declaration-owned Copy evidence and guarded move ordering. Add native differential matrices, cache/budget isolation checks, executable documentation and regenerated workers/SDK.'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD HEAD^{tree}

@@ -6,6 +6,24 @@ export class CaptureWalker {
     if (pattern.kind === 'atPattern') return [...this.bindings(pattern.binder), ...this.bindings(pattern.pattern)];
     return [...(pattern.items ?? []).flatMap(p => this.bindings(p)), ...(pattern.fields ?? []).flatMap(f => this.bindings(f.pattern))];
   }
+  static patternUse(patterns) {
+    const pending = Array.isArray(patterns) ? [...patterns] : [patterns];
+    let reference = false, mutable = false, value = false;
+    while (pending.length) {
+      const node = pending.pop(); if (!node) continue;
+      if (node.kind === 'bindingPattern') {
+        if (node.byRef) { reference = true; mutable ||= !!node.mutable; }
+        else value = true;
+      }
+      if (node.binder) pending.push(node.binder);
+      if (node.pattern) pending.push(node.pattern);
+      if (node.items) pending.push(...node.items);
+      if (node.fields) pending.push(...node.fields.map(field => field.pattern));
+    }
+    // Keep the existing conservative value-capture policy when any by-value
+    // binder occurs; borrow-only patterns must not invent a move/FnOnce capture.
+    return !reference || value ? 'consume' : mutable ? 'mutate' : 'read';
+  }
   static transform(node, names, onFree, use = 'read') {
     if (!node || typeof node !== 'object') return node;
     if (Array.isArray(node)) return node.map(n => this.transform(n, names, onFree, use));
@@ -19,7 +37,7 @@ export class CaptureWalker {
       }
       return {...node, body, tail: walk(node.tail, scope, 'consume')};
     }
-    if (node.kind === 'let') return {...node, value: walk(node.value, names, 'consume')};
+    if (node.kind === 'let') return {...node, value: walk(node.value, names, this.patternUse(node.pattern))};
     if (node.kind === 'return' || node.kind === 'break') return {...node, value: walk(node.value, names, 'consume')};
     if (node.kind === 'assign') return {...node, target: walk(node.target, names, 'mutate'), value: walk(node.value, names, node.target.kind === 'variable' && node.target.name === '_' ? 'read' : 'consume')};
     if (node.kind === 'unary' && node.op === '&') return {...node, value: walk(node.value, names, node.mutable ? 'mutate' : 'read')};
@@ -30,15 +48,15 @@ export class CaptureWalker {
       const scope = new Set(names);
       const conditions = node.conditions.map(term => {
         if (term.kind !== 'letCondition') return walk(term, scope);
-        const value = walk(term.value, scope, this.bindings(term.pattern).length ? 'consume' : 'read');
+        const value = walk(term.value, scope, this.bindings(term.pattern).length ? this.patternUse(term.pattern) : 'read');
         this.bindings(term.pattern).forEach(name => scope.add(name));
         return {...term, value};
       });
       return {...node, conditions, then: walk(node.then, scope), otherwise: walk(node.otherwise)};
     }
-    if (node.kind === 'ifLet' || node.kind === 'whileLet') return {...node, value: walk(node.value, names, 'consume'),
+    if (node.kind === 'ifLet' || node.kind === 'whileLet') return {...node, value: walk(node.value, names, this.patternUse(node.pattern)),
       then: walk(node.then, new Set([...names, ...this.bindings(node.pattern)])), otherwise: walk(node.otherwise)};
-    if (node.kind === 'match') return {...node, value: walk(node.value, names, 'consume'), arms: node.arms.map(arm => {
+    if (node.kind === 'match') return {...node, value: walk(node.value, names, this.patternUse(node.arms.map(arm => arm.pattern))), arms: node.arms.map(arm => {
       const scope = new Set([...names, ...this.bindings(arm.pattern)]);
       return {...arm, guard: walk(arm.guard, scope), body: walk(arm.body, scope, 'consume')};
     })};

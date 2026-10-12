@@ -437,7 +437,7 @@ export class SemanticAnalyzer {
       }
       case 'ifLet': {
         const scrutinee = this.infer(node.value, ctx);
-        ctx.push(); this.pattern(node.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value));
+        ctx.push(); this.pattern(node.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value), node.value);
         const yes = this.block(node.then, ctx, expected); ctx.pop();
         const no = node.otherwise ? this.infer(node.otherwise, ctx, expected) : '()';
         type=node.otherwise?this.functionValues.join([node.then,node.otherwise],ctx,node):T.join(yes,no,node);break;
@@ -462,7 +462,7 @@ export class SemanticAnalyzer {
         const patterns = []; let wildcard = false;
         for (const arm of node.arms) {
           ctx.push();
-          this.pattern(arm.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value));
+          this.pattern(arm.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value), node.value);
           if (wildcard) this.warnings.push({severity: 'warning', code: 'W_UNREACHABLE', message: 'Unreachable match arm', span: arm.span});
           if (arm.guard) T.unify('bool', this.infer(arm.guard, ctx, 'bool'), new Map(), arm.guard);
           else { patterns.push(arm.pattern); wildcard = this.coverage.analyze(patterns, scrutinee, node).exhaustive; }
@@ -522,16 +522,17 @@ export class SemanticAnalyzer {
     node.variant = tag; node.args = args;
     return type;
   }
-  pattern(pattern, type, ctx, mutable = false, origin = type) {
+  pattern(pattern, type, ctx, mutable = false, origin = type, source = null) {
     this.patterns.analyze(pattern, type, ctx, mutable);
     ctx.methodScope.bindPattern(pattern, origin);
     for (const item of ConditionChain.bindings(pattern))
-      item.copy = ctx.methodScope.copyOf({kind: 'variable', binding: item.binding, type: item.type}) ?? this.hasTrait(item.type, 'Copy');
+      item.copy = ctx.methodScope.copyOf({kind: 'variable', binding: item.binding, type: item.binding.type}) ?? this.hasTrait(item.binding.type, 'Copy');
+    this.patterns.prepareSource(pattern, type, ctx, source);
     const pending = [pattern];
     while (pending.length) {
       const item = pending.pop();
       if (item.kind === 'atPattern') {
-        if (!item.binder.copy && ConditionChain.bindings(item.pattern).some(binding => !binding.copy))
+        if (!item.binder.byRef && !item.binder.copy && ConditionChain.bindings(item.pattern).some(binding => !binding.byRef && !binding.copy))
           throw new Diagnostic('E0382', "An '@' pattern cannot move both a value and a non-Copy part", item.span);
         pending.push(item.pattern);
       }
@@ -547,16 +548,16 @@ export class SemanticAnalyzer {
         continue;
       }
       const type = this.infer(term.value, ctx);
-      this.pattern(term.pattern, type, ctx, false, ctx.methodScope.of(term.value));
+      this.pattern(term.pattern, type, ctx, false, ctx.methodScope.of(term.value), term.value);
       const bindings = ConditionChain.bindings(term.pattern);
       for (const pattern of bindings) {
-        pattern.copy = ctx.methodScope.copyOf({kind: 'variable', binding: pattern.binding, type: pattern.type}) ?? this.hasTrait(pattern.type, 'Copy');
+        pattern.copy = ctx.methodScope.copyOf({kind: 'variable', binding: pattern.binding, type: pattern.binding.type}) ?? this.hasTrait(pattern.binding.type, 'Copy');
       }
       const pending = [term.pattern];
       while (pending.length) {
         const pattern = pending.pop();
         if (pattern.kind === 'atPattern') {
-          if (!pattern.binder.copy && ConditionChain.bindings(pattern.pattern).some(binding => !binding.copy))
+          if (!pattern.binder.byRef && !pattern.binder.copy && ConditionChain.bindings(pattern.pattern).some(binding => !binding.byRef && !binding.copy))
             throw new Diagnostic('E0382', "An '@' condition cannot move both a value and a non-Copy part", pattern.span);
           pending.push(pattern.pattern);
         }
@@ -564,9 +565,9 @@ export class SemanticAnalyzer {
         if (pattern.fields) pending.push(...pattern.fields.map(field => field.pattern));
       }
       term.irrefutable = this.checkCoverage([term.pattern], type, term).exhaustive;
-      term.moves = bindings.some(pattern => !pattern.copy);
-      term.binding = term.pattern.kind === 'bindingPattern' ? term.pattern.binding : null;
-      if (bindings.length && ConditionChain.containsReferences(this, type) &&
+      term.moves = bindings.some(pattern => !pattern.byRef && !pattern.copy);
+      term.binding = term.pattern.kind === 'bindingPattern' && !term.pattern.byRef ? term.pattern.binding : null;
+      if (bindings.some(binding => !binding.byRef) && ConditionChain.containsReferences(this, type) &&
           (!term.binding || !T.reference(type) && !term.value.borrowCarrier))
         throw new Diagnostic('F_CONDITION_REFERENCE', 'Destructuring reference-carrying values in a condition requires projection-sensitive loan origins', term.span);
       term.type = 'bool';
@@ -578,18 +579,36 @@ export class SemanticAnalyzer {
     if (required && !report.exhaustive) throw new Diagnostic('E0005', `Refutable pattern in local binding; missing ${report.witness}. Use 'let ... else', 'if let', or 'match'`, node.span);
     return report;
   }
+  /** Access to an &mut stored behind a shared reference does not grant unique
+   * access to its pointee. Root binding mutability is unrelated: an immutable
+   * local &mut handle can still be reborrowed, but &&mut cannot. */
+  sharedStorage(node) {
+    let value = node, depth = 0;
+    while (value) {
+      if (++depth > PatternAnalyzer.MAX_SOURCE_DEPTH)
+        throw new Diagnostic('F_OWNERSHIP_LIMIT', 'Reference storage path exceeds its depth budget', node.span);
+      if (value.kind === 'unary' && value.op === '*') {
+        if (!value.value.type.startsWith('&mut ')) return true;
+        value = value.value;
+      } else if (value.kind === 'field' || value.kind === 'index') {
+        if (value.autoDeref && !value.object.type.startsWith('&mut ')) return true;
+        value = value.object;
+      } else return false;
+    }
+    return false;
+  }
   place(node, ctx, mutable) {
     if (node.kind === 'variable' && node.binding) {
       if (mutable && !node.binding.mutable) throw new Diagnostic('E0596', `Cannot assign to immutable variable ${node.name}`, node.span);
       return node.binding;
     }
     if (node.kind === 'unary' && node.op === '*') {
-      if (mutable && !node.value.type.startsWith('&mut ')) throw new Diagnostic('E0594', 'Cannot write through a shared reference', node.span);
+      if (mutable && (!node.value.type.startsWith('&mut ') || this.sharedStorage(node.value))) throw new Diagnostic('E0594', 'Cannot write through a shared reference', node.span);
       return node.value.binding ?? null;
     }
     if (node.kind === 'field' || node.kind === 'index') {
       if (node.autoDeref) {
-        if (mutable && !node.object.type.startsWith('&mut ')) throw new Diagnostic('E0594', 'Cannot modify through shared reference', node.span);
+        if (mutable && (!node.object.type.startsWith('&mut ') || this.sharedStorage(node.object))) throw new Diagnostic('E0594', 'Cannot modify through shared reference', node.span);
         return node.object.binding ?? null;
       }
       return this.place(node.object, ctx, mutable);
@@ -812,9 +831,9 @@ export class SemanticAnalyzer {
         if (!(ctx.methodScope.sizedOrigin(origin) ?? this.hasTrait(inferred,'core::marker::Sized')))
           throw new Diagnostic('E0277',`Local value ${origin} needs a Sized bound`,node.span);
         this.index.sizedTypes.checkConcrete(inferred,this,node);
-        this.pattern(node.pattern, inferred, ctx, node.mutable, origin);
+        this.pattern(node.pattern, inferred, ctx, node.mutable, origin, node.value);
         this.checkCoverage([node.pattern], inferred, node, !node.otherwise);
-        node.binding = node.pattern.binding; break;
+        node.binding = node.pattern.byRef ? null : node.pattern.binding; break;
       }
       case 'assign': {
         if (AssigneeAnalyzer.accepts(node.target)) { type = new AssigneeAnalyzer(this, ctx).analyze(node); break; }
@@ -859,7 +878,7 @@ export class SemanticAnalyzer {
       }
       case 'whileLet': {
         const scrutinee = this.infer(node.value, ctx);
-        ctx.push(); this.pattern(node.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value));
+        ctx.push(); this.pattern(node.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value), node.value);
         ctx.loops.push({kind: 'while', id: node.id, label: node.label, type: '!'});
         T.unify('()', this.block(node.then, ctx, '()'), new Map(), node.then);
         ctx.loops.pop(); ctx.pop(); break;

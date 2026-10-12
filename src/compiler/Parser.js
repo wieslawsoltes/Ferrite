@@ -413,6 +413,7 @@ export class Parser {
       return this.c.node('tuplePattern', start, {items: [first, ...this.list(')', () => this.pattern())]});
     }
     if (this.c.match('[')) return this.c.node('arrayPattern', start, {items: this.list(']', () => this.pattern())});
+    if (this.c.match('ref')) return this.c.node('bindingPattern', start, {byRef: true, mutable: !!this.c.match('mut'), name: this.c.identifier()});
     if (this.c.match('mut')) return this.c.node('bindingPattern', start, {name: this.c.identifier(), mutable: true});
     if (['number', 'string', 'char', 'byte'].includes(start.kind) || ['true', 'false', '-'].includes(start.value)) return this.expr(10);
     let name, qualifiedSelf, qualifiedTrait, ownerTypeArguments;
@@ -429,9 +430,10 @@ export class Parser {
       const fields = []; let rest = false;
       while (!this.c.is('}')) {
         if (this.c.match('..')) { rest = true; this.c.match(','); break; }
-        const field = this.c.peek(), mutable = !!this.c.match('mut'), key = this.fieldName();
+        const field = this.c.peek(), byRef = !!this.c.match('ref'), mutable = !!this.c.match('mut'), key = this.fieldName();
+        if ((byRef || mutable) && this.c.is(':')) throw new Diagnostic('E0003', 'Binding modifiers belong after the field colon', field.span);
         if (/^\d+$/.test(key) && !this.c.is(':')) this.c.eat(':');
-        const pattern = this.c.match(':') ? this.pattern() : this.c.node('bindingPattern', field, {name: key, mutable});
+        const pattern = this.c.match(':') ? this.pattern() : this.c.node('bindingPattern', field, {name: key, mutable, ...(byRef ? {byRef} : {})});
         fields.push({name: key, pattern});
         if (!this.c.match(',')) break;
       }

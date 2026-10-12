@@ -105,8 +105,8 @@ and function-local place IDs.
 
 ## Boundaries
 
-This increment implements by-value pattern moves, not source `ref`/`ref mut`
-patterns or implicit reference-pattern ergonomics. General aggregate-reference
+These by-value plans also support [explicit `ref`/`ref mut` bindings](reference-patterns.md).
+Implicit reference-pattern ergonomics remain separate work. General aggregate-reference
 storage, independent lifetime relationships, closures returning references, complete
 NLL/region/outlives/HRTB/drop checking, and universal checking of uninstantiated
 generic bodies remain incomplete. A direct reference extracted from an aggregate

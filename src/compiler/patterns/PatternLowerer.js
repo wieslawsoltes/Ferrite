@@ -1,14 +1,32 @@
 /** Pattern predicates and destructuring lowered entirely to verified MIR operations. */
 export class PatternLowerer {
-  constructor(lowerer) { this.ir = lowerer; }
+  constructor(lowerer) { this.ir = lowerer; this.sources = new Map(); }
 
-  bind(pattern, value, node = pattern) {
+  /** Capture an address once, before testing or binding. Borrowing a register
+   * containing a copied payload would silently disconnect writes from its owner. */
+  prepare(source) {
+    const ir = this.ir;
+    if (!source.patternBorrowed) return ir.expr(source);
+    let place;
+    if (source.patternStorage) {
+      const value = ir.expr(source);
+      place = {slot: source.patternStorage.slot, path: []};
+      ir.emit('write', {place, value}, source);
+    } else place = ir.place(source);
+    const value = ir.emit('read', {place, copy: false}, source, source.type);
+    this.sources.set(value, place);
+    return value;
+  }
+  project(place, part) { return place ? {slot: place.slot, path: [...place.path, part]} : null; }
+
+  bind(pattern, value, node = pattern, place = this.sources.get(value)) {
     const ir = this.ir;
     if (pattern.binding) {
-      if (pattern.copy) { const cloned = ir.register(pattern.type, pattern); ir.move(cloned, value, pattern, true); value = cloned; }
+      if (pattern.byRef) value = ir.emit('borrow', {place, mutable: !!pattern.mutable}, pattern, pattern.binding.type);
+      else if (pattern.copy) { const cloned = ir.register(pattern.type, pattern); ir.move(cloned, value, pattern, true); value = cloned; }
       ir.emit('write', {place: {slot: pattern.binding.slot, path: []}, value}, node);
     }
-    if (pattern.kind === 'atPattern') { this.bind(pattern.binder, value); this.bind(pattern.pattern, value); return; }
+    if (pattern.kind === 'atPattern') { this.bind(pattern.binder, value, pattern.binder, place); this.bind(pattern.pattern, value, pattern.pattern, place); return; }
     if (pattern.restBinding) {
       const {binder, start, length} = pattern.restBinding;
       const values = Array.from({length}, (_, i) => ir.emit('get', {value, field: String(start + i), index: null, deref: false, copy: false}, binder, pattern.items[start + i].type));
@@ -17,19 +35,19 @@ export class PatternLowerer {
     if (pattern.kind === 'orPattern') {
       const choose = index => {
         const alternative = pattern.items[index];
-        if (index === pattern.items.length - 1) { this.bind(alternative, value); return ir.unit(pattern); }
+        if (index === pattern.items.length - 1) { this.bind(alternative, value, alternative, place); return ir.unit(pattern); }
         return ir.conditional(this.test(alternative, value), () => {
-          this.bind(alternative, value); return ir.unit(pattern);
+          this.bind(alternative, value, alternative, place); return ir.unit(pattern);
         }, () => choose(index + 1), pattern, '()');
       };
       choose(0);
     } else if (pattern.kind === 'structPattern') {
       for (const field of pattern.fields) this.bind(field.pattern,
-        ir.emit('get', {value, field: field.name, index: null, deref: false, copy: false}, field.pattern, field.pattern.type));
+        ir.emit('get', {value, field: field.name, index: null, deref: false, copy: false}, field.pattern, field.pattern.type), field.pattern, this.project(place, {kind: 'field', name: field.name}));
     } else if (['tuplePattern', 'arrayPattern'].includes(pattern.kind)) {
-      pattern.items.forEach((p, i) => { if (p.kind !== 'wildcard') this.bind(p, ir.emit('get', {value, field: String(i), index: null, deref: false, copy: false}, p, p.type)); });
+      pattern.items.forEach((p, i) => { if (p.kind !== 'wildcard') this.bind(p, ir.emit('get', {value, field: String(i), index: null, deref: false, copy: false}, p, p.type), p, this.project(place, {kind: 'field', name: String(i)})); });
     } else if (pattern.kind === 'variantPattern') {
-      pattern.items.forEach((p, i) => { if (p.kind !== 'wildcard') this.bind(p, ir.emit('payload', {value, index: i}, p, p.type)); });
+      pattern.items.forEach((p, i) => { if (p.kind !== 'wildcard') this.bind(p, ir.emit('payload', {value, index: i}, p, p.type), p, this.project(place, {kind: 'payload', variant: pattern.variant, index: i})); });
     }
   }
 

@@ -1,3 +1,5 @@
+import {ConditionChain} from '../conditions/ConditionChain.js';
+import {BorrowContract} from '../ownership/BorrowContract.js';
 import {DefaultArgumentInference} from '../DefaultArgumentInference.js';
 import {AssociatedConstant} from '../AssociatedConstant.js';
 import {EnumRecordAnalyzer} from '../EnumRecordAnalyzer.js';
@@ -6,7 +8,50 @@ import {TypeSystem as T} from '../TypeSystem.js';
 
 /** Types pattern projections and assigns consistent local slots to alternatives. */
 export class PatternAnalyzer {
-  constructor(analyzer) { this.analyzer = analyzer; }
+  static MAX_SOURCE_DEPTH = 128;
+  constructor(analyzer) { this.analyzer = analyzer; this.sources = new WeakSet(); }
+
+  /** Source-address metadata is compiler-owned even for injected ASTs. A match
+   * may prepare the same HIR scrutinee in several arms: retain the verified
+   * temporary, never an incoming AST's forged local slot. */
+  prepareSource(pattern, type, context, source) {
+    if (source && !this.sources.has(source)) {
+      delete source.patternStorage; delete source.patternBorrowed;
+      this.sources.add(source);
+    }
+    const borrowed = ConditionChain.bindings(pattern).filter(item => item.byRef);
+    if (!borrowed.length) return;
+    const analyzer = this.analyzer;
+    for (const item of borrowed) {
+      let contained = item.type, depth = 0;
+      while (T.reference(contained) && contained !== '&str') {
+        if (++depth > PatternAnalyzer.MAX_SOURCE_DEPTH)
+          throw new Diagnostic('F_OWNERSHIP_LIMIT', 'Reference pattern type exceeds its depth budget', item.span);
+        contained = T.target(contained);
+      }
+      if (item.mutable && BorrowContract.reference(item.type))
+        throw new Diagnostic('F_PATTERN_BORROW', 'Mutable reference-storage bindings need assignment-aware inner-region tracking', item.span);
+      if (ConditionChain.containsReferences(analyzer, contained))
+        throw new Diagnostic('F_PATTERN_BORROW', 'Borrowing an aggregate reference carrier requires tracked field-region origins', item.span);
+    }
+    if (!source) throw new Diagnostic('F_PATTERN_BORROW', 'This pattern context needs an explicit source place for reference bindings', pattern.span);
+    if (this.isPlace(source)) analyzer.place(source, context, borrowed.some(item => item.mutable));
+    else if (!source.patternStorage) source.patternStorage = context.declare(`$pattern${source.id}`, type, true, source);
+    source.patternBorrowed = true;
+  }
+  isPlace(source) {
+    let node = source, depth = 0;
+    while (node) {
+      if (++depth > PatternAnalyzer.MAX_SOURCE_DEPTH)
+        throw new Diagnostic('F_OWNERSHIP_LIMIT', 'Reference pattern address exceeds its depth budget', source.span);
+      if (node.kind === 'variable') return !!node.binding && !node.constant;
+      if (node.kind === 'unary' && node.op === '*') return true;
+      if (!['field', 'index'].includes(node.kind)) return false;
+      if (node.autoDeref) return true;
+      node = node.object;
+    }
+    return false;
+  }
 
   constant(pattern, context, required) {
     const a = this.analyzer, module = context.instance.fn.module;
@@ -31,6 +76,10 @@ export class PatternAnalyzer {
   }
 
   analyze(pattern, type, context, mutable = false, bindings = new Map(), names = new Set(), reuse = false) {
+    if (pattern.byRef !== undefined && (typeof pattern.byRef !== 'boolean' || pattern.kind !== 'bindingPattern'))
+      throw new Diagnostic('F_PATTERN', 'Invalid reference binding mode', pattern.span);
+    if (pattern.byRef && pattern.mutable !== undefined && typeof pattern.mutable !== 'boolean')
+      throw new Diagnostic('F_PATTERN', 'Invalid reference binding mutability', pattern.span);
     pattern.type = type;
     if (pattern.kind === 'variantPattern' && !pattern.items.length) {
       const literal = this.constant(pattern, context, false);
@@ -47,19 +96,20 @@ export class PatternAnalyzer {
         this.analyze(pattern.binder, type, context, mutable, bindings, names, reuse);
         if (pattern.binder.kind !== 'bindingPattern') throw new Diagnostic('E0530', "Expected a new binding before '@'", pattern.binder.span);
         this.analyze(pattern.pattern, type, context, mutable, bindings, names, reuse);
-        const copy = this.analyzer.hasTrait(type, 'Copy');
-        if (!copy && this.hasNonCopyBinding(pattern.pattern)) {
+        const copy = this.analyzer.hasTrait(pattern.binder.binding.type, 'Copy');
+        if (!pattern.binder.byRef && !copy && this.hasNonCopyBinding(pattern.pattern)) {
           throw new Diagnostic('E0382', "An '@' pattern cannot move both the whole value and a non-Copy part", pattern.span);
         }
         pattern.binder.copy = copy;
         return;
       }
       case 'bindingPattern': {
+        if (pattern.byRef && mutable) throw new Diagnostic('E0003', 'A ref binding cannot have an outer mut modifier', pattern.span);
         const index = this.analyzer.index;
         const constant = index.resolve(index.constants, pattern.name, context.instance.fn.module, pattern, false);
         const constructor = index.constructorFor(pattern.name, context.instance.fn.module);
         if (constant || constructor) {
-          if (pattern.mutable) throw new Diagnostic('E0530', 'A binding cannot shadow a constant or enum constructor', pattern.span);
+          if (pattern.mutable || pattern.byRef) throw new Diagnostic('E0530', 'A binding cannot shadow a constant or enum constructor', pattern.span);
           if (constructor) {
             pattern.kind = 'variantPattern'; pattern.items = []; pattern.tupleSyntax = false;
           } else {
@@ -71,15 +121,18 @@ export class PatternAnalyzer {
         }
         if (names.has(pattern.name)) throw new Diagnostic('E0416', `Identifier '${pattern.name}' is bound more than once in this pattern`, pattern.span);
         names.add(pattern.name);
-        const mode = mutable || !!pattern.mutable;
+        const mode = !pattern.byRef && (mutable || !!pattern.mutable);
+        const bindingType = pattern.byRef ? '&' + (pattern.mutable ? 'mut ' : '') + type : type;
+        const bindingMode = pattern.byRef ? pattern.mutable ? 'ref mut' : 'ref' : 'value';
         if (reuse) {
           const binding = bindings.get(pattern.name);
           if (!binding) throw new Diagnostic('E0408', `Variable '${pattern.name}' is not bound in all alternatives`, pattern.span);
-          T.unify(binding.type, type, new Map(), pattern);
-          if (binding.mutable !== mode) throw new Diagnostic('E0409', `Inconsistent binding mode for '${pattern.name}'`, pattern.span);
+          T.unify(binding.type, bindingType, new Map(), pattern);
+          if ((binding.patternMode ?? 'value') !== bindingMode || binding.mutable !== mode) throw new Diagnostic('E0409', `Inconsistent binding mode for '${pattern.name}'`, pattern.span);
           pattern.binding = binding;
         } else {
-          pattern.binding = context.declare(pattern.name, type, mode, pattern);
+          pattern.binding = context.declare(pattern.name, bindingType, mode, pattern);
+          if (pattern.byRef) pattern.binding.patternMode = bindingMode;
           bindings.set(pattern.name, pattern.binding);
         }
         return;
@@ -138,6 +191,7 @@ export class PatternAnalyzer {
         if (!Number.isSafeInteger(length) || length < 0 || length > 100000) throw new Diagnostic('F_PATTERN_BUDGET', 'Array pattern exceeds the compiler element budget', pattern.span);
         this.expandRest(pattern, length, 'E0527', true);
         for (const item of pattern.items) this.analyze(item, array.element, context, mutable, bindings, names, reuse);
+        if (pattern.restBinding?.binder.byRef) throw new Diagnostic('F_PATTERN_BORROW', 'A borrowed array-rest binding requires subarray reference storage', pattern.restBinding.binder.span);
         if (pattern.restBinding) this.analyze(pattern.restBinding.binder, `[${array.element};${pattern.restBinding.length}]`, context, mutable, bindings, names, reuse);
         return;
       }
@@ -214,7 +268,7 @@ export class PatternAnalyzer {
   }
 
   hasNonCopyBinding(pattern) {
-    if (pattern.binding && !this.analyzer.hasTrait(pattern.binding.type, 'Copy')) return true;
+    if (pattern.binding && !pattern.byRef && !this.analyzer.hasTrait(pattern.binding.type, 'Copy')) return true;
     if (pattern.kind === 'atPattern') return this.hasNonCopyBinding(pattern.binder) || this.hasNonCopyBinding(pattern.pattern);
     if (pattern.items?.some(p => this.hasNonCopyBinding(p))) return true;
     if (pattern.fields?.some(f => this.hasNonCopyBinding(f.pattern))) return true;

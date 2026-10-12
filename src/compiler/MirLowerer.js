@@ -115,7 +115,7 @@ export class MirLowerer {
       case 'block': return this.block(node);
       case 'ifChain': return this.ifChain(node);
       case 'ifLet': {
-        const value = this.expr(node.value), condition = this.patternTest(node.pattern, value);
+        const value = this.patterns.prepare(node.value), condition = this.patternTest(node.pattern, value);
         return this.conditional(condition, () => { this.bind(node.pattern, value); return this.block(node.then); },
           () => node.otherwise ? this.expr(node.otherwise) : this.unit(node), node);
       }
@@ -158,7 +158,7 @@ export class MirLowerer {
     }
   }
   matchExpression(node) {
-    const value = this.expr(node.value);
+    const value = this.patterns.prepare(node.value);
     if (!this.current) return null;
     const result = this.register(node.type, node), done = this.newBlock('match merge', node);
     let reaches = false;
@@ -196,7 +196,7 @@ export class MirLowerer {
     for (const term of ConditionChain.terms(node)) {
       if (!this.current) break;
       const pattern = term.kind === 'letCondition' ? term.pattern : null;
-      const value = this.expr(pattern ? term.value : term, !!pattern);
+      const value = pattern ? this.patterns.prepare(term.value) : this.expr(term);
       if (!this.current) break;
       const condition = pattern ? this.patternTest(pattern, value) : value;
       const next = this.newBlock(pattern ? 'let-chain pattern matched' : 'let-chain condition satisfied', term);
@@ -240,7 +240,7 @@ export class MirLowerer {
   whileLet(node) {
     const test = this.newBlock('while-let test', node), body = this.newBlock('pattern matched', node), done = this.newBlock('while-let exit', node);
     this.goto(test, node); this.current = test;
-    const value = this.expr(node.value), condition = this.patternTest(node.pattern, value);
+    const value = this.patterns.prepare(node.value), condition = this.patternTest(node.pattern, value);
     if (!this.current) { for (const block of [body, done]) block.terminator = {kind: 'unreachable', span: node.span}; return; }
     this.branch(condition, body, done, node); this.current = body;
     this.bind(node.pattern, value);
@@ -289,7 +289,7 @@ export class MirLowerer {
   statement(node) {
     switch (node.kind) {
       case 'let': {
-        const value = this.expr(node.value);
+        const value = this.patterns.prepare(node.value);
         if (node.otherwise) {
           const success = this.newBlock('let-else success', node), failure = this.newBlock('let-else failure', node);
           this.branch(this.patternTest(node.pattern, value), success, failure, node);

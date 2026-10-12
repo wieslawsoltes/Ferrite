@@ -1,3 +1,4 @@
+import {referencePatternCases, referencePatternCompileFailCases} from './reference-patterns.js';
 import {patternOwnershipCases, patternOwnershipCompileFailCases} from './pattern-ownership.js';
 import {borrowContractCases, borrowContractCompileFailCases} from './borrow-contracts.js';
 import {ownershipPlaceCases, ownershipPlaceCompileFailCases} from './ownership-places.js';
@@ -195,3 +196,6 @@ languageCases.push(...borrowContractCases.map(([name, source, output]) => ({name
 // Typed-pattern move/guard fixtures share the exact native and browser sources.
 languageCases.push(...patternOwnershipCases.map(([name,source,output]) => ({name,source,output,kind:'run'})),
   ...patternOwnershipCompileFailCases.map(([name,source]) => ({name,source,kind:'compile-fail'})));
+
+languageCases.push(...referencePatternCases.map(([name,source,output]) => ({name,source,output,kind:'run'})),
+  ...referencePatternCompileFailCases.map(([name,source]) => ({name,source,kind:'compile-fail'})));

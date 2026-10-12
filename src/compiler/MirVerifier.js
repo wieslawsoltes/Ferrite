@@ -52,6 +52,17 @@ export class MirVerifier {
       if (!Number.isInteger(slot) || slot < 0 || slot >= fn.registers.length) fail(`Invalid register ${slot}`, span);
       return fn.registers[slot];
     };
+    const place = (value, span) => {
+      if (!value || !Array.isArray(value.path) || value.path.length > 128) fail('Invalid MIR place', span);
+      register(value.slot, span);
+      for (const step of value.path) {
+        if (!step || !['field', 'index', 'deref', 'payload'].includes(step.kind)) fail('Invalid MIR place projection', span);
+        if (step.kind === 'index') register(step.register, span);
+        if (step.kind === 'field' && typeof step.name !== 'string') fail('Invalid field projection', span);
+        if (step.kind === 'payload' && (typeof step.variant !== 'string' || !step.variant.includes('::') ||
+            !Number.isSafeInteger(step.index) || step.index < 0)) fail('Invalid enum payload projection', span);
+      }
+    };
     if (new Set(fn.params).size !== fn.params.length) fail('Duplicate parameter register');
     fn.params.forEach(slot => register(slot));
     for (const block of fn.blocks) {
@@ -62,6 +73,8 @@ export class MirVerifier {
         if (instruction.op === 'constantReference' &&
             (typeof instruction.key !== 'string' || constantReferences.get(instruction.key)?.type !== instruction.type))
           fail('Invalid type-only constant reference identity or type', instruction.span);
+        if (['read', 'write', 'borrow'].includes(instruction.op)) place(instruction.place, instruction.span);
+        if (instruction.receiverPlace) place(instruction.receiverPlace, instruction.span);
         const stores = instruction.op === 'copy' || instruction.op === 'write';
         if (!stores && instruction.dest == null) fail(`Missing destination for ${instruction.op}`, instruction.span);
         if (instruction.dest != null) {

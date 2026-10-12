@@ -176,7 +176,7 @@ export class TraitMethodScope {
     return T.substitute(formal, new Map(shape.generics.map((g, i) => [g.name, app.args[i]])));
   }
   bindPattern(pattern, origin) {
-    if (pattern.binding) this.bind(pattern.binding, origin);
+    if (pattern.binding) this.bind(pattern.binding, pattern.byRef ? '&' + (pattern.mutable ? 'mut ' : '') + origin : origin);
     if (pattern.kind === 'atPattern') { this.bindPattern(pattern.binder, origin); this.bindPattern(pattern.pattern, origin); }
     else if (pattern.kind === 'orPattern') pattern.items.forEach(item => this.bindPattern(item, origin));
     else if (pattern.kind === 'structPattern') pattern.fields.forEach(field => this.bindPattern(field.pattern, this.project(origin, field.name) ?? field.pattern.type));

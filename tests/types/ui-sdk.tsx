@@ -90,6 +90,12 @@ if (contract) {
   contract.sources.push(0);
   // @ts-expect-error result mutability is readonly compiler-owned metadata.
   contract.mutable = false;
+  if (contract.indirections) {
+    const depth: number | undefined = contract.indirections[0];
+    // @ts-expect-error input indirections are readonly compiler-owned metadata.
+    contract.indirections.push(1);
+    void depth;
+  }
   void sourceIndex;
 }
 void contractKind;

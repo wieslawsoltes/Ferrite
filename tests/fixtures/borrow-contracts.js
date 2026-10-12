@@ -125,3 +125,32 @@ for (const mutable of [false, true]) for (const borrowed of projectedPaths) for 
   if (borrowed === written) borrowContractCompileFailCases.push([name, source, 'E0502']);
   else borrowContractCases.push([name, source, `${projectedPaths.indexOf(borrowed) + 1} 42\n`]);
 }
+
+// T's lifetime is shared even when another parameter stores it behind one or
+// more reference layers. The selected body must never narrow that contract.
+for (const depth of [1, 2, 3]) for (const from of ['direct', 'indirect']) {
+  const signature = `fn choose<T:Copy>(x:T,y:${'&'.repeat(depth)}T)->T{${from === 'direct' ? 'x' : '*'.repeat(depth) + 'y'}}`;
+  const chain = Array.from({length: depth - 1}, (_, i) => `let s${i}=&${i === 0 ? 'bref' : `s${i - 1}`};`).join('');
+  const argument = `&${depth === 1 ? 'bref' : `s${depth - 2}`}`, value = from === 'direct' ? 42 : 7;
+  const name = `generic ${from} result with ${depth} indirect input layers`;
+  borrowContractCases.push(
+    [name, signature + main(`let a=42;let b=7;let bref=&b;${chain}let r=choose(&a,${argument});println!("{}",*r);`), `${value}\n`],
+    [`${name} releases after use`, signature + main(`let a=42;let mut b=7;let bref=&b;${chain}let r=choose(&a,${argument});println!("{}",*r);b=9;println!("{}",b);`), `${value}\n9\n`],
+    [`${name} does not retain pointer storage`, signature + main(`let a=42;let b=7;let c=8;let mut bref=&b;${chain}let r=choose(&a,${argument});bref=&c;println!("{} {}",*r,*bref);`), `${value} 8\n`],
+  );
+  borrowContractCompileFailCases.push(
+    [`${name} cannot escape`, signature + main(`let a=42;let r={let b=7;let bref=&b;${chain}choose(&a,${argument})};println!("{}",*r);`), 'E0597'],
+    [`${name} prevents mutation`, signature + main(`let a=42;let mut b=7;let bref=&b;${chain}let r=choose(&a,${argument});b=9;println!("{}",*r);`), 'E0502'],
+  );
+}
+borrowContractCases.push(
+  ['indirect generic result outlives temporary input storage', 'fn copy<T:Copy>(x:&T)->T{*x}' + main('let a=42;let r={let s=&a;copy(&s)};println!("{}",*r);'), '42\n'],
+  ['generic copy through mutable storage releases outer loan', 'fn copy<T:Copy>(x:&mut T)->T{*x}' + main('let a=42;let b=7;let mut s=&a;let r=copy(&mut s);s=&b;println!("{} {}",*r,*s);'), '42 7\n'],
+  ['indirect generic dependency through transparent alias', 'type Value<T>=T;fn copy<T:Copy>(x:&Value<T>)->Value<T>{*x}' + main('let a=42;let b=&a;let r=copy(&b);println!("{}",*r);'), '42\n'],
+  ['unique generic result releases indirect input after use', 'fn choose<T>(x:T,y:&T)->T{x}' + main('let mut a=42;let mut b=7;let y=&mut b;let r=choose(&mut a,&y);*r+=1;println!("{}",*r);b=9;println!("{}",b);'), '43\n9\n'],
+  ['scalar generic nested result needs no extra regions', 'fn choose<T>(x:&T,y:T)->&T{x}' + main('let a=42;let r=choose(&a,7);println!("{}",*r);'), '42\n'],
+);
+borrowContractCompileFailCases.push(
+  ['generic copy through mutable storage retains inner loan', 'fn copy<T:Copy>(x:&mut T)->T{*x}' + main('let mut a=42;let b=7;let mut s=&a;let r=copy(&mut s);s=&b;a=0;println!("{} {}",*r,*s);'), 'E0502'],
+  ['unique generic result retains indirect input lifetime', 'fn choose<T>(x:T,y:&T)->T{x}' + main('let mut a=42;let mut b=7;let y=&mut b;let r=choose(&mut a,&y);b=9;println!("{}",*r);'), 'E0502'],
+);

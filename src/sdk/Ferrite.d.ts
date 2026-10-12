@@ -31,7 +31,9 @@ export interface OwnershipLivenessReport {
 /** Signature dependencies for direct borrow-cell references, not full regions. */
 export interface ReferenceContract {
   readonly version: 1; readonly kind: 'elided' | 'generic' | 'unsupported';
-  readonly sources: readonly number[]; readonly mutable: boolean; readonly error?: string;
+  readonly sources: readonly number[];
+  /** Dereferences of each corresponding input origin; omitted when all are zero. */
+  readonly indirections?: readonly number[]; readonly mutable: boolean; readonly error?: string;
 }
 export interface OwnershipReport {
   readonly instance: string; readonly span: Readonly<SourceSpan>; readonly model: string;

@@ -334,12 +334,22 @@ export class OwnershipAnalyzer {
         const contract = node.referenceContract ?? (name === 'dbg' ? {sources: [0]} : null);
         if (!contract) throw new Diagnostic('F_BORROW_CONTRACT', 'A reference-returning call needs a checked signature contract', node.span);
         BorrowContract.validate(contract, node);
-        const roots = [...new Set(contract.sources.flatMap(i => argumentsOrigins[i] ?? []))];
-        if (!roots.length) throw new Diagnostic('F_BORROW_ORIGIN', 'Cannot retain a returned reference without tracked argument origins', node.span);
-        for (const i of contract.sources) for (const id of argumentsLoans[i] ?? []) retained.add(id);
+        const roots = [];
+        for (let source = 0; source < contract.sources.length; source++) {
+          const index = contract.sources[source];
+          let targets = argumentsOrigins[index] ?? [], ids = argumentsLoans[index] ?? [];
+          for (let depth = 0; depth < (contract.indirections?.[source] ?? 0); depth++) {
+            this.places.charge();
+            ids = [...new Set(targets.flatMap(target => this.authority(target)))];
+            targets = [...new Set(targets.flatMap(target => this.references.get(target) ??
+              (this.places.get(target).external ? [this.places.pointee(target, node)] : [])))];
+          }
+          if (!targets.length) throw new Diagnostic('F_BORROW_ORIGIN', 'Cannot retain a returned reference without tracked argument origins', node.span);
+          roots.push(...targets); for (const id of ids) retained.add(id);
+        }
         this.provenance.set(node, [...retained]);
-        for (const root of roots) this.event('retain returned reference', node, root);
-        return roots;
+        for (const root of new Set(roots)) this.event('retain returned reference', node, root);
+        return [...new Set(roots)];
       }
       return [];
     } finally {

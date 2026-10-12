@@ -92,3 +92,40 @@ test('call-contract guide matches the executable example on every backend', () =
     assert.equal(vm.runInContext('r.output', context), '42\n');
   }
 });
+
+test('indirect generic contract metadata preserves source-relative depth', () => {
+  const source = 'fn choose<T:Copy>(x:T,y:&&T)->T{**y}fn main(){let a=42;let b=7;let s=&b;let t=&s;println!("{}",*choose(&a,&t));}';
+  const artifact = compile(source), report = artifact.ownership.find(item => item.instance.startsWith('choose<'));
+  assert.deepEqual(report.referenceContract, {version: 1, kind: 'generic', sources: [0, 1], mutable: false, indirections: [0, 2]});
+  assert.equal(output(artifact), '7\n');
+  assert.deepEqual(JSON.parse(JSON.stringify(artifact.ownership)), artifact.ownership);
+});
+test('indirect signature edits invalidate actual ownership cache entries', () => {
+  const source = 'fn choose<T>(x:T,y:&&i32)->T{x}fn main(){let a=42;let mut b=7;let s=&b;let r=choose(&a,&s);b=9;println!("{}",*r);}';
+  const changed = source.replace('y:&&i32', 'y:&T'), cache = new SemanticQueryCache();
+  for (let i = 0; i < 3; i++) {
+    cache.beginBuild(); const artifact = compile(source, {queryCache: cache}); assert.equal(output(artifact), '42\n');
+    if (i) for (const stage of ['type', 'ownership', 'mir'])
+      assert.ok(artifact.queries.nodes.some(node => node.stage === stage && node.cacheHit));
+    cache.beginBuild(); assert.throws(() => compile(changed, {queryCache: cache}), {code: 'E0502'});
+  }
+});
+test('hidden generic carriers fail as capabilities, not false native compile-fail cases', () => {
+  // These are valid native Rust programs. Neither tuples nor nested result
+  // regions are represented by this increment's flat direct-reference domain.
+  const sources = [
+    'fn choose<__borrow_origin:Copy>(x:__borrow_origin,y:(__borrow_origin,))->__borrow_origin{x}fn main(){let a=42;let b=7;println!("{}",*choose(&a,(&b,)));}',
+    'fn choose<T>(x:&T,y:T)->&T{x}fn main(){let a=42;let b=7;let s=&a;println!("{}",**choose(&s,&b));}',
+  ];
+  for (const source of sources) {
+    const ast = freeze(parse(tokenize(source))), before = JSON.stringify(ast);
+    assert.throws(() => compile('', {ast}), {code: 'F_BORROW_CONTRACT'});
+    assert.equal(JSON.stringify(ast), before);
+  }
+});
+test('unrepresented nested result regions cannot silently discard local lifetime constraints', () => {
+  const source = 'fn choose<T>(x:&T,y:T)->&T{x}fn main(){let a=42;let s=&a;let r={let b=7;choose(&s,&b)};println!("{}",**r);}';
+  // Rust diagnoses b's lifetime. We refuse this contract before pretending to
+  // solve its missing inner result region. Keep it out of conformance counts.
+  assert.throws(() => compile(source), {code: 'F_BORROW_CONTRACT'});
+});

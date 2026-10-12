@@ -1,3 +1,4 @@
+import {BorrowContract} from '../ownership/BorrowContract.js';
 import {Diagnostic} from '../Diagnostic.js';
 import {TypeSystem as T} from '../TypeSystem.js';
 import {CaptureWalker} from './CaptureWalker.js';
@@ -17,7 +18,7 @@ export class ClosureAnalyzer {
     const identifiers=JSON.stringify(node);let environmentName='__environment';
     while(identifiers.includes(JSON.stringify(environmentName)))environmentName+='_';
     const captures = new Map();
-    const names = new Set(node.params.map(p => p.name));
+    const names = new Set(CaptureWalker.parameters(node.params));
     CaptureWalker.transform(node.body, names, (variable, use) => {
       const binding = ctx.lookup(variable.name, variable, false);
       if (!binding) return variable;
@@ -52,7 +53,7 @@ export class ClosureAnalyzer {
     return name;
   }
   copy(record) { return record.trait !== 'FnOnce' && record.captures.every(c => this.analyzer.hasTrait(c.type,'Copy')); }
-  prepare(record, hints = []) {
+  prepare(record, hints = [], origins = null) {
     if (record.instance) {
       record.signature.forEach((type,i)=>{if(hints[i])T.unify(type,hints[i],new Map(),record.node);});
       return record.instance;
@@ -60,6 +61,10 @@ export class ClosureAnalyzer {
     if (record.preparing) throw new Diagnostic('E0644','A closure cannot recursively reference its own anonymous type',record.node.span);
     const params = record.node.params.map((param,i)=>({...param, type:param.type ? this.analyzer.normalize(param.type,record.ctx) : hints[i]}));
     if (params.some(p=>!p.type || p.type==='_')) throw new Diagnostic('E0282','Cannot infer closure parameter type; add an annotation or callable context',record.node.span);
+    if (!origins && record.ctx.methodScope.active && record.node.params.some(p => p.pattern && !p.type))
+      throw new Diagnostic('F_PARAMETER_ORIGIN', 'A destructuring closure parameter in a generic declaration needs an explicit type or a direct argument origin', record.node.span);
+    record.parametersFromCall = origins !== null;
+    record.parameterOrigins = record.node.params.map((p,i) => p.type ? record.ctx.methodScope.normalize(p.type) : origins?.[i] ?? hints[i]);
     record.preparing = true;
     const receiver = record.trait === 'FnOnce' ? record.type : (record.trait === 'FnMut' ? '&mut ' : '&') + record.type;
     const fn = {kind:'fn', name:record.type+'::__call', localName:'__call', module:record.module, owner:record.type, generics:[],
@@ -83,7 +88,12 @@ export class ClosureAnalyzer {
     if(!record)return null;
     const types=node.args.map((arg,i)=>compiler.infer(arg,ctx,record.signature?.[i]??record.node.params[i]?.type));
     if(types.length!==record.node.params.length)throw new Diagnostic('E0057',`Closure expects ${record.node.params.length} arguments`,node.span);
-    const instance=this.prepare(record,types);
+    const instance=this.prepare(record,types,node.args.map(arg=>ctx.methodScope.of(arg)));
+    // A first call fixes an unannotated closure's monomorphic input type; it
+    // is not an independent coercion site. In particular, passing a mutable
+    // handle to |x| or |_| moves it rather than granting a reusable reborrow.
+    const formals=record.node.params.map((p,i)=>record.parametersFromCall&&!p.type?'_':record.parameterOrigins[i]);
+    BorrowContract.reborrow(compiler,node,ctx,formals,types);
     let environment=node.callee;
     if(!['variable','field','index'].includes(environment.kind)){
       let temporary=`__temporary_closure${ctx.locals.length}`;while(ctx.lookup(temporary,node,false))temporary+='_';

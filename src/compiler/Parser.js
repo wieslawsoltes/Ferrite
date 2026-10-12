@@ -293,20 +293,29 @@ export class Parser {
   }
   fn(start, details) {
     const localName = this.c.identifier(), generics = this.generics();
+    let patterned = false;
     this.c.eat('(');
     const params = this.list(')', () => {
       const start = this.c.peek();
-      if (this.c.is('&') && ['self', 'mut'].includes(this.c.peek(1).value)) {
+      if (this.c.is('&') && (this.c.peek(1).value === 'self' ||
+          this.c.peek(1).value === 'mut' && this.c.peek(2).value === 'self')) {
         this.c.take(); const mutable = !!this.c.match('mut'); this.c.eat('self');
         return this.c.node('param', start, {name: 'self', type: '&' + (mutable ? 'mut ' : '') + details.owner, mutable: false});
       }
-      const mutable = !!this.c.match('mut'); const name = this.c.identifier();
+      const pattern = this.pattern(false);
+      const simple = pattern.kind === 'bindingPattern' && !pattern.byRef && start.value !== '(';
+      patterned ||= !simple && start.value !== '_';
+      const name = simple ? pattern.name : null, mutable = simple && !!pattern.mutable;
       const type = name === 'self' && !this.c.is(':') ? details.owner : (this.c.eat(':'), this.type());
-      return this.c.node('param', start, {name, type, mutable});
+      return this.c.node('param', start, {name, type, mutable, ...(!simple ? {pattern} : {})});
     });
+    for (const [i, param] of params.entries()) if (param.name === 'self' && (i !== 0 || !details.owner))
+      throw new Diagnostic('E0424', 'A self receiver must be the first parameter of an associated function', param.span);
     const returnType = this.c.match('->') ? this.type() : '()';
     const predicates = this.whereClause();
     const body = this.c.match(';') ? null : this.block();
+    if (!body && (patterned || params.some(p => p.mutable)))
+      throw new Diagnostic('E0642', 'Patterns and mutable bindings are not allowed in functions without bodies', start.span);
     return this.c.node('fn', start, {name: details.owner ? `${details.owner}::${localName}` : localName,
       localName, generics, predicates, params, returnType, body, ...details});
   }
@@ -622,8 +631,10 @@ export class Parser {
       const move=!!this.c.match('move'),params=[];
       if(!this.c.match('||')){
         this.c.eat('|');while(!this.c.is('|')){
-          const at=this.c.peek(),mutable=!!this.c.match('mut'),name=this.c.identifier();
-          params.push(this.c.node('param',at,{name,mutable,type:this.c.match(':')?this.type():null}));
+          const at=this.c.peek(),pattern=this.pattern(false);
+          const simple=pattern.kind==='bindingPattern'&&!pattern.byRef&&at.value!=='(';
+          params.push(this.c.node('param',at,{name:simple?pattern.name:null,mutable:simple&&!!pattern.mutable,
+            type:this.c.match(':')?this.type():null,...(!simple?{pattern}:{})}));
           if(!this.c.match(','))break;
         }this.c.eat('|');
       }

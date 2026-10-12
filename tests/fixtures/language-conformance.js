@@ -1,3 +1,4 @@
+import {parameterPatternCases, parameterPatternCompileFailCases} from './parameter-patterns.js';
 import {matchErgonomicsCases, matchErgonomicsCompileFailCases} from './match-ergonomics.js';
 import {referencePatternCases, referencePatternCompileFailCases} from './reference-patterns.js';
 import {patternOwnershipCases, patternOwnershipCompileFailCases} from './pattern-ownership.js';
@@ -203,3 +204,6 @@ languageCases.push(...referencePatternCases.map(([name,source,output]) => ({name
 
 languageCases.push(...matchErgonomicsCases.map(([name,source,output]) => ({name,source,output,kind:'run'})),
   ...matchErgonomicsCompileFailCases.map(([name,source]) => ({name,source,kind:'compile-fail'})));
+
+languageCases.push(...parameterPatternCases.map(([name,source,output]) => ({name,source,output,kind:'run'})),
+  ...parameterPatternCompileFailCases.map(([name,source]) => ({name,source,kind:'compile-fail'})));

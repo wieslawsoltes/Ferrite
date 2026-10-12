@@ -146,7 +146,11 @@ export class MirLowerer {
         if(node.indirect){let type=node.calleeValue.type;while(T.reference(type)){type=T.target(type);callee=this.emit('read',{place:{slot:callee,path:[{kind:'deref'}]},copy:true},node.calleeValue,type);}}
         if(node.temporaryCallee){const temporary=node.temporaryCallee;this.emit('write',{place:{slot:temporary.binding.slot,path:[]},value:this.expr(temporary.value)},node);}
         const mutates = ['method::push', 'method::pop', 'method::push_str', 'method::remove'].includes(node.builtin);
-        const receiverPlace = mutates ? this.place(node.receiver) : null;
+        // A computed &mut receiver is a reference value, not a source-local
+        // assignee. Evaluate it once into a register; the existing receiverDeref
+        // contract then accesses its pointee without inventing a source place.
+        const receiverPlace = mutates ? node.receiverDeref
+          ? {slot: this.expr(node.receiver, true), path: []} : this.place(node.receiver) : null;
         const receiver = node.receiver && !mutates ? this.expr(node.receiver, true) : null;
         const args = node.args.map(arg => this.expr(arg, ['println', 'print', 'format', 'clone', 'assert_eq'].includes(node.builtin)));
         if(node.indirect)return this.emit('callIndirect',{value:callee,args,signature:node.pointerSignature},node,node.type);

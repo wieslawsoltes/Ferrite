@@ -11,6 +11,7 @@ import {EnumDiscriminants} from './EnumDiscriminants.js';
 import {StructAnalyzer} from './StructAnalyzer.js';
 import {AssigneeAnalyzer} from './assignments/AssigneeAnalyzer.js';
 import {ConstantEvaluator} from './ConstantEvaluator.js';
+import {ParameterPatterns} from './patterns/ParameterPatterns.js';
 import {PatternAnalyzer} from './patterns/PatternAnalyzer.js';
 import {PatternCoverage} from './patterns/PatternCoverage.js';
 import {Diagnostic} from './Diagnostic.js';
@@ -154,6 +155,7 @@ export class SemanticAnalyzer {
     }
   }
   instantiate(fn, argumentTypes, explicit = [], node = fn) {
+    ParameterPatterns.checkCount(fn);
     if (fn.params.length !== argumentTypes.length) throw new Diagnostic('E0061', `${fn.name} expects ${fn.params.length} argument(s), got ${argumentTypes.length}`, node.span);
     const substitution = new Map(fn.generics.map((g, i) => [g.name, explicit[i] ?? null]));
     if (explicit.length > fn.generics.length) throw new Diagnostic('E0107', 'Too many generic arguments', node.span);
@@ -227,7 +229,7 @@ export class SemanticAnalyzer {
     const ctx = new FunctionContext(instance);
     ctx.methodScope = new TraitMethodScope(this, fn, substitution);
     copy.owner = fn.owner ? this.formal(fn, 'Self', substitution, fn) : null;
-    copy.params.forEach((p, i) => { p.type = argumentTypes[i]; p.binding = ctx.declare(p.name, p.type, p.mutable, p, true); ctx.methodScope.bind(p.binding, ctx.methodScope.normalize(fn.params[i].type)); });
+    const parameterPrologue = ParameterPatterns.bind(this, fn, instance, ctx, argumentTypes);
     ctx.inferredReturns=[];
     const abstractReturn=instance.returnType.startsWith('impl ')?instance.returnType.slice(5):null;
     const actual = this.block(copy.body, ctx, instance.returnType==='_'||abstractReturn?null:instance.returnType);
@@ -236,6 +238,7 @@ export class SemanticAnalyzer {
       if(abstractReturn&&!this.hasBound(inferred,abstractReturn))throw new Diagnostic('E0277',`Returned type does not implement ${abstractReturn}`,copy.body.span);
       instance.returnType=inferred;
     }else T.unify(instance.returnType, actual, new Map(), copy.body);
+    copy.body.body.unshift(...parameterPrologue);
     ctx.methodScope.checkResult(copy.body);
     instance.referenceContract = BorrowContract.describe(this, fn, argumentTypes, instance.returnType);
     if (fn.implGenericCount && !fn.associatedConstant && !BorrowContract.reference(instance.returnType) && new AssigneeAnalyzer(this, ctx).carriesReference(instance.returnType))

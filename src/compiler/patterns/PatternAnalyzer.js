@@ -124,6 +124,8 @@ export class PatternAnalyzer {
     // dereference is materialized in typed HIR, never in the caller's source AST.
     // Bare bindings, @ binders and alternatives decide their own matching mode.
     if (BorrowContract.reference(type) && !['wildcard', 'bindingPattern', 'atPattern', 'orPattern', 'referencePattern'].includes(pattern.kind)) {
+      if (context.inferredParameterPattern)
+        throw new Diagnostic('E0308', 'An inferred closure parameter cannot acquire an implicit reference prefix from a later call', pattern.span);
       const inner = {...pattern, id: `${pattern.id}:referent`};
       for (const key of Object.keys(pattern)) if (!['id', 'span', 'loc'].includes(key)) delete pattern[key];
       Object.assign(pattern, {kind: 'referencePattern', type, mutable: type.startsWith('&mut '), pattern: inner});

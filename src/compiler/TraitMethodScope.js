@@ -176,6 +176,19 @@ export class TraitMethodScope {
     return T.substitute(formal, new Map(shape.generics.map((g, i) => [g.name, app.args[i]])));
   }
   bindPattern(pattern, origin) {
+    // A monomorphized layout is not evidence that an abstract parameter has
+    // tuple/array/nominal structure. Check the declaration's normalized shape
+    // before projecting origins; otherwise fallback field types invent Copy
+    // privileges and admit invalid destructuring on a bare T.
+    if (this.active && ['tuplePattern', 'arrayPattern', 'structPattern', 'variantPattern', 'literal', 'rangePattern'].includes(pattern.kind)) {
+      const shape = this.a.index.associatedTypes.normalize(this.normalize(origin), this.parameters, {typeContext: this.fn});
+      const valid = pattern.kind === 'tuplePattern' ? !!T.tuple(shape) :
+        pattern.kind === 'arrayPattern' ? !!T.array(shape) :
+        ['structPattern', 'variantPattern'].includes(pattern.kind) ? T.application(shape).name === T.application(pattern.type).name :
+        shape === pattern.type;
+      if (!valid) throw new Diagnostic('E0308', `Pattern requires a declaration-visible structural type, found ${origin}`, pattern.span);
+      origin = shape;
+    }
     if (pattern.binding) this.bind(pattern.binding, pattern.byRef ? '&' + (pattern.mutable ? 'mut ' : '') + origin : origin);
     if (pattern.kind === 'referencePattern') {
       // Match reference shape under declaration equations, not by exploiting

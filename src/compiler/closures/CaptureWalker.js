@@ -7,6 +7,7 @@ export class CaptureWalker {
     if (pattern.kind === 'atPattern') return [...this.bindings(pattern.binder), ...this.bindings(pattern.pattern)];
     return [...(pattern.items ?? []).flatMap(p => this.bindings(p)), ...(pattern.fields ?? []).flatMap(f => this.bindings(f.pattern))];
   }
+  static parameters(params) { return params.flatMap(p => p.pattern ? this.bindings(p.pattern) : p.name && p.name !== '_' ? [p.name] : []); }
   static patternUse(patterns) {
     const pending = Array.isArray(patterns) ? [...patterns] : [patterns];
     let reference = false, mutable = false, value = false;
@@ -43,7 +44,7 @@ export class CaptureWalker {
     if (node.kind === 'assign') return {...node, target: walk(node.target, names, 'mutate'), value: walk(node.value, names, node.target.kind === 'variable' && node.target.name === '_' ? 'read' : 'consume')};
     if (node.kind === 'unary' && node.op === '&') return {...node, value: walk(node.value, names, node.mutable ? 'mutate' : 'read')};
     if (node.kind === 'field' || node.kind === 'index') return {...node, object: walk(node.object, names, use), ...(node.index ? {index: walk(node.index)} : {})};
-    if (node.kind === 'closure') return {...node, body: walk(node.body, new Set([...names, ...node.params.map(p => p.name)]), 'consume')};
+    if (node.kind === 'closure') return {...node, body: walk(node.body, new Set([...names, ...this.parameters(node.params)]), 'consume')};
     if (node.kind === 'for') return {...node, from: walk(node.from), to: walk(node.to), then: walk(node.then, new Set([...names, ...this.bindings(node.pattern)]))};
     if (node.kind === 'ifChain' || node.kind === 'whileChain') {
       const scope = new Set(names);

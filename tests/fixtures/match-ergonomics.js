@@ -132,7 +132,6 @@ matchErgonomicsCompileFailCases.push(
 export const matchErgonomicsCapabilityCases = [
   ['untracked aggregate pointer storage', 'fn main(){let a=(40,);let mut b=(2,);let (&(x,),&mut(ref mut y,))=(&a,&mut b);*y+=x;println!("{}",b.0);}', 'F_PATTERN_REFERENCE'],
   ['inferred borrowed array rest', 'fn main(){let a=[1,2,3];let [_,r @ ..]=&a;println!("{}",r[0]);}', 'F_PATTERN_BORROW'],
-  ['function parameter source storage', 'fn f(&(x,):&(i32,))->i32{x}fn main(){let p=(42,);println!("{}",f(&p));}', 'E0004'],
   ['adjacent reference rvalue promotion', 'fn main(){let n=42;let &&x=&&n;println!("{}",x);}', 'E0070'],
 ];
 

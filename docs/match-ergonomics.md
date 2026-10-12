@@ -127,8 +127,9 @@ existing `patternWork` counters include the new traversal work.
 ## Compatibility boundaries
 
 This increment supports local `let`/let-else, if-let, while-let, let chains and
-match patterns in the existing browser frontend. Function/closure parameter
-patterns and borrowed for-loop iteration patterns are not added. Bare mutable
+match patterns in the existing browser frontend. Function and closure parameter patterns are added by the
+[parameter-pattern continuation](parameter-patterns.md). Borrowed for-loop
+iteration patterns remain separate work. Bare mutable
 handle captures can retain the existing conservative closure-capture behavior;
 explicit `&`/`&mut` source captures are covered by execution tests.
 

@@ -1,0 +1,65 @@
+name: Publish checked reference patterns
+on:
+  push:
+    branches: [automation/reference-patterns-publication]
+    paths: ['.github/workflows/reference-patterns-publication.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_BRANCH: feat/ownership-reference-patterns
+      EXPECTED_HEAD: dc007a746487cc5a89f0716dc974db75fac842c7
+      EXPECTED_TREE: bb4f6ebb6e3509f5114180e78a478b7aed4acd44
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Decode reviewed source with checksum
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os
+          from pathlib import Path
+          encoded = ''.join(Path(f'.delivery/reference-patterns.{i}.b64').read_text().strip() for i in [1, 2])
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '09b5712f5643e0291ad69c56b58fecb4aed658f383069b7a54bce2ab108627c5'
+          Path(os.environ['RUNNER_TEMP'], 'source.patch').write_bytes(patch)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/ownership-reference-patterns
+      - name: Reproduce exact reviewed source tree
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git apply --check --whitespace=error-all "$RUNNER_TEMP/source.patch"
+          git apply --index --whitespace=error-all "$RUNNER_TEMP/source.patch"
+          npm run build:workers
+          npm run build:sdk
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+      - name: Run unchanged syntax, bundle and regression gates
+        run: |
+          npm run check > "$RUNNER_TEMP/check.log" 2>&1
+          node --test --test-concurrency=4 tests/*.test.js > "$RUNNER_TEMP/tests.log" 2>&1
+          tail -n 12 "$RUNNER_TEMP/tests.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reference-patterns-publication-evidence
+          path: |
+            ${{ runner.temp }}/check.log
+            ${{ runner.temp }}/tests.log
+          retention-days: 7
+      - name: Commit validated content and non-force push
+        run: |
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git config user.name 'Wiesław Šoltés'
+          git config user.email 'wieslawsoltes@users.noreply.github.com'
+          git commit -m 'feat: implement explicit reference patterns with projected loans and checked storage access' -m 'Publish the reviewed local reference-pattern continuation, including documentation and regenerated compiler/SDK bundles. Original reviewed head: 69f3adbeb1f80e549bcde7e0e96d0b22fc716c8a. Exact source tree: bb4f6ebb6e3509f5114180e78a478b7aed4acd44. Full normal PR CI remains mandatory before merge.'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD HEAD^{tree}

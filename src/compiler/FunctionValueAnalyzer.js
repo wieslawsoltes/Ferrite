@@ -1,3 +1,4 @@
+import {BorrowContract} from './ownership/BorrowContract.js';
 import {ProjectionInference} from './ProjectionInference.js';
 import {Diagnostic} from './Diagnostic.js';
 import {TypeSystem as T} from './TypeSystem.js';
@@ -155,7 +156,10 @@ export class FunctionValueAnalyzer {
   callPointer(node,ctx,type) {
     const signature=this.pointer(type);
     if(node.args.length!==signature.params.length)throw new Diagnostic('E0061',`Function pointer expects ${signature.params.length} arguments`,node.span);
-    node.args.forEach((arg,i)=>T.unify(signature.params[i],this.a.infer(arg,ctx,signature.params[i]),new Map(),arg));
+    const types=node.args.map((arg,i)=>this.a.infer(arg,ctx,signature.params[i]));
+    node.args.forEach((arg,i)=>T.unify(signature.params[i],types[i],new Map(),arg));
+    BorrowContract.reborrow(this.a,node,ctx,signature.params,types);
+    node.referenceContract=BorrowContract.pointer(signature,node);
     node.calleeValue=node.callee;node.indirect=true;node.pointerSignature=this.base(type);
     (ctx.instance.indirectCalls??=[]).push({signature:node.pointerSignature,span:node.span});
     return signature.result;
@@ -174,8 +178,9 @@ export class FunctionValueAnalyzer {
     const formals=record.signature??this.formals(record).map(t=>record.constructor?this.index.instantiatedType(t,record.owner,record.mapping,node):this.a.formal(record.owner,t,record.mapping,node));
     if(node.args.length!==formals.length)throw new Diagnostic('E0061',`Callable expects ${formals.length} arguments`,node.span);
     const types=node.args.map((arg,i)=>this.a.infer(arg,ctx,record.mapping.has(formals[i])?null:formals[i]));
+    if(!record.constructor)BorrowContract.reborrow(this.a,node,ctx,BorrowContract.formals(this.a,record.owner),types);
     const instance=this.prepare(record,types,null,node);
-    node.calleeValue=node.callee;node.calledItemType=this.canonical(type);node.resolved=instance.key;
+    node.calleeValue=node.callee;node.calledItemType=this.canonical(type);node.resolved=instance.key;node.referenceContract=instance.referenceContract;
     ctx.instance.calls.push({to:instance.key,span:node.span,loc:node.loc});return instance.returnType;
   }
   finish(){

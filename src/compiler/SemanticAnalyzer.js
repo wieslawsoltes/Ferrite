@@ -1,3 +1,4 @@
+import {BorrowContract} from './ownership/BorrowContract.js';
 import {ConditionChain} from './conditions/ConditionChain.js';
 import {DefaultArgumentInference} from './DefaultArgumentInference.js';
 import {ProjectionInference} from './ProjectionInference.js';
@@ -221,6 +222,7 @@ export class SemanticAnalyzer {
     const copy = structuredClone(fn);
     const instance = {key, name: fn.name, fn: copy, substitution, typeArguments: Object.fromEntries(substitution),
       returnType: this.formal(fn, fn.returnType, substitution, fn), calls: [], locals: []};
+    instance.referenceContract = BorrowContract.describe(this, fn, argumentTypes, instance.returnType);
     this.instances.set(key, instance);
     const ctx = new FunctionContext(instance);
     ctx.methodScope = new TraitMethodScope(this, fn, substitution);
@@ -235,7 +237,8 @@ export class SemanticAnalyzer {
       instance.returnType=inferred;
     }else T.unify(instance.returnType, actual, new Map(), copy.body);
     ctx.methodScope.checkResult(copy.body);
-    if (fn.implGenericCount && !fn.associatedConstant && new AssigneeAnalyzer(this, ctx).carriesReference(instance.returnType))
+    instance.referenceContract = BorrowContract.describe(this, fn, argumentTypes, instance.returnType);
+    if (fn.implGenericCount && !fn.associatedConstant && !BorrowContract.reference(instance.returnType) && new AssigneeAnalyzer(this, ctx).carriesReference(instance.returnType))
       throw new Diagnostic('F_IMPL_REFERENCE', 'Reference-carrying generic method results require interprocedural loan tracking', node.span);
     instance.locals = ctx.locals;
     delete instance.substitution;
@@ -366,7 +369,7 @@ export class SemanticAnalyzer {
           node.kind = 'literal'; node.value = literal.value; node.type = type;
           return type;
         }
-        const operand = this.infer(node.value, ctx, node.op==='&'?null:expected);
+        const operand = this.infer(node.value, ctx, node.op==='&'||node.op==='*'?null:expected);
         if (node.op === '&') { this.place(node.value, ctx, node.mutable); type = '&' + (node.mutable ? 'mut ' : '') + operand; }
         else if (node.op === '*') {
           if (!T.reference(operand) || operand === '&str') throw new Diagnostic('E0614', `Cannot dereference ${operand}`, node.span);
@@ -684,8 +687,9 @@ export class SemanticAnalyzer {
     });
     this.solveDefaultArguments(fn, mapping, node);
     inference.settle();
+    BorrowContract.reborrow(this, node, ctx, BorrowContract.formals(this, fn), types);
     const instance = this.instantiate(fn, types, fn.generics.map(g => mapping.get(g.name)), node);
-    node.resolved = instance.key;
+    node.resolved = instance.key; node.referenceContract = instance.referenceContract;
     ctx.instance.calls.push({to: instance.key, span: node.span, loc: node.loc});
     return instance.returnType;
   }
@@ -767,7 +771,7 @@ export class SemanticAnalyzer {
     delete node.builtin; delete node.receiver;
     const result = this.invoke(node, ctx, fn, explicit, expected, new Map([[0, firstType]]));
     ctx.methodScope.callResult(node, fn, T.reference(original) ? T.target(ctx.methodScope.of(receiver)) : ctx.methodScope.of(receiver));
-    if ((fn.implGenericCount || node.temporaryCallee || node.receiverReborrow || node.receiverBorrow) && new AssigneeAnalyzer(this, ctx).carriesReference(result))
+    if (!BorrowContract.reference(result) && (fn.implGenericCount || node.temporaryCallee || node.receiverReborrow || node.receiverBorrow) && new AssigneeAnalyzer(this, ctx).carriesReference(result))
       throw new Diagnostic('F_IMPL_REFERENCE', 'Reference-carrying generic method results require interprocedural loan tracking', node.span);
     return result;
   }

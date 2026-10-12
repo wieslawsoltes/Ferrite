@@ -52,7 +52,8 @@ for (const [name, source, code] of [
   ['unreachable declaration is checked', 'fn unused()->i32{true}fn main(){}', 'E0308'],
   ['use after move', 'fn main(){let a=String::from("a");let b=a;println!("{}",a);}', 'E0382'],
   ['mutate borrowed value', 'fn main(){let mut x=1;let r=&x;x=2;println!("{}",*r);}', 'E0502'],
-  ['return reference to local', 'fn bad()->&i32{let x=1;&x}fn main(){bad();}', 'E0515']
+  ['return reference requires declared input lifetime', 'fn bad()->&i32{let x=1;&x}fn main(){bad();}', 'E0106'],
+  ['return reference to local', 'fn bad(p:&i32)->&i32{let x=1;&x}fn main(){let p=0;bad(&p);}', 'E0515']
 ]) test(name, () => assert.throws(() => compile(source), error => error.code === code && !!error.span));
 
 test('runtime traps agree across backends', () => {

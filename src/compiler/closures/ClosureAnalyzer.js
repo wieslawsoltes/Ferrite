@@ -94,7 +94,7 @@ export class ClosureAnalyzer {
     const formal=instance.fn.params[0].type;
     if(T.reference(formal)&&!T.reference(type))environment={kind:'unary',op:'&',mutable:formal.startsWith('&mut '),value:environment,span:node.span,loc:node.loc};
     compiler.infer(environment,ctx,formal);T.unify(formal,environment.type,new Map(),node);
-    node.args=[environment,...node.args];node.resolved=instance.key;node.closureCall=true;
+    node.args=[environment,...node.args];node.resolved=instance.key;node.closureCall=true;node.referenceContract=instance.referenceContract;
     ctx.instance.calls.push({to:instance.key,span:node.span,loc:node.loc});return instance.returnType;
   }
   finish(){for(const record of this.records.values())if(!record.instance)this.prepare(record);}

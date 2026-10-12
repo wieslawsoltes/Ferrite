@@ -142,16 +142,15 @@ test('let-chain loop analysis reaches a moved-state fixed point instead of trust
 });
 
 test('let-chain explicit reference-origin boundaries reject rather than emit untracked loans', () => {
-  // These first three sources are valid native Rust. They are capability-boundary
+  // These sources are valid native Rust. They are capability-boundary
   // tests, intentionally not misrepresented as native compile-fail fixtures.
   for (const source of [
     'fn main(){let n=7;if let x=(&n,8) && true{println!("{}",*x.0);}}',
-    'fn same(n:&i32)->&i32{n}fn main(){let n=7;if let r=same(&n) && true{println!("{}",*r);}}',
     'fn main(){let n=7;let r=if let x=7 && true{(&n,x)}else{(&n,0)};println!("{}",*r.0);}',
-    // Native rejects this invalid escape; Ferrite lacks interprocedural return
-    // origins and must also fail, never silently accept an empty root set.
-    'fn same(n:&i32)->&i32{n}fn f(p:&i32)->&i32{if let n=7 && true{same(&n)}else{p}}fn main(){}',
   ]) assert.throws(() => compile(source), {code: 'F_CONDITION_REFERENCE'});
+  const valid = compile('fn same(n:&i32)->&i32{n}fn main(){let n=7;if let r=same(&n) && true{println!("{}",*r);}}');
+  assert.ok(valid.ownership.some(report => report.events.some(event => event.kind === 'retain returned reference')));
+  assert.throws(() => compile('fn same(n:&i32)->&i32{n}fn f(p:&i32)->&i32{if let n=7 && true{same(&n)}else{p}}fn main(){}'), {code: 'E0597'});
 });
 
 test('let-chain deferred integer inference remains an explicit existing boundary', () => {

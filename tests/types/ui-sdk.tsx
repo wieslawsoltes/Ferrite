@@ -78,3 +78,18 @@ ownershipPlace.path.push('field');
 // @ts-expect-error work counters are readonly metadata.
 ownershipLive.work = 0;
 void placePath;
+
+// Direct-reference contracts are serializable checker metadata, not a mutable API.
+import type {ReferenceContract} from 'ferrite-compiler';
+const callOwnership = compileVariance('fn same(x:&i32)->&i32{x}fn main(){let x=1;let r=same(&x);println!("{}",*r);}').ownership;
+const contract: ReferenceContract | null | undefined = callOwnership[0]?.referenceContract;
+const contractKind: 'elided' | 'generic' | 'unsupported' | undefined = contract?.kind;
+if (contract) {
+  const sourceIndex: number | undefined = contract.sources[0];
+  // @ts-expect-error call-contract dependencies cannot be edited by SDK consumers.
+  contract.sources.push(0);
+  // @ts-expect-error result mutability is readonly compiler-owned metadata.
+  contract.mutable = false;
+  void sourceIndex;
+}
+void contractKind;

@@ -1,3 +1,4 @@
+import {borrowContractCases, borrowContractCompileFailCases} from './borrow-contracts.js';
 import {ownershipPlaceCases, ownershipPlaceCompileFailCases} from './ownership-places.js';
 import {letChainCases, letChainCompileFailCases, letChainPanicCases} from './let-chains.js';
 import {nominalVarianceCases, nominalVarianceCompileFailCases} from './nominal-variance.js';
@@ -185,3 +186,7 @@ languageCases.push(...letChainCases.map(([name, source, output]) => ({name, sour
 
 languageCases.push(...ownershipPlaceCases.map(([name, source, output]) => ({name, source, output, kind: 'run'})),
   ...ownershipPlaceCompileFailCases.map(([name, source]) => ({name, source, kind: 'compile-fail'})));
+
+// Reference contracts are checked against the same exact source by rustc.
+languageCases.push(...borrowContractCases.map(([name, source, output]) => ({name, source, output, kind: 'run'})),
+  ...borrowContractCompileFailCases.map(([name, source]) => ({name, source, kind: 'compile-fail'})));

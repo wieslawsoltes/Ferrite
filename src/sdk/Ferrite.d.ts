@@ -28,11 +28,17 @@ export interface OwnershipLivenessReport {
   readonly nodes: number; readonly edges: number; readonly bitsetWords: number;
   readonly iterations: number; readonly work: number;
 }
+/** Signature dependencies for direct borrow-cell references, not full regions. */
+export interface ReferenceContract {
+  readonly version: 1; readonly kind: 'elided' | 'generic' | 'unsupported';
+  readonly sources: readonly number[]; readonly mutable: boolean; readonly error?: string;
+}
 export interface OwnershipReport {
   readonly instance: string; readonly span: Readonly<SourceSpan>; readonly model: string;
   readonly places: readonly OwnershipPlace[]; readonly placeWork: number;
   readonly liveness: OwnershipLivenessReport; readonly events: readonly OwnershipEvent[];
   readonly conditions?: {readonly work: number; readonly loopIterations: number};
+  readonly referenceContract: ReferenceContract | null;
 }
 export interface RustSemanticSummary { nominalVariance: NominalVarianceReport; [stage: string]: unknown }
 export interface RustArtifact {

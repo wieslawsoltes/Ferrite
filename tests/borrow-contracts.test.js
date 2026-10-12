@@ -1,0 +1,94 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import {readFileSync} from 'node:fs';
+import {compile, parse, tokenize} from '../src/engine.js';
+import {MirVirtualMachine} from '../src/runtime/MirVirtualMachine.js';
+import {WebAssemblyRuntime} from '../src/runtime/WebAssemblyRuntime.js';
+import {SemanticQueryCache} from '../src/compiler/SemanticQueryCache.js';
+import {BorrowContract} from '../src/compiler/ownership/BorrowContract.js';
+import {borrowContractCases, borrowContractCompileFailCases} from './fixtures/borrow-contracts.js';
+
+const output = artifact => new MirVirtualMachine(JSON.parse(JSON.stringify(artifact.optimizedMir)), {entry: artifact.entry}).run().output;
+for (const [name, source, expected] of borrowContractCases) test(`borrow contract: ${name}`, () => {
+  for (const optimize of [false, true]) {
+    const artifact = compile(source, {optimize});
+    assert.equal(output(artifact), expected);
+    assert.equal(new WebAssemblyRuntime(artifact.wasm).run().output, expected);
+    const context = vm.createContext({}); vm.runInContext(artifact.js, context, {timeout: 3000});
+    assert.equal(vm.runInContext('r.output', context), expected);
+  }
+});
+for (const [name, source, code] of borrowContractCompileFailCases) test(`borrow contract rejects: ${name}`, () => {
+  for (const optimize of [false, true]) assert.throws(() => compile(source, {optimize}), error => {
+    assert.equal(error.code, code, error.stack); assert.ok(error.span?.end > error.span?.start); return true;
+  });
+});
+const freeze = node => {
+  if (node && typeof node === 'object') { Object.values(node).forEach(freeze); Object.freeze(node); }
+  return node;
+};
+test('borrow contracts preserve deeply frozen accepted and rejected source ASTs', () => {
+  for (const [accepted, cases] of [[true, borrowContractCases], [false, borrowContractCompileFailCases]])
+    for (const [, source, expected] of cases) {
+      const ast = freeze(parse(tokenize(source))), before = JSON.stringify(ast);
+      if (accepted) assert.equal(output(compile('', {ast})), expected);
+      else assert.throws(() => compile('', {ast}), {code: expected});
+      assert.equal(JSON.stringify(ast), before);
+    }
+});
+test('signature changes invalidate ownership queries and preserve atomic error recovery', () => {
+  const source = 'fn choose<T>(x:T,y:&i32)->T{x}fn main(){let x=42;let mut y=0;let r=choose(&x,&y);y=1;println!("{}",*r);}';
+  const changed = source.replace('x:T,y:&i32', 'x:T,y:T');
+  const cache = new SemanticQueryCache(); let first;
+  for (let i = 0; i < 3; i++) {
+    cache.beginBuild(); const artifact = compile(source, {queryCache: cache});
+    assert.equal(output(artifact), '42\n');
+    if (first) {
+      assert.deepEqual(artifact.ownership, first.ownership);
+      for (const stage of ['type', 'ownership', 'mir']) assert.ok(artifact.queries.nodes.some(node => node.stage === stage && node.cacheHit));
+    } else first = structuredClone(artifact);
+    cache.beginBuild(); assert.throws(() => compile(changed, {queryCache: cache}), {code: 'E0502'});
+  }
+});
+test('contracts and retained-call events are serializable and source linked', () => {
+  const artifact = compile(borrowContractCases[0][1]);
+  const contract = artifact.ownership.find(report => report.instance === 'id<>').referenceContract;
+  assert.deepEqual(contract, {version: 1, kind: 'elided', sources: [0], mutable: false});
+  assert.deepEqual(JSON.parse(JSON.stringify(artifact.ownership)), artifact.ownership);
+  const caller = artifact.ownership.find(report => report.instance === 'main<>');
+  const event = caller.events.find(event => event.kind === 'retain returned reference');
+  assert.ok(event && event.span && caller.places[event.place].local === event.slot);
+  // The contract is checker metadata, not an executable equation or MIR opcode.
+  assert.ok(!JSON.stringify(artifact.optimizedMir).includes('referenceContract'));
+});
+test('implicit argument reservation/activation is observable without moving the handle', () => {
+  const source = borrowContractCases.find(([name]) => name === 'mutable argument uses two phase activation')[1];
+  const artifact = compile(source), events = artifact.ownership.find(report => report.instance === 'main<>').events;
+  const reserve = events.findIndex(event => event.kind === 'reserve mutable argument');
+  const activate = events.findIndex(event => event.kind === 'activate mutable argument');
+  assert.ok(reserve >= 0 && activate > reserve);
+  assert.ok(!events.some(event => event.kind === 'move' && event.name === 'r'));
+});
+for (const [key, limit] of [['MAX_WORK', 0], ['MAX_DEPTH', 0]]) test(`borrow signature ${key} is bounded and recovers`, () => {
+  const before = BorrowContract[key], source = borrowContractCases[0][1], cache = new SemanticQueryCache();
+  try { BorrowContract[key] = limit; assert.throws(() => compile(source, {queryCache: cache}), {code: 'F_OWNERSHIP_LIMIT'}); }
+  finally { BorrowContract[key] = before; }
+  cache.beginBuild(); assert.equal(output(compile(source, {queryCache: cache})), '42\n');
+});
+test('unrepresented aggregate input provenance fails explicitly', () => {
+  assert.throws(() => compile('fn get(x:(&i32,))->&i32{x.0}fn main(){let x=42;get((&x,));}'), {code: 'F_BORROW_CONTRACT'});
+});
+
+test('call-contract guide matches the executable example on every backend', () => {
+  const source = readFileSync(new URL('../examples/10-borrow-contracts.rs', import.meta.url), 'utf8');
+  const guide = readFileSync(new URL('../docs/borrow-contracts.md', import.meta.url), 'utf8');
+  assert.equal(guide.match(/```rust\n([\s\S]*?)```/)[1], source);
+  for (const optimize of [false, true]) {
+    const artifact = compile(source, {optimize});
+    assert.equal(output(artifact), '42\n');
+    assert.equal(new WebAssemblyRuntime(artifact.wasm).run().output, '42\n');
+    const context = vm.createContext({}); vm.runInContext(artifact.js, context, {timeout: 3000});
+    assert.equal(vm.runInContext('r.output', context), '42\n');
+  }
+});

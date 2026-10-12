@@ -32,9 +32,14 @@ test('shared receiver specialization does not retain mutable argument type',()=>
   const method=build.mir.find(item=>item.name==='C::get' || item.key==='C::get<>');
   assert(method);assert.equal(method.registers[method.params[0]].type,'&C');
 });
-test('reference-carrying results and untracked receiver origins remain explicit boundaries',()=>{
-  assert.throws(()=>compile('struct C;impl C{fn get(&self)->&Self{self}}fn main(){let c=C;let r=&c;let x=r.get();}'),e=>e.code==='F_IMPL_REFERENCE');
-  assert.throws(()=>compile('struct C;fn identity(r:&C)->&C{r}impl C{fn get(&self)->i32{42}}fn main(){let c=C;println!("{}",identity(&c).get());}'),e=>e.code==='F_REBORROW_REFERENCE');
+test('direct reference results and expression receivers retain checked origins',()=>{
+  for(const source of [
+    'struct C;impl C{fn get(&self)->&Self{self}}fn main(){let c=C;let r=&c;let x=r.get();}',
+    'struct C;fn identity(r:&C)->&C{r}impl C{fn get(&self)->i32{42}}fn main(){let c=C;println!("{}",identity(&c).get());}'
+  ]) {
+    const artifact=compile(source);
+    assert.ok(artifact.ownership.some(report=>report.events.some(event=>event.kind==='retain returned reference')));
+  }
 });
 test('call-scoped loans survive cache replay and invalidation',()=>{
   const source=receiverReborrowCases[7][1];

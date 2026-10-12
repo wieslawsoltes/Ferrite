@@ -1,3 +1,4 @@
+import {BorrowContract} from './ownership/BorrowContract.js';
 import {Diagnostic} from './Diagnostic.js';
 import {ConditionOwnership} from './conditions/ConditionOwnership.js';
 import {OwnershipLiveness} from './ownership/OwnershipLiveness.js';
@@ -10,7 +11,7 @@ import {TypeSystem as T} from './TypeSystem.js';
 export class OwnershipAnalyzer {
   constructor(instance) {
     this.instance = instance; this.places = new PlaceTable(instance);
-    this.provenance = new WeakMap(); this.authorities = new Map(); this.loanSites = new WeakMap(); this.nextLoan = 0;
+    this.provenance = new WeakMap(); this.valueOrigins = new WeakMap(); this.authorities = new Map(); this.loanSites = new WeakMap(); this.nextLoan = 0;
     this.lastUse = new Map(); this.moved = new Set(); this.loans = []; this.references = new Map(); this.events = [];
     this.controls = []; this.callFrame = null;
     this.scan(instance.fn.body);
@@ -20,9 +21,11 @@ export class OwnershipAnalyzer {
     return semantic.instances.map(instance => {
       const analyzer = new OwnershipAnalyzer(instance);
       analyzer.block(instance.fn.body);
+      BorrowContract.validate(instance.referenceContract, instance.fn);
       return {instance: instance.key, span: instance.fn.span, events: analyzer.events,
         ...(analyzer.conditionWork ? {conditions: {work: analyzer.conditionWork, loopIterations: analyzer.conditionIterations ?? 0}} : {}),
         places: analyzer.places.snapshot(), placeWork: analyzer.places.work, liveness: analyzer.liveness.snapshot(),
+        referenceContract: instance.referenceContract ?? null,
         model: 'Projection-sensitive moves, CFG local liveness and reborrow authority (not full rustc NLL)'};
     });
   }
@@ -47,13 +50,34 @@ export class OwnershipAnalyzer {
   }
   expire(node, after = false) {
     const live = after ? this.liveness.after(node) : this.liveness.before(node);
-    this.loans = this.loans.filter(loan => {
+    const retained = new Set(), pending = [], byId = new Map(), storageOrigins = new Map();
+    const keep = loan => { if (!retained.has(loan)) { retained.add(loan); pending.push(loan); } };
+    for (const loan of this.loans) {
+      const same = byId.get(loan.id) ?? []; same.push(loan); byId.set(loan.id, same);
       if (loan.callFrame && this.activeCalls.includes(loan.callFrame) ||
           this.activeCalls.some(frame => frame.protected.has(loan.id)) ||
-          loan.borrowers.some(slot => this.pendingDestinations.includes(slot))) return true;
-      if (!loan.borrowers.length) return loan.until >= node.span.start;
-      return live ? loan.borrowers.some(slot => this.liveness.has(live, slot)) : loan.until >= node.span.start;
-    });
+          loan.borrowers.some(slot => this.pendingDestinations.includes(slot)) ||
+          (!loan.borrowers.length ? loan.until >= node.span.start : live
+            ? loan.borrowers.some(slot => this.liveness.has(live, slot)) : loan.until >= node.span.start)) keep(loan);
+    }
+    // Index reference storage by allocation root. Unrelated locals must not
+    // incur a loan-by-every-local cross product while tracing dependencies.
+    for (const [storage, ids] of this.authorities) {
+      this.places.charge();
+      const root = this.places.get(storage).root, origins = storageOrigins.get(root) ?? [];
+      origins.push([storage, ids]); storageOrigins.set(root, origins);
+    }
+    // A borrowed reference cell may not itself have a future named use. Its
+    // pointee nevertheless outlives every reachable read through that cell.
+    // Trace dependencies to a fixed point before discarding any loan; filtering
+    // in insertion order would lose nested &&T origins and shared copies.
+    for (let cursor = 0; cursor < pending.length; cursor++) {
+      const loan = pending[cursor]; this.places.charge();
+      for (const [storage, ids] of storageOrigins.get(this.places.get(loan.root).root) ?? []) if (this.places.contains(loan.root, storage))
+        for (const id of ids) { this.places.charge(); for (const dependency of byId.get(id) ?? []) keep(dependency); }
+      for (const id of loan.parents) { this.places.charge(); for (const parent of byId.get(id) ?? []) keep(parent); }
+    }
+    this.loans = this.loans.filter(loan => retained.has(loan));
   }
   roots(node) {
     if (!node) return [];
@@ -73,9 +97,9 @@ export class OwnershipAnalyzer {
       return this.roots(node).flatMap(id => this.references.get(id) ??
         (this.places.get(id).external ? [this.places.pointee(id, node)] : []));
     }
-    return [];
+    return this.valueOrigins.get(node) ?? [];
   }
-  authority(slot) { return this.authorities.get(slot) ?? []; }
+  authority(slot) { return Array.isArray(slot) ? slot : this.authorities.get(slot) ?? []; }
   permitted(loan, via) { return via != null && this.authority(via).includes(loan.id); }
   loanId(node, root) {
     let sites = this.loanSites.get(node);
@@ -134,15 +158,15 @@ export class OwnershipAnalyzer {
   referenceAccess(node, mode = 'read') {
     this.expire(node);
     for (const root of this.referenceRoots(node)) {
-      const conflict = this.loans.find(loan => this.places.overlaps(loan.root, root) && !this.permitted(loan, node.binding?.slot) &&
+      const conflict = this.loans.find(loan => this.places.overlaps(loan.root, root) && !this.permitted(loan, node.binding ? node.binding.slot : this.resultLoans(node)) &&
         this.conflicts(loan, mode));
       if (conflict) throw new Diagnostic('E0502', `Cannot ${mode} through a reference while its referent is borrowed`, node.span,
         [{message:'Conflicting loan starts here', span:conflict.span}]);
     }
   }
   referenceBase(node) {
-    if (node.kind === 'unary' && node.op === '*') return node.value.binding?.slot ?? null;
-    if (node.kind === 'field' || node.kind === 'index') return node.autoDeref ? node.object.binding?.slot ?? null : this.referenceBase(node.object);
+    if (node.kind === 'unary' && node.op === '*') return node.value.binding?.slot ?? this.resultLoans(node.value);
+    if (node.kind === 'field' || node.kind === 'index') return node.autoDeref ? node.object.binding?.slot ?? this.resultLoans(node.object) : this.referenceBase(node.object);
     return null;
   }
   access(node, mode = 'read', via = null) {
@@ -160,6 +184,7 @@ export class OwnershipAnalyzer {
     if (destination != null) this.pendingDestinations.push(destination);
     try {
       const roots = this.evaluateValue(node, consume, destination);
+      if (node) this.valueOrigins.set(node, roots);
       if (destination != null && roots.length) this.attach(destination, roots, node);
       return roots;
     } finally { if (destination != null) this.pendingDestinations.pop(); }
@@ -193,7 +218,7 @@ export class OwnershipAnalyzer {
       const roots = this.roots(node.value), via = this.referenceBase(node.value);
       if (this.indirect(node.value) && !roots.length) throw new Diagnostic('F_REBORROW_REFERENCE',
         'A reborrow requires a tracked local or parameter reference origin', node.span);
-      const reserved = !!(node.implicitReceiverBorrow || node.implicitReceiverReborrow) && node.mutable;
+      const reserved = !!(node.implicitReceiverBorrow || node.implicitReceiverReborrow || node.implicitArgumentReborrow) && node.mutable;
       const mode = reserved ? 'reserve mutably' : node.mutable ? 'borrow mutably' : 'read';
       this.access(node.value, mode, via);
       const parents = [...this.authority(via)];
@@ -204,7 +229,7 @@ export class OwnershipAnalyzer {
           callFrame: destination == null ? this.callFrame : null,
           until: destination == null ? this.callFrame?.end ?? node.span.end : this.lastUse.get(destination) ?? node.span.end,
           span: node.span});
-        this.event(node.implicitReceiverReborrow ? reserved ? 'reserve mutable reborrow' : 'shared reborrow' :
+        this.event(node.implicitArgumentReborrow ? reserved ? 'reserve mutable argument' : 'shared argument reborrow' : node.implicitReceiverReborrow ? reserved ? 'reserve mutable reborrow' : 'shared reborrow' :
           reserved ? 'reserve mutable loan' : node.mutable ? 'mutable loan' : 'shared loan', node, root);
       }
       this.provenance.set(node, [...new Set([...parents, ...roots.map(root => this.loanId(node, root))])]);
@@ -214,6 +239,15 @@ export class OwnershipAnalyzer {
       this.evaluatePlace(node);
       if (consume && !node.copy) throw new Diagnostic('E0507', 'Moving a non-Copy value out of a reference is not allowed', node.span);
       this.access(node, 'read', this.referenceBase(node));
+      if (BorrowContract.reference(node.type)) {
+        // Reading a Copy reference from pointer storage transfers its own
+        // referent/lineage, not the temporary borrow of that storage.
+        const storage = this.roots(node);
+        const roots = storage.flatMap(id => this.references.get(id) ??
+          (this.places.get(id).external ? [this.places.pointee(id, node)] : []));
+        this.provenance.set(node, [...new Set(storage.flatMap(id => this.authority(id)))]);
+        return [...new Set(roots)];
+      }
       return [];
     }
     // Rust comparison operators borrow both operands, including owned strings.
@@ -257,11 +291,11 @@ export class OwnershipAnalyzer {
     return [];
   }
   callValue(node) {
-    // Receiver reborrows cover argument evaluation and this call, not the next
-    // statement. Nested calls release only their own loans, never the outer
-    // receiver's loan. Only compiler-inserted method receivers reserve then
-    // activate; explicit source &mut borrows are active immediately.
-    const previous = this.callFrame, frame = {end:node.span.end, protected: new Set()};
+    // Call-scoped reborrows cover argument evaluation and invocation. Only the
+    // signature's returned-reference dependencies survive the call. Nested
+    // calls cannot release an enclosing reservation; compiler-inserted receiver
+    // and argument reborrows reserve/activate, while explicit &mut is immediate.
+    const previous = this.callFrame, frame = {end:node.span.end, protected: new Set()}, argumentsOrigins = [], argumentsLoans = [], retained = new Set();
     this.activeCalls.push(frame);
     this.callFrame = frame;
     try {
@@ -281,6 +315,7 @@ export class OwnershipAnalyzer {
       for (const arg of node.args ?? []) {
         const roots = this.value(arg, !borrows);
         const resultLoans = this.resultLoans(arg);
+        argumentsOrigins.push(roots); argumentsLoans.push(resultLoans);
         for (const loan of this.loans)
           if (roots.some(root => this.places.overlaps(root, loan.root)) &&
               (resultLoans.includes(loan.id) || loan.borrower == null))
@@ -290,14 +325,26 @@ export class OwnershipAnalyzer {
       for (const loan of this.loans) if (loan.callFrame === frame && loan.reserved) {
         const conflict = this.loans.find(other => other !== loan && this.places.overlaps(other.root, loan.root) &&
           !loan.parents.includes(other.id));
-        if (conflict) throw new Diagnostic('E0502', 'Cannot activate a mutable method receiver while its referent is borrowed', node.span,
+        if (conflict) throw new Diagnostic('E0502', 'Cannot activate an implicit mutable borrow while its referent is borrowed', node.span,
           [{message:'Conflicting loan starts here', span:conflict.span}]);
         loan.reserved = false;
-        this.event('activate mutable receiver', node, loan.root);
+        this.event(node.receiverBorrow || node.receiverReborrow ? 'activate mutable receiver' : 'activate mutable argument', node, loan.root);
+      }
+      if (BorrowContract.reference(node.type)) {
+        const contract = node.referenceContract ?? (name === 'dbg' ? {sources: [0]} : null);
+        if (!contract) throw new Diagnostic('F_BORROW_CONTRACT', 'A reference-returning call needs a checked signature contract', node.span);
+        BorrowContract.validate(contract, node);
+        const roots = [...new Set(contract.sources.flatMap(i => argumentsOrigins[i] ?? []))];
+        if (!roots.length) throw new Diagnostic('F_BORROW_ORIGIN', 'Cannot retain a returned reference without tracked argument origins', node.span);
+        for (const i of contract.sources) for (const id of argumentsLoans[i] ?? []) retained.add(id);
+        this.provenance.set(node, [...retained]);
+        for (const root of roots) this.event('retain returned reference', node, root);
+        return roots;
       }
       return [];
     } finally {
-      this.loans = this.loans.filter(loan => loan.callFrame !== frame);
+      this.loans = this.loans.flatMap(loan => loan.callFrame !== frame ? [loan] : retained.has(loan.id)
+        ? [{...loan, callFrame: previous, until: previous?.end ?? node.span.end}] : []);
       this.callFrame = previous; this.activeCalls.pop();
     }
   }
@@ -342,6 +389,14 @@ export class OwnershipAnalyzer {
   checkReturn(value, roots, origin) {
     if ((T.reference(value?.type) && value?.type !== '&str' || value?.borrowCarrier) && roots.some(root => value?.borrowCarrier || !this.places.get(root).external))
       throw new Diagnostic('E0515', 'Cannot return a reference to a local value', origin.span);
+    if (BorrowContract.reference(value?.type)) {
+      const contract = this.instance.referenceContract;
+      BorrowContract.validate(contract, origin);
+      if (!contract || !roots.length) throw new Diagnostic('F_BORROW_ORIGIN', 'A returned reference needs a tracked input origin', origin.span);
+      const allowed = new Set(contract.sources.map(i => this.instance.fn.params[i].binding.slot));
+      if (roots.some(root => !allowed.has(this.places.local(root))))
+        throw new Diagnostic('E0623', 'Returned reference is not derived from the input lifetime required by this signature', origin.span);
+    }
   }
   returnValue(value, origin) { this.checkReturn(value, this.value(value), origin); }
   assignment(node) {

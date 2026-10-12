@@ -18,7 +18,11 @@ for (const [name, source, expected] of genericImplCases) test(name, () => {
 for (const [name, source, code] of genericImplCompileFailCases) test(name, () => {
   for (const optimize of [false, true]) assert.throws(() => compile(source, {optimize}), error => error.code === code);
 });
-test('generic method reference-carrying results retain an explicit boundary', () => {
-  for (const expression of ['let c=Cell(1);let _=c.borrow();', 'let f=Cell::<u32>::borrow;'])
-    assert.throws(() => compile(`struct Cell<T>(T);impl<T> Cell<T>{fn borrow(&self)->&T{&self.0}}fn main(){${expression}}`), error => error.code === 'F_IMPL_REFERENCE');
+test('generic method direct reference results have checked call contracts', () => {
+  for (const expression of ['let c=Cell(1);let _=c.borrow();', 'let f=Cell::<u32>::borrow;']) {
+    const artifact = compile(`struct Cell<T>(T);impl<T> Cell<T>{fn borrow(&self)->&T{&self.0}}fn main(){${expression}}`);
+    assert.deepEqual(outputs(artifact), ['', '', '']);
+    assert.ok(artifact.ownership.some(report => report.referenceContract?.sources.length === 1));
+  }
+  assert.throws(() => compile('struct Cell<T>(T);impl<T> Cell<T>{fn borrow(&self)->(&T,i32){(&self.0,0)}}fn main(){let c=Cell(1);c.borrow();}'), {code: 'F_IMPL_REFERENCE'});
 });

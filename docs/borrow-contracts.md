@@ -58,11 +58,15 @@ merely because a particular call passes references with compatible concrete type
 
 A generic identity or selector returning its input type carries that type's
 reference lifetime when specialized to a direct reference. All independently
-supplied arguments of that symbolic type constrain the result. An unrelated
-reference-shaped input does not acquire the generic type's lifetime. Such generic
-arguments still move mutable reference handles; only explicitly reference-shaped
-formals authorize an implicit reborrow. Nested/aggregate generic output contracts
-are not inferred by reversing the concrete result type.
+supplied arguments of that symbolic type constrain the result, including inputs
+that carry it through `&T`, `&&T`, or mutable reference storage. For example,
+`choose<T: Copy>(x: T, y: &T) -> T` retains both the lifetime of `x` and the lifetime
+of the value stored behind `y`, regardless of whether its body returns `x` or
+`*y`. The temporary borrow of the pointer storage itself can end at the call.
+An unrelated reference-shaped input does not acquire the generic type's lifetime.
+Such generic arguments still move mutable reference handles; only explicitly
+reference-shaped formals authorize an implicit reborrow. Nested/aggregate generic
+output contracts are not inferred by reversing the concrete result type.
 
 The contract is attached before checking a function body, so recursive calls use
 the same signature rules. Actual callee instance contracts are attached to typed
@@ -116,8 +120,10 @@ then rerun using the same query cache after restoring the limits.
 
 The readonly SDK `ReferenceContract` describes its schema version, `elided` or
 `generic` dependency kind, zero-based parameter indices in `sources`, and result
-mutability. An unsupported contract carries a diagnostic and never produces a
-successful executable artifact. `OwnershipReport.referenceContract` is null when
+mutability. An optional readonly `indirections` array specifies the number of
+reference-storage dereferences for each corresponding source; it is omitted when
+all depths are zero. An unsupported contract carries a diagnostic and never
+produces a successful executable artifact. `OwnershipReport.referenceContract` is null when
 no such contract is needed. Caller events include `retain returned reference`,
 `reserve mutable argument`, `shared argument reborrow`, and `activate mutable
 argument`, with original source spans and function-local place IDs.
@@ -138,7 +144,12 @@ function valid for all possible substitutions.
 Direct-reference returns need represented direct input origins. A reference
 nested inside an aggregate input, a generic reference-carrying container, projected
 associated output, or closure result may require an unimplemented contract and
-is rejected with `F_BORROW_CONTRACT` or `F_BORROW_ORIGIN`. Aggregate return carriers,
+is rejected with `F_BORROW_CONTRACT` or `F_BORROW_ORIGIN`. In particular, returning
+`&T` while an additional input also constrains the references inside `T` requires
+separate inner and outer result-region dataflow. Such contracts fail explicitly
+rather than confusing an inner referent with the outer pointer-storage address;
+this also rejects some valid native programs. Scalar substitutions do not need
+these extra regions. Aggregate return carriers,
 reference-valued fields, arbitrary mutation through reference storage, and all
 pattern-bound references still need broader dataflow. Existing targeted boundary
 checks remain, but not every unsupported carrier is diagnosed. Do not interpret
@@ -169,6 +180,10 @@ restore MIR before executing it. The same source corpus goes to installed rustc,
 edition 2024, at native optimization levels 0 and 3 with overflow checks enabled.
 `--browser-only` is explicitly not native validation. The nested-field matrix
 covers shared/mutable returned loans for every pair of four scalar field paths.
+A second matrix covers one, two, and three indirect generic input layers, both
+callee selections, scope escape, mutation conflicts, last-use release, and
+pointer-storage reassignment. Cases requiring unrepresented inner output regions
+are separate capability tests, not falsely advertised native conformance cases.
 
 Other tests cover frozen accepted/rejected ASTs, actual typed-HIR/ownership/MIR query
 replay and invalidation, recursion, source-linked reports, resource recovery,

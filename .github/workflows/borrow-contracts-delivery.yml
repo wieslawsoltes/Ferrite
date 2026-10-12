@@ -1,0 +1,82 @@
+name: Publish checked borrow contracts
+on:
+  push:
+    branches: [automation/borrow-call-contracts-delivery]
+    paths: ['.compiler-transfer/borrow-contracts.*.b64', '.github/workflows/borrow-contracts-delivery.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: 376e76aabf585608300b794bbc947bc42a0ec449
+      EXPECTED_TREE: cc22764d2c3b0556b384e6206da0f8898ea8eb1e
+      TARGET_BRANCH: feat/borrow-call-contracts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Decode and verify reviewed source
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, lzma, os
+          from pathlib import Path
+          files = sorted(Path('.compiler-transfer').glob('borrow-contracts.*.b64'))
+          assert len(files) == 3
+          text = ''.join(p.read_text().strip() for p in files)
+          payload = lzma.decompress(base64.b64decode(text, validate=True))
+          assert hashlib.sha256(payload).hexdigest() == 'e29572c7771ee5ceb2a2a782319d6700b212a64e5e8ee392e927e59921d2a681'
+          patches = json.loads(payload)
+          assert [p['tree'] for p in patches] == ['1a05f09e5c202a4dd53e60733ffdfe2b0bf53518', 'cc22764d2c3b0556b384e6206da0f8898ea8eb1e']
+          Path(os.environ['RUNNER_TEMP'], 'borrow-contracts.json').write_bytes(payload)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/borrow-call-contracts
+      - name: Reconstruct and commit both exact reviewed trees
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git config user.name 'Wiesław Šoltés'
+          git config user.email 'wieslawsoltes@users.noreply.github.com'
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          run = lambda *args: subprocess.run(args, check=True)
+          directory = Path(os.environ['RUNNER_TEMP'])
+          patches = json.loads((directory / 'borrow-contracts.json').read_text())
+          for index, item in enumerate(patches):
+              patch = directory / f'borrow-contracts-{index}.patch'
+              patch.write_text(item['patch'])
+              run('git', 'apply', '--check', '--unidiff-zero', '--whitespace=error-all', str(patch))
+              run('git', 'apply', '--index', '--unidiff-zero', '--whitespace=error-all', str(patch))
+              run('npm', 'run', 'build:workers')
+              run('npm', 'run', 'build:sdk')
+              run('git', 'add', '-A')
+              run('git', 'diff', '--cached', '--check')
+              actual = subprocess.check_output(['git', 'write-tree'], text=True).strip()
+              assert actual == item['tree'], (actual, item['tree'])
+              run('git', 'commit', '-m', item['message'])
+          PY
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+      - name: Validate final publication
+        run: |
+          npm run check > "$RUNNER_TEMP/borrow-check.log" 2>&1
+          node --test --test-concurrency=4 tests/*.test.js > "$RUNNER_TEMP/borrow-tests.log" 2>&1
+          tail -n 12 "$RUNNER_TEMP/borrow-tests.log"
+          test -z "$(git status --porcelain)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: borrow-contracts-publication
+          path: |
+            ${{ runner.temp }}/borrow-check.log
+            ${{ runner.temp }}/borrow-tests.log
+          retention-days: 7
+      - name: Non-force publish the reviewed branch
+        run: |
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD HEAD^{tree}

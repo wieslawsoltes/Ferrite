@@ -9,7 +9,10 @@ import {TypeSystem as T} from '../TypeSystem.js';
 /** Types pattern projections and assigns consistent local slots to alternatives. */
 export class PatternAnalyzer {
   static MAX_SOURCE_DEPTH = 128;
-  constructor(analyzer) { this.analyzer = analyzer; this.sources = new WeakSet(); }
+  constructor(analyzer) {
+    this.analyzer = analyzer; this.sources = new WeakSet();
+    this.mode = 'move'; this.depth = 0; this.automatic = new WeakSet();
+  }
 
   /** Source-address metadata is compiler-owned even for injected ASTs. A match
    * may prepare the same HIR scrutinee in several arms: retain the verified
@@ -20,7 +23,25 @@ export class PatternAnalyzer {
       this.sources.add(source);
     }
     const borrowed = ConditionChain.bindings(pattern).filter(item => item.byRef);
-    if (!borrowed.length) return;
+    const pending = [{node: pattern, indirect: false, writable: !this.analyzer.sharedStorage(source)}];
+    let dereferences = false, mutableStorage = false, work = 0;
+    while (pending.length) {
+      const {node, indirect, writable} = pending.pop();
+      if (++work > 65_536) throw new Diagnostic('F_OWNERSHIP_LIMIT', 'Reference pattern source exceeds its work budget', pattern.span);
+      if (node.byRef && node.mutable) {
+        if (indirect && !writable) throw new Diagnostic('E0596', 'Cannot mutably borrow through a shared pattern reference', node.span);
+        if (!indirect) mutableStorage = true;
+      }
+      if (node.kind === 'referencePattern') {
+        dereferences = true;
+        pending.push({node: node.pattern, indirect: true, writable: writable && node.mutable});
+      } else {
+        for (const child of [node.binder, node.kind === 'atPattern' ? node.pattern : null,
+          ...(node.items ?? []), ...(node.fields ?? []).map(f => f.pattern), node.restBinding?.binder])
+          if (child) pending.push({node: child, indirect, writable});
+      }
+    }
+    if (!borrowed.length && !dereferences) return;
     const analyzer = this.analyzer;
     for (const item of borrowed) {
       let contained = item.type, depth = 0;
@@ -35,7 +56,7 @@ export class PatternAnalyzer {
         throw new Diagnostic('F_PATTERN_BORROW', 'Borrowing an aggregate reference carrier requires tracked field-region origins', item.span);
     }
     if (!source) throw new Diagnostic('F_PATTERN_BORROW', 'This pattern context needs an explicit source place for reference bindings', pattern.span);
-    if (this.isPlace(source)) analyzer.place(source, context, borrowed.some(item => item.mutable));
+    if (this.isPlace(source)) analyzer.place(source, context, mutableStorage);
     else if (!source.patternStorage) source.patternStorage = context.declare(`$pattern${source.id}`, type, true, source);
     source.patternBorrowed = true;
   }
@@ -75,7 +96,16 @@ export class PatternAnalyzer {
     owner.generics.forEach((generic,index)=>T.unify(actual[index],defaults.mapping.get(generic.name) ?? '_',new Map(),pattern));
   }
 
-  analyze(pattern, type, context, mutable = false, bindings = new Map(), names = new Set(), reuse = false) {
+  analyze(pattern, type, context, mutable = false, bindings = new Map(), names = new Set(), reuse = false, mode = this.mode) {
+    if (this.depth >= PatternAnalyzer.MAX_SOURCE_DEPTH)
+      throw new Diagnostic('F_OWNERSHIP_LIMIT', 'Reference pattern analysis exceeds its depth budget', pattern?.span);
+    this.depth++;
+    const previous = this.mode; this.mode = mode;
+    try { return this.analyzeInner(pattern, type, context, mutable, bindings, names, reuse); }
+    finally { this.mode = previous; this.depth--; }
+  }
+
+  analyzeInner(pattern, type, context, mutable, bindings, names, reuse) {
     if (pattern.byRef !== undefined && (typeof pattern.byRef !== 'boolean' || pattern.kind !== 'bindingPattern'))
       throw new Diagnostic('F_PATTERN', 'Invalid reference binding mode', pattern.span);
     if (pattern.byRef && pattern.mutable !== undefined && typeof pattern.mutable !== 'boolean')
@@ -84,12 +114,37 @@ export class PatternAnalyzer {
     if (pattern.kind === 'variantPattern' && !pattern.items.length) {
       const literal = this.constant(pattern, context, false);
       if (literal) {
+        T.unify(type, literal.type, new Map(), pattern);
         if (pattern.tupleSyntax) throw new Diagnostic('E0532', 'A constant pattern cannot use constructor parentheses', pattern.span);
         if (literal.kind !== 'literal') throw new Diagnostic('F_PATTERN_CONST', 'Aggregate constant patterns require structural equality support', pattern.span);
         pattern.kind = 'literal'; pattern.value = literal.value; pattern.type = literal.type;
       }
     }
+    // Default binding modes are declaration-local, lexical state. An implicit
+    // dereference is materialized in typed HIR, never in the caller's source AST.
+    // Bare bindings, @ binders and alternatives decide their own matching mode.
+    if (BorrowContract.reference(type) && !['wildcard', 'bindingPattern', 'atPattern', 'orPattern', 'referencePattern'].includes(pattern.kind)) {
+      const inner = {...pattern, id: `${pattern.id}:referent`};
+      for (const key of Object.keys(pattern)) if (!['id', 'span', 'loc'].includes(key)) delete pattern[key];
+      Object.assign(pattern, {kind: 'referencePattern', type, mutable: type.startsWith('&mut '), pattern: inner});
+      this.automatic.add(pattern);
+    }
     switch (pattern.kind) {
+      case 'referencePattern': {
+        if (!pattern.pattern || typeof pattern.pattern !== 'object' ||
+            pattern.mutable !== undefined && typeof pattern.mutable !== 'boolean')
+          throw new Diagnostic('F_PATTERN', 'Malformed reference pattern', pattern.span);
+        const automatic = this.automatic.has(pattern);
+        if (!automatic && this.mode !== 'move')
+          throw new Diagnostic('E0003', 'A Rust 2024 reference pattern requires a fully explicit prefix', pattern.span);
+        if (!BorrowContract.reference(type) || !!pattern.mutable !== type.startsWith('&mut '))
+          throw new Diagnostic('E0308', `Reference pattern mutability or type does not match ${type}`, pattern.span);
+        // A shared edge is sticky: descending through &mut behind & cannot
+        // recover unique access. Explicit prefixes reset to by-value binding.
+        const mode = automatic ? this.mode === 'ref' || !pattern.mutable ? 'ref' : 'ref mut' : 'move';
+        this.analyze(pattern.pattern, T.target(type), context, mutable, bindings, names, reuse, mode);
+        return;
+      }
       case 'wildcard': return;
       case 'restPattern': throw new Diagnostic('E0797', "'..' is only valid within an array, tuple or tuple-variant pattern", pattern.span);
       case 'atPattern': {
@@ -114,10 +169,17 @@ export class PatternAnalyzer {
             pattern.kind = 'variantPattern'; pattern.items = []; pattern.tupleSyntax = false;
           } else {
             const literal = structuredClone(this.analyzer.constants.constant(constant, pattern).expression);
+            T.unify(type, literal.type, new Map(), pattern);
             if (literal.kind !== 'literal') throw new Diagnostic('F_PATTERN_CONST', 'Aggregate constant patterns require structural equality support', pattern.span);
             pattern.kind = 'literal'; pattern.value = literal.value; pattern.type = literal.type;
           }
           return this.analyze(pattern, type, context, mutable, bindings, names, reuse);
+        }
+        const writtenMode = pattern.byRef ? pattern.mutable ? 'ref mut' : 'ref' : pattern.mutable || mutable ? 'mut' : 'value';
+        if (this.mode !== 'move') {
+          if (pattern.byRef || pattern.mutable || mutable)
+            throw new Diagnostic('E0003', 'Rust 2024 binding modifiers require a fully explicit pattern prefix', pattern.span);
+          pattern.byRef = true; pattern.mutable = this.mode === 'ref mut';
         }
         if (names.has(pattern.name)) throw new Diagnostic('E0416', `Identifier '${pattern.name}' is bound more than once in this pattern`, pattern.span);
         names.add(pattern.name);
@@ -128,11 +190,12 @@ export class PatternAnalyzer {
           const binding = bindings.get(pattern.name);
           if (!binding) throw new Diagnostic('E0408', `Variable '${pattern.name}' is not bound in all alternatives`, pattern.span);
           T.unify(binding.type, bindingType, new Map(), pattern);
-          if ((binding.patternMode ?? 'value') !== bindingMode || binding.mutable !== mode) throw new Diagnostic('E0409', `Inconsistent binding mode for '${pattern.name}'`, pattern.span);
+          if ((binding.patternMode ?? 'value') !== bindingMode || binding.mutable !== mode || binding.patternWrittenMode !== writtenMode) throw new Diagnostic('E0409', `Inconsistent binding mode for '${pattern.name}'`, pattern.span);
           pattern.binding = binding;
         } else {
           pattern.binding = context.declare(pattern.name, bindingType, mode, pattern);
           if (pattern.byRef) pattern.binding.patternMode = bindingMode;
+          pattern.binding.patternWrittenMode = writtenMode;
           bindings.set(pattern.name, pattern.binding);
         }
         return;
@@ -191,8 +254,8 @@ export class PatternAnalyzer {
         if (!Number.isSafeInteger(length) || length < 0 || length > 100000) throw new Diagnostic('F_PATTERN_BUDGET', 'Array pattern exceeds the compiler element budget', pattern.span);
         this.expandRest(pattern, length, 'E0527', true);
         for (const item of pattern.items) this.analyze(item, array.element, context, mutable, bindings, names, reuse);
-        if (pattern.restBinding?.binder.byRef) throw new Diagnostic('F_PATTERN_BORROW', 'A borrowed array-rest binding requires subarray reference storage', pattern.restBinding.binder.span);
         if (pattern.restBinding) this.analyze(pattern.restBinding.binder, `[${array.element};${pattern.restBinding.length}]`, context, mutable, bindings, names, reuse);
+        if (pattern.restBinding?.binder.byRef) throw new Diagnostic('F_PATTERN_BORROW', 'A borrowed array-rest binding requires subarray reference storage', pattern.restBinding.binder.span);
         return;
       }
       case 'structPattern': {
@@ -270,6 +333,7 @@ export class PatternAnalyzer {
   hasNonCopyBinding(pattern) {
     if (pattern.binding && !pattern.byRef && !this.analyzer.hasTrait(pattern.binding.type, 'Copy')) return true;
     if (pattern.kind === 'atPattern') return this.hasNonCopyBinding(pattern.binder) || this.hasNonCopyBinding(pattern.pattern);
+    if (pattern.kind === 'referencePattern') return this.hasNonCopyBinding(pattern.pattern);
     if (pattern.items?.some(p => this.hasNonCopyBinding(p))) return true;
     if (pattern.fields?.some(f => this.hasNonCopyBinding(f.pattern))) return true;
     return pattern.restBinding ? this.hasNonCopyBinding(pattern.restBinding.binder) : false;

@@ -37,6 +37,7 @@ export class PatternCoverage {
   }
 
   constructors(type, patterns) {
+    if (T.reference(type) && type !== '&str') return [{kind: 'reference', mutable: type.startsWith('&mut '), types: [T.target(type)]}];
     if (type === 'bool') return [false, true].map(value => ({kind: 'literal', key: value, types: []}));
     if (T.integer(type) || type === 'char') {
       const bits = type.endsWith('size') ? 32 : Number(type.slice(1));
@@ -95,6 +96,7 @@ export class PatternCoverage {
       }
       return null;
     }
+    if (constructor.kind === 'reference') return pattern.kind === 'referencePattern' ? [pattern.pattern] : null;
     if (constructor.kind === 'variant') return pattern.kind === 'variantPattern' && pattern.variant === constructor.key ? pattern.items : null;
     if (constructor.kind === 'array') return pattern.kind === 'arrayPattern' ? pattern.items : null;
     if (constructor.kind === 'tuple') return pattern.kind === 'tuplePattern' ? pattern.items : null;
@@ -110,6 +112,7 @@ export class PatternCoverage {
   }
 
   describe(constructor, fields) {
+    if (constructor.kind === 'reference') return '&' + (constructor.mutable ? 'mut ' : '') + fields[0];
     if (constructor.kind === 'variant') return constructor.key + (constructor.fields
       ? ` { ${constructor.fields.map((name, i) => `${name}: ${fields[i]}`).join(', ')} }`
       : fields.length ? `(${fields.join(', ')})` : '');

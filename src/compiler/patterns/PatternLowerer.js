@@ -26,6 +26,11 @@ export class PatternLowerer {
       else if (pattern.copy) { const cloned = ir.register(pattern.type, pattern); ir.move(cloned, value, pattern, true); value = cloned; }
       ir.emit('write', {place: {slot: pattern.binding.slot, path: []}, value}, node);
     }
+    if (pattern.kind === 'referencePattern') {
+      const target = {slot: value, path: [{kind: 'deref'}]};
+      const referent = ir.emit('read', {place: target, copy: false}, pattern, pattern.pattern.type);
+      this.bind(pattern.pattern, referent, pattern.pattern, target); return;
+    }
     if (pattern.kind === 'atPattern') { this.bind(pattern.binder, value, pattern.binder, place); this.bind(pattern.pattern, value, pattern.pattern, place); return; }
     if (pattern.restBinding) {
       const {binder, start, length} = pattern.restBinding;
@@ -53,6 +58,10 @@ export class PatternLowerer {
 
   test(pattern, value) {
     const ir = this.ir;
+    if (pattern.kind === 'referencePattern') {
+      const referent = ir.emit('read', {place: {slot: value, path: [{kind: 'deref'}]}, copy: false}, pattern, pattern.pattern.type);
+      return this.test(pattern.pattern, referent);
+    }
     if (pattern.kind === 'atPattern') return this.test(pattern.pattern, value);
     if (['wildcard', 'bindingPattern'].includes(pattern.kind)) return ir.literal(true, 'bool', pattern);
     if (pattern.kind === 'literal') return ir.emit('binary', {operator: '==', left: value,

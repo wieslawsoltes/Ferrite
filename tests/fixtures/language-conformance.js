@@ -1,3 +1,4 @@
+import {matchErgonomicsCases, matchErgonomicsCompileFailCases} from './match-ergonomics.js';
 import {referencePatternCases, referencePatternCompileFailCases} from './reference-patterns.js';
 import {patternOwnershipCases, patternOwnershipCompileFailCases} from './pattern-ownership.js';
 import {borrowContractCases, borrowContractCompileFailCases} from './borrow-contracts.js';
@@ -199,3 +200,6 @@ languageCases.push(...patternOwnershipCases.map(([name,source,output]) => ({name
 
 languageCases.push(...referencePatternCases.map(([name,source,output]) => ({name,source,output,kind:'run'})),
   ...referencePatternCompileFailCases.map(([name,source]) => ({name,source,kind:'compile-fail'})));
+
+languageCases.push(...matchErgonomicsCases.map(([name,source,output]) => ({name,source,output,kind:'run'})),
+  ...matchErgonomicsCompileFailCases.map(([name,source]) => ({name,source,kind:'compile-fail'})));

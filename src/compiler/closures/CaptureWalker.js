@@ -3,6 +3,7 @@ export class CaptureWalker {
   static bindings(pattern) {
     if (!pattern) return [];
     if (pattern.kind === 'bindingPattern') return [pattern.name];
+    if (pattern.kind === 'referencePattern') return this.bindings(pattern.pattern);
     if (pattern.kind === 'atPattern') return [...this.bindings(pattern.binder), ...this.bindings(pattern.pattern)];
     return [...(pattern.items ?? []).flatMap(p => this.bindings(p)), ...(pattern.fields ?? []).flatMap(f => this.bindings(f.pattern))];
   }

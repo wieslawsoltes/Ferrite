@@ -177,7 +177,15 @@ export class TraitMethodScope {
   }
   bindPattern(pattern, origin) {
     if (pattern.binding) this.bind(pattern.binding, pattern.byRef ? '&' + (pattern.mutable ? 'mut ' : '') + origin : origin);
-    if (pattern.kind === 'atPattern') { this.bindPattern(pattern.binder, origin); this.bindPattern(pattern.pattern, origin); }
+    if (pattern.kind === 'referencePattern') {
+      // Match reference shape under declaration equations, not by exploiting
+      // whichever concrete reference layout a generic call happens to select.
+      const shape = this.active ? this.a.index.associatedTypes.normalize(this.normalize(origin), this.parameters, {typeContext: this.fn}) : origin;
+      if (!T.reference(shape) || shape === '&str' || !!pattern.mutable !== shape.startsWith('&mut '))
+        throw new Diagnostic('E0308', `Pattern requires a declaration-visible reference, found ${origin}`, pattern.span);
+      this.bindPattern(pattern.pattern, T.target(shape));
+    }
+    else if (pattern.kind === 'atPattern') { this.bindPattern(pattern.binder, origin); this.bindPattern(pattern.pattern, origin); }
     else if (pattern.kind === 'orPattern') pattern.items.forEach(item => this.bindPattern(item, origin));
     else if (pattern.kind === 'structPattern') pattern.fields.forEach(field => this.bindPattern(field.pattern, this.project(origin, field.name) ?? field.pattern.type));
     else if (pattern.kind === 'tuplePattern') pattern.items.forEach((item, i) => this.bindPattern(item, this.project(origin, i) ?? item.type));

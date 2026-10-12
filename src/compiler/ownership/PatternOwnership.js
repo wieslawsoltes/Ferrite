@@ -5,7 +5,9 @@ import {BorrowContract} from './BorrowContract.js';
  * Alternatives are joined as sets of possible projections, without a Cartesian
  * expansion. Observations precede committed moves (notably `whole @ (_, copy)`).
  * Explicit reference bindings create loans on these same source projections.
- * General aggregate regions and implicit match ergonomics are not inferred here. Plans and source-expression caches are owned by one analyzer. */
+ * Default binding modes are already resolved in typed HIR. Reference-edge
+ * origins are tracked here; general aggregate regions remain separate work.
+ * Plans and source-expression caches are owned by one analyzer. */
 export class PatternOwnership {
   static MAX_NODES = 65_536;
   static MAX_DEPTH = 64;
@@ -24,6 +26,11 @@ export class PatternOwnership {
       switch (node.kind) {
         case 'wildcard': case 'bindingPattern': break;
         case 'literal': case 'rangePattern': reads.push({node, path}); break;
+        case 'referencePattern':
+          // Check pointer storage, not the complete pointee. This allows
+          // disjoint reborrows and ignored, already-moved sibling fields.
+          reads.push({node, path});
+          visit(node.pattern, [...path, {kind: 'deref', mutable: !!node.mutable}], depth + 1, choices); break;
         case 'atPattern': visit(node.binder, path, depth + 1, choices); visit(node.pattern, path, depth + 1, choices); break;
         case 'orPattern': node.items.forEach((item, index) => visit(item, path, depth + 1, [...choices, [node, index]])); break;
         case 'structPattern': node.fields.forEach(field => visit(field.pattern, [...path, field.name], depth + 1, choices)); break;
@@ -78,12 +85,37 @@ export class PatternOwnership {
     }
     return {value, places, origins, ids: [...a.resultLoans(value)], via: a.referenceBase(value)};
   }
-  project(prepared, path, node) {
-    return path.reduce((roots, field) => roots.map(root => this.a.places.project(root, field, node)), prepared.places);
+  /** Resolve each reference edge using its storage cell's tracked origin and
+   * authority. A dereference is not a nominal field, and unrelated handles must
+   * never inherit each other's permissions. All work is charged to this query. */
+  trace(prepared, path, node) {
+    const a = this.a;
+    let roots = prepared.places, via = [...a.authority(prepared.via)];
+    const cells = [];
+    for (const part of path) {
+      this.charge(node);
+      if (part?.kind === 'deref') {
+        a.accessPlaces(roots, node, 'read', via);
+        cells.push(...roots);
+        const ids = roots.flatMap(root => a.authority(root));
+        roots = roots.flatMap(root => a.references.get(root) ??
+          (prepared.value.binding?.parameter && root === prepared.value.binding.slot ? [a.places.parameter(root, node)] :
+           a.places.get(root).external ? [a.places.pointee(root, node)] : []));
+        if (!roots.length) throw new Diagnostic('F_PATTERN_REFERENCE', 'Dereferencing a pattern requires tracked pointer-storage origins', node.span);
+        // Reading a shared pointer copies its handle, severing a dependency
+        // on outer pointer storage. A mutable pointer is reborrowed through
+        // that storage and retains the complete exclusive ancestry.
+        via = [...new Set([...(part.mutable ? via : []), ...ids])];
+      } else roots = roots.map(root => a.places.project(root, part, node));
+    }
+    return {roots: [...new Set(roots)], via, cells, indirect: cells.length > 0};
   }
+  project(prepared, path, node) { return this.trace(prepared, path, node).roots; }
   inspect(pattern, prepared) {
-    for (const action of this.plan(pattern).reads)
-      this.a.accessPlaces(this.project(prepared, action.path, action.node), action.node, 'read', prepared.via);
+    for (const action of this.plan(pattern).reads) {
+      const {roots, via} = this.trace(prepared, action.path, action.node);
+      this.a.accessPlaces(roots, action.node, 'read', via);
+    }
   }
   origin(prepared, action) {
     const a = this.a, places = this.project(prepared, action.path, action.node);
@@ -95,11 +127,13 @@ export class PatternOwnership {
   }
   bind(pattern, prepared, commit = true) {
     const a = this.a, moves = new Map(), attachments = new Map();
-    const actions = this.plan(pattern).bindings.map(action => ({...action,
-      roots: action.empty ? [] : this.project(prepared, action.path, action.node)}));
+    const actions = this.plan(pattern).bindings.map(action => {
+      const trace = this.trace(prepared, action.path, action.node);
+      return {...action, ...trace, roots: action.empty ? [] : trace.roots};
+    });
     const borrows = actions.filter(action => action.node.byRef);
     const plannedIds = borrows.flatMap(action => action.roots.map(root => a.loanId(action.node, root)));
-    const parents = a.authority(prepared.via), via = [...parents, ...plannedIds];
+    const accessVia = action => [...action.via, ...plannedIds];
     // Validate against pre-existing loans before publishing any new loans. Copy
     // observations happen before borrows, so `ref mut whole @ (copy, _)` works.
     for (const action of borrows) {
@@ -107,14 +141,17 @@ export class PatternOwnership {
       if (BorrowContract.reference(action.node.type) && action.roots.some(root => !a.references.has(root) &&
           !(prepared.value.binding?.parameter && prepared.value.binding.slot === root)))
         throw new Diagnostic('F_PATTERN_BORROW', 'Borrowing reference storage requires a tracked inner origin', action.node.span);
-      a.accessPlaces(action.roots, action.node, action.node.mutable ? 'borrow mutably' : 'read', via);
+      a.accessPlaces(action.roots, action.node, action.node.mutable ? 'borrow mutably' : 'read', accessVia(action));
       for (const other of actions) {
         this.charge(other.node);
         if (action === other || action.node === other.node || other.empty) continue;
-        const overlap = action.roots.some(root => other.roots.some(place => a.places.overlaps(root, place)));
-        if (!overlap) continue;
         a.places.charge(action.choices.length * other.choices.length);
         const together = !action.choices.some(([choice, branch]) => other.choices.some(([c, b]) => choice === c && branch !== b));
+        const storageOverlap = action.cells.some(root => other.roots.some(place => a.places.overlaps(root, place)));
+        if (together && storageOverlap && (!other.node.byRef && !other.node.copy || other.node.byRef && (action.node.mutable || other.node.mutable)))
+          throw new Diagnostic('E0505', 'A pattern reference depends on pointer storage moved or exclusively aliased by another binding', other.node.span);
+        const overlap = action.roots.some(root => other.roots.some(place => a.places.overlaps(root, place)));
+        if (!overlap) continue;
         if (!together) {
           if (other.node.byRef && action.node.binding.slot !== other.node.binding.slot && (action.node.mutable || other.node.mutable))
             throw new Diagnostic('F_PATTERN_BORROW', 'Correlated overlapping reference bindings across alternatives require disjunctive loan origins', other.node.span);
@@ -132,11 +169,11 @@ export class PatternOwnership {
       if (action.node.byRef) continue;
       const {node, roots: places} = action;
       const move = commit && !node.copy && !action.empty;
-      if (move && places.length && a.indirect(prepared.value))
+      if (move && places.length && (action.indirect || a.indirect(prepared.value)))
         throw new Diagnostic('E0507', 'Cannot move a non-Copy pattern binding out of a borrowed value', prepared.value.span);
       if (move && places.length && a.indexed(prepared.value))
         throw new Diagnostic('E0508', 'Cannot move a non-Copy pattern binding out of an indexed collection', prepared.value.span);
-      a.accessPlaces(places, node, move ? 'move' : 'read', via, false);
+      a.accessPlaces(places, node, move ? 'move' : 'read', accessVia(action), false);
       if (!action.path.length && BorrowContract.reference(prepared.value.type))
         a.referenceAccess(prepared.value, move ? 'move' : 'read', false);
       if (move) for (const place of places) moves.set(place, node);
@@ -156,7 +193,7 @@ export class PatternOwnership {
         const root = roots[index], id = ids[index];
         if (!a.loans.some(loan => loan.id === id)) {
           a.loans.push({id, root, mutable: !!node.mutable, reserved: false,
-            borrower: slot, borrowers: [slot], parents: [...parents], via: prepared.via,
+            borrower: slot, borrowers: [slot], parents: [...action.via], via: action.via,
             callFrame: null, until: a.lastUse.get(slot) ?? node.span.end, span: node.span});
           a.event(node.mutable ? 'mutable pattern loan' : 'shared pattern loan', node, root);
         }

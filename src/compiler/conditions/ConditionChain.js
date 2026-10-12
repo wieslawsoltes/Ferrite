@@ -48,6 +48,7 @@ export class ConditionChain {
       if (!node) continue;
       if (node.binding) result.push(node);
       if (node.kind === 'atPattern') pending.push(node.binder, node.pattern);
+      else if (node.kind === 'referencePattern') pending.push(node.pattern);
       else if (node.fields) pending.push(...node.fields.map(field => field.pattern));
       else if (node.items) pending.push(...node.items);
       if (node.restBinding) pending.push(node.restBinding.binder);

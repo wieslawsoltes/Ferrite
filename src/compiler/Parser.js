@@ -390,6 +390,7 @@ export class Parser {
           if (pattern.kind !== 'bindingPattern') throw new Diagnostic('E0308', "Expected a binding before '@'", pattern.span);
           pattern = this.c.node('atPattern', start, {binder: pattern, pattern: this.pattern(false)});
         } else if (this.c.is('..') || this.c.is('..=')) {
+          if (pattern.kind === 'referencePattern') throw new Diagnostic('E0003', 'A reference range pattern requires parentheses', pattern.span);
           const inclusive = this.c.take().value === '..=';
           if (ended() && inclusive) throw new Diagnostic('E0586', 'An inclusive range requires an upper endpoint', start.span);
           pattern = this.c.node('rangePattern', start, {from: pattern, to: ended() ? null : this.patternAtom(), inclusive});
@@ -405,6 +406,20 @@ export class Parser {
   }
   patternAtom() {
     const start = this.c.peek();
+    if (this.c.is('&&')) this.c.split('&');
+    if (this.c.match('&')) {
+      const mutable = !!this.c.match('mut');
+      // A reference pattern encloses a PatternWithoutRange. Parentheses can
+      // contain ranges/or-patterns; an identifier may contain its @ subpattern.
+      if (++this.patternDepth > 256) throw new Diagnostic('F0102', 'Pattern nesting limit exceeded', start.span);
+      let pattern;
+      try { pattern = this.patternAtom(); } finally { this.patternDepth--; }
+      if (this.c.match('@')) {
+        if (pattern.kind !== 'bindingPattern') throw new Diagnostic('E0308', "Expected a binding before '@'", pattern.span);
+        pattern = this.c.node('atPattern', pattern, {binder: pattern, pattern: this.pattern(false)});
+      }
+      return this.c.node('referencePattern', start, {pattern, mutable});
+    }
     if (this.c.match('_')) return this.c.node('wildcard', start);
     if (this.c.match('(')) {
       if (this.c.match(')')) return this.c.node('tuplePattern', start, {items: []});
@@ -522,6 +537,7 @@ export class Parser {
     } finally { this.depth--; }
   }
   prefix(allowRecord, allowConditionLet = false) {
+    if (this.c.is('&&')) this.c.split('&');
     const start = this.c.peek();
     if (this.c.is('let')) {
       if (!allowConditionLet)

@@ -134,8 +134,9 @@ charged pattern work without introducing unstable global place identities.
 
 ## Remaining boundaries
 
-Implicit match ergonomics, `&pattern` reference patterns, function/closure parameter
-patterns, and reference bindings in for-loop yielded values are not added. Borrowed
+Implicit match ergonomics and `&pattern` / `&mut pattern` prefixes are covered by
+the [reference-aware matching continuation](match-ergonomics.md). Function/closure
+parameter patterns and reference bindings in for-loop yielded values are not added. Borrowed
 array-rest subarrays need a range-reference representation; they currently fail with
 `F_PATTERN_BORROW`. Mutable bindings to reference-holding storage require assignment-
 aware inner-region tracking and are also rejected. Shared reference-storage bindings

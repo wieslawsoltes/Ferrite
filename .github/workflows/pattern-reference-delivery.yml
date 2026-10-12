@@ -1,0 +1,66 @@
+name: Publish explicit reference patterns
+on:
+  push:
+    branches: [automation/pattern-reference-delivery]
+    paths: ['.delivery/**', '.github/workflows/pattern-reference-delivery.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: dc007a746487cc5a89f0716dc974db75fac842c7
+      EXPECTED_TREE: 9bd7438700c46b3bdbe5488c5f6158344a03d4b0
+      TARGET_BRANCH: feat/pattern-reference-bindings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Decode and verify reviewed source
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os
+          from pathlib import Path
+          encoded = ''.join(Path(f'.delivery/pattern-reference-{i}.b64').read_text().strip() for i in range(1, 4))
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '817e633d3a0f5be7617cd80e0cdf747592e52cc87bdb78f53eb7cdc5ec95734d'
+          Path(os.environ['RUNNER_TEMP'], 'pattern-reference.patch').write_bytes(patch)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/pattern-reference-bindings
+      - name: Apply and regenerate exact reviewed tree
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git apply --check --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/pattern-reference.patch"
+          git apply --index --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/pattern-reference.patch"
+          npm run build:workers
+          npm run build:sdk
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+      - name: Validate publication
+        run: |
+          set -o pipefail
+          npm run check 2>&1 | tee "$RUNNER_TEMP/pattern-reference-check.log"
+          node --test --test-concurrency=4 tests/*.test.js > "$RUNNER_TEMP/pattern-reference-tests.log" 2>&1
+          tail -n 12 "$RUNNER_TEMP/pattern-reference-tests.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pattern-reference-publication
+          path: |
+            ${{ runner.temp }}/pattern-reference-check.log
+            ${{ runner.temp }}/pattern-reference-tests.log
+          retention-days: 7
+      - name: Commit and non-force push
+        run: |
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git config user.name 'Wiesław Šoltés'
+          git config user.email 'wieslawsoltes@users.noreply.github.com'
+          git commit -m 'feat: implement explicit reference patterns with projected checked loans'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD HEAD^{tree}

@@ -2,7 +2,7 @@ name: Publish checked borrow contracts
 on:
   push:
     branches: [automation/borrow-call-contracts-delivery]
-    paths: ['.compiler-transfer/indirect-correction.b64', '.github/workflows/borrow-contracts-delivery.yml']
+    paths: ['.compiler-transfer/budget-correction.b64', '.github/workflows/borrow-contracts-delivery.yml']
   workflow_dispatch:
 permissions:
   contents: write
@@ -11,8 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      EXPECTED_HEAD: a30ca954535c4063e69e73a685d42c1161bda221
-      EXPECTED_TREE: 9c813a35cf0151aae66a9c5e1435aabea5fff562
+      EXPECTED_HEAD: d147485611cac6b6cfdea5ce17cf1fd3cd226c28
+      EXPECTED_TREE: 963b1667acad8d59c1bfac8fcbdb00ae1d6f7c3a
       TARGET_BRANCH: feat/borrow-call-contracts
     steps:
       - uses: actions/checkout@v4
@@ -24,9 +24,9 @@ jobs:
           python3 - <<'PY'
           import base64, hashlib, lzma, os
           from pathlib import Path
-          encoded = Path('.compiler-transfer/indirect-correction.b64').read_text().strip()
+          encoded = Path('.compiler-transfer/budget-correction.b64').read_text().strip()
           patch = lzma.decompress(base64.b64decode(encoded, validate=True))
-          assert hashlib.sha256(patch).hexdigest() == '22d552836db24dd56500a4c35b77f0503c4e8ea65417e00f4519455d5baa97ad'
+          assert hashlib.sha256(patch).hexdigest() == 'd88342bfe7e4b9ee424713360589dc5f093c8b064376f1ddb2ec15ac191e31fd'
           Path(os.environ['RUNNER_TEMP'], 'borrow-correction.patch').write_bytes(patch)
           PY
       - uses: actions/checkout@v4
@@ -61,7 +61,7 @@ jobs:
           test "$(git write-tree)" = "$EXPECTED_TREE"
           git config user.name 'Wiesław Šoltés'
           git config user.email 'wieslawsoltes@users.noreply.github.com'
-          git commit -m 'fix: retain indirect generic input lifetimes in reference contracts'
+          git commit -m 'fix: charge direct generic input traversal to signature work budget'
           test -z "$(git status --porcelain)"
           git push origin "HEAD:refs/heads/$TARGET_BRANCH"
           git rev-parse HEAD HEAD^{tree}

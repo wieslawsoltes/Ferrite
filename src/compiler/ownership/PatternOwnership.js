@@ -4,8 +4,8 @@ import {BorrowContract} from './BorrowContract.js';
 /** Typed pattern actions refer to source places, not a synthetic whole-value move.
  * Alternatives are joined as sets of possible projections, without a Cartesian
  * expansion. Observations precede committed moves (notably `whole @ (_, copy)`).
- * This is a by-value move plan; general aggregate regions/ref ergonomics are not
- * inferred here. Plans and source-expression caches are owned by one analyzer. */
+ * Explicit ref bindings add projected loans; general aggregate regions and implicit
+ * match ergonomics are not inferred here. Plans and source-expression caches are owned by one analyzer. */
 export class PatternOwnership {
   static MAX_NODES = 65_536;
   static MAX_DEPTH = 64;
@@ -54,10 +54,23 @@ export class PatternOwnership {
     // and its receiving pattern. The old temporary borrower can already be out
     // of lexical scope; its result lineage must attach before another kill.
     a.expire(value);
-    const places = a.roots(value);
+    let places = a.roots(value);
     let origins;
+    if (value.patternStorage) {
+      origins = a.value(value);
+      const slot = value.patternStorage.slot;
+      a.initialize(slot); a.attach(slot, origins, value);
+      a.event('initialize pattern temporary', value, slot, value.type);
+      return {value, places: [slot], origins, ids: [...a.resultLoans(value)], via: null};
+    }
+    let evaluated = false;
+    if (value.patternBorrow) {
+      // A returned-reference receiver acquires its origin only when its call
+      // runs. Capture the address first, then resolve its projected places.
+      a.evaluatePlace(value); places = a.roots(value); evaluated = true;
+    }
     if (places.length) {
-      a.evaluatePlace(value);
+      if (!evaluated) a.evaluatePlace(value);
       if (BorrowContract.reference(value.type)) {
         origins = places.flatMap(place => a.references.get(place) ??
           (a.places.get(place).external || value.binding?.parameter ? [value.binding?.parameter ? a.places.parameter(place, value) : a.places.pointee(place, value)] : []));
@@ -85,9 +98,30 @@ export class PatternOwnership {
   bind(pattern, prepared, commit = true) {
     const a = this.a, actions = this.plan(pattern).bindings, moves = new Map(), attachments = new Map();
     // All observations happen before any source place becomes uninitialized.
-    for (const action of actions) {
+    for (const action of [...actions.filter(action => !action.node.byRef), ...actions.filter(action => action.node.byRef)]) {
       this.charge(action.node);
       const {node} = action, places = action.empty ? [] : this.project(prepared, action.path, node);
+      if (node.byRef) {
+        if (!places.length) throw new Diagnostic('F_PATTERN_BORROW_SOURCE', 'Reference binding has no checked source place', node.span);
+        if (BorrowContract.reference(node.matchedType)) {
+          const storage = this.origin(prepared, action);
+          if (!storage.roots.length) throw new Diagnostic('F_PATTERN_REFERENCE', 'Borrowed reference storage requires a tracked inner origin', node.span);
+          a.accessPlaces(storage.roots, node, 'read', storage.ids, false);
+        }
+        const parents = [...a.authority(prepared.via)];
+        const ids = places.map(root => a.loanId(node.binding, root));
+        a.accessPlaces(places, node, node.refMutable ? 'borrow mutably' : 'read', [...parents, ...ids], false);
+        for (const root of places) {
+          const id = a.loanId(node.binding, root);
+          if (!a.loans.some(loan => loan.id === id)) a.loans.push({id, root, mutable: !!node.refMutable, reserved: false,
+            borrower: node.binding.slot, borrowers: [node.binding.slot], parents, via: prepared.via, callFrame: null,
+            until: a.lastUse.get(node.binding.slot) ?? node.span.end, span: node.span});
+          a.event(node.refMutable ? 'mutable pattern loan' : 'shared pattern loan', node, root);
+        }
+        const old = attachments.get(node.binding.slot) ?? {roots: [], ids: [], node};
+        old.roots.push(...places); old.ids.push(...parents, ...ids); attachments.set(node.binding.slot, old);
+        continue;
+      }
       const move = commit && !node.copy && !action.empty;
       if (move && places.length && a.indirect(prepared.value))
         throw new Diagnostic('E0507', 'Cannot move a non-Copy pattern binding out of a borrowed value', prepared.value.span);
@@ -106,6 +140,9 @@ export class PatternOwnership {
       } else if (!action.path.length && prepared.value.borrowCarrier && prepared.origins.length)
         attachments.set(node.binding.slot, {roots: prepared.origins, ids: prepared.ids, node});
     }
+    // Borrows and moves in one pattern are simultaneous: a later borrowed
+    // binding must still conflict with an earlier pending whole/field move.
+    for (const [place, node] of moves) a.accessPlaces([place], node, 'move', prepared.via, false);
     for (const [place, node] of moves) { a.moved.add(place); a.event('move', node, place, 'pattern binding'); }
     for (const [slot, {roots, ids, node}] of attachments) a.attach(slot, [...new Set(roots)], node, null, [...new Set(ids)]);
     const initialized = new Set();
@@ -125,6 +162,12 @@ export class PatternOwnership {
           borrowers: [], borrower: null, parents: [], via: null, callFrame: null,
           until: expression.span.end, span: expression.span, patternGuard: expression});
       }
+    // Even a wildcard guard freezes the scrutinee's storage identity. This is
+    // shallow: mutating an unrelated descendant remains legal, replacing the
+    // selected owner does not. The preceding deep field locks retain ordinary overlap.
+    for (const root of prepared.freezeScrutinee ? prepared.places : []) a.loans.push({id: a.loanId(prepared, root), root, mutable: false, reserved: false,
+      borrowers: [], borrower: null, parents: [], via: null, callFrame: null, until: expression.span.end,
+      span: expression.span, patternGuard: expression, guardShallow: true});
     try { return action(); }
     finally { a.guardBindings = old; a.loans = a.loans.filter(loan => loan.patternGuard !== expression); }
   }

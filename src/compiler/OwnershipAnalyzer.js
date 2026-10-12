@@ -151,6 +151,9 @@ export class OwnershipAnalyzer {
   }
   indexed(node) { return node?.kind === 'index' || node?.kind === 'field' && this.indexed(node.object); }
   initialize(place) { for (const moved of this.moved) if (this.places.contains(place, moved)) this.moved.delete(moved); }
+  loanOverlaps(loan, root) {
+    return loan.guardShallow ? this.places.contains(root, loan.root) : this.places.overlaps(loan.root, root);
+  }
   conflicts(loan, mode) {
     if (mode === 'read') return loan.mutable && !loan.reserved;
     if (mode === 'reserve mutably') return loan.mutable;
@@ -161,7 +164,7 @@ export class OwnershipAnalyzer {
     if (mode !== 'read' && this.guardBindings?.has(node.binding?.slot))
       throw new Diagnostic(mode === 'move' ? 'E0507' : 'E0594', 'A pattern binding cannot be moved or mutated in its guard', node.span);
     for (const root of this.referenceRoots(node)) {
-      const conflict = this.loans.find(loan => this.places.overlaps(loan.root, root) && !this.permitted(loan, node.binding ? node.binding.slot : this.resultLoans(node)) &&
+      const conflict = this.loans.find(loan => this.loanOverlaps(loan, root) && !this.permitted(loan, node.binding ? node.binding.slot : this.resultLoans(node)) &&
         this.conflicts(loan, mode));
       if (conflict) throw new Diagnostic('E0502', `Cannot ${mode} through a reference while its referent is borrowed`, node.span,
         [{message:'Conflicting loan starts here', span:conflict.span}]);
@@ -182,8 +185,8 @@ export class OwnershipAnalyzer {
         throw new Diagnostic(mode === 'move' ? 'E0507' : 'E0594', 'A pattern binding cannot be moved or mutated in its guard', node.span);
       if ([...this.moved].some(moved => this.places.overlaps(root, moved)))
         throw new Diagnostic('E0382', `Use of moved or partially moved value '${this.places.name(root)}'`, node.span);
-      const conflict = this.loans.find(loan => this.places.overlaps(loan.root, root) && !this.permitted(loan, via) && this.conflicts(loan, mode));
-      if (conflict) throw new Diagnostic(mode === 'read' ? 'E0503' : 'E0502', `Cannot ${mode} '${this.places.name(root)}' while it is borrowed`, node.span,
+      const conflict = this.loans.find(loan => this.loanOverlaps(loan, root) && !this.permitted(loan, via) && this.conflicts(loan, mode));
+      if (conflict) throw new Diagnostic(conflict.guardShallow ? 'E0510' : mode === 'read' ? 'E0503' : 'E0502', `Cannot ${mode} '${this.places.name(root)}' while it is borrowed`, node.span,
         [{message: 'Loan starts here', span: conflict.span}]);
       if (mode === 'move' && commitMove) { this.moved.add(root); this.event('move', node, root); }
     }
@@ -331,7 +334,7 @@ export class OwnershipAnalyzer {
       }
       this.expire(node, true);
       for (const loan of this.loans) if (loan.callFrame === frame && loan.reserved) {
-        const conflict = this.loans.find(other => other !== loan && this.places.overlaps(other.root, loan.root) &&
+        const conflict = this.loans.find(other => other !== loan && this.loanOverlaps(other, loan.root) &&
           !loan.parents.includes(other.id));
         if (conflict) throw new Diagnostic('E0502', 'Cannot activate an implicit mutable borrow while its referent is borrowed', node.span,
           [{message:'Conflicting loan starts here', span:conflict.span}]);
@@ -369,7 +372,7 @@ export class OwnershipAnalyzer {
   block(block) {
     for (const node of block.body) {
       this.expire(node);
-      if (node.kind === 'let' && node.binding && !node.otherwise) {
+      if (node.kind === 'let' && node.binding && !node.pattern.byRef && !node.otherwise) {
         this.value(node.value, true, node.binding.slot);
         this.initialize(node.binding.slot); this.event('initialize', node, node.binding.slot, node.binding.type);
       } else if (node.kind === 'let') {

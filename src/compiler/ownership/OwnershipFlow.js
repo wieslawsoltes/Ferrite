@@ -33,6 +33,11 @@ export class OwnershipFlow extends ConditionOwnership {
   match() {
     const a = this.a, node = this.node;
     const prepared = a.patterns.prepare(node.value);
+    // Binding-only alternatives do not inspect a scrutinee before selection.
+    // Otherwise its identity must remain stable even during a wildcard guard.
+    prepared.freezeScrutinee = node.arms.some(arm => {
+      const plan = a.patterns.plan(arm.pattern); return plan.reads.length;
+    });
     const outputs = [], roots = [], ids = [], slots = this.localSlots();
     let remaining = this.save();
     for (const arm of node.arms) {

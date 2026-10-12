@@ -68,6 +68,15 @@ export class MirVerifier {
           const dest = register(instruction.dest, instruction.span);
           if (dest.type !== instruction.type) fail(`Destination type ${dest.type} differs from instruction type ${instruction.type}`, instruction.span);
         }
+        for (const place of [instruction.place, instruction.receiverPlace].filter(Boolean)) {
+          if (!Array.isArray(place.path) || place.path.length > 256) fail('Invalid place path', instruction.span);
+          for (const part of place.path) {
+            if (!part || !['deref', 'field', 'index', 'payload'].includes(part.kind)) fail('Invalid place projection', instruction.span);
+            if (part.kind === 'field' && typeof part.name !== 'string' || part.kind === 'payload' &&
+                (typeof part.variant !== 'string' || !part.variant.includes('::') || !Number.isSafeInteger(part.index) || part.index < 0))
+              fail('Invalid projected field or payload', instruction.span);
+          }
+        }
         for (const slot of this.definitions(instruction)) register(slot, instruction.span);
         for (const slot of this.uses(instruction)) register(slot, instruction.span);
         if (instruction.op === 'function' || instruction.op === 'callIndirect') {

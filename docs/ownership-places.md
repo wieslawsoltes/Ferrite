@@ -49,7 +49,8 @@ references or indexed collections remain errors.
 
 This precision also applies to [by-value pattern moves](pattern-ownership.md):
 local/conditional/match bindings select tuple, record, enum and array projections.
-Reference-pattern ergonomics and drop-flag elaboration remain separate work.
+The [reference-pattern continuation](pattern-references.md) adds explicit `ref`/`ref mut`
+projected loans. Implicit match ergonomics and drop-flag elaboration remain separate work.
 
 ## Control-flow local liveness
 
@@ -124,7 +125,7 @@ reborrows and signature-owned direct-reference results, not arbitrary region equ
 The analysis does not establish interprocedural alias relationships between
 independently supplied reference parameters. General aggregate reference carriers,
 reference-valued fields, interprocedural origins outside direct-reference contracts and
-all pattern-bound references need further work. Existing targeted origin checks
+untracked aggregate pattern-bound references need further work. Existing targeted origin checks
 remain in force, but not every unsupported reference-carrying path is diagnosed;
 this pass must not be described as complete or sound for unrestricted Rust.
 

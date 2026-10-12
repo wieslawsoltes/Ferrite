@@ -160,7 +160,11 @@ export class Runtime {
       const value = holder[key];
       if (part.kind === 'deref') { ({holder, key} = this.resolve(value, depth + 1)); continue; }
       if (value === undefined || value === null) this.fail('Uninitialized place', 'R_UNINITIALIZED');
-      if (part.kind === 'index') { holder = value; key = this.index(value, part.value); }
+      if (part.kind === 'payload') {
+        if (value.tag !== part.variant || !Array.isArray(value.values) || !Number.isSafeInteger(part.index) || part.index < 0 || part.index >= value.values.length)
+          this.fail('Invalid enum payload reference', 'R_REFERENCE');
+        holder = value.values; key = part.index;
+      } else if (part.kind === 'index') { holder = value; key = this.index(value, part.value); }
       else {
         if (!Object.hasOwn(value, part.name)) this.fail(`Unknown field ${part.name}`);
         holder = value; key = part.name;

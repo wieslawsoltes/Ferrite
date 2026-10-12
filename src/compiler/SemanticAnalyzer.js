@@ -1,3 +1,4 @@
+import {PatternBorrow} from './patterns/PatternBorrow.js';
 import {BorrowContract} from './ownership/BorrowContract.js';
 import {ConditionChain} from './conditions/ConditionChain.js';
 import {DefaultArgumentInference} from './DefaultArgumentInference.js';
@@ -437,7 +438,7 @@ export class SemanticAnalyzer {
       }
       case 'ifLet': {
         const scrutinee = this.infer(node.value, ctx);
-        ctx.push(); this.pattern(node.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value));
+        ctx.push(); this.pattern(node.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value), node.value);
         const yes = this.block(node.then, ctx, expected); ctx.pop();
         const no = node.otherwise ? this.infer(node.otherwise, ctx, expected) : '()';
         type=node.otherwise?this.functionValues.join([node.then,node.otherwise],ctx,node):T.join(yes,no,node);break;
@@ -462,7 +463,7 @@ export class SemanticAnalyzer {
         const patterns = []; let wildcard = false;
         for (const arm of node.arms) {
           ctx.push();
-          this.pattern(arm.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value));
+          this.pattern(arm.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value), node.value);
           if (wildcard) this.warnings.push({severity: 'warning', code: 'W_UNREACHABLE', message: 'Unreachable match arm', span: arm.span});
           if (arm.guard) T.unify('bool', this.infer(arm.guard, ctx, 'bool'), new Map(), arm.guard);
           else { patterns.push(arm.pattern); wildcard = this.coverage.analyze(patterns, scrutinee, node).exhaustive; }
@@ -522,8 +523,9 @@ export class SemanticAnalyzer {
     node.variant = tag; node.args = args;
     return type;
   }
-  pattern(pattern, type, ctx, mutable = false, origin = type) {
+  pattern(pattern, type, ctx, mutable = false, origin = type, source = null) {
     this.patterns.analyze(pattern, type, ctx, mutable);
+    PatternBorrow.source(this, pattern, source, ctx);
     ctx.methodScope.bindPattern(pattern, origin);
     for (const item of ConditionChain.bindings(pattern))
       item.copy = ctx.methodScope.copyOf({kind: 'variable', binding: item.binding, type: item.type}) ?? this.hasTrait(item.type, 'Copy');
@@ -531,7 +533,7 @@ export class SemanticAnalyzer {
     while (pending.length) {
       const item = pending.pop();
       if (item.kind === 'atPattern') {
-        if (!item.binder.copy && ConditionChain.bindings(item.pattern).some(binding => !binding.copy))
+        if (!item.binder.byRef && !item.binder.copy && ConditionChain.bindings(item.pattern).some(binding => !binding.byRef && !binding.copy))
           throw new Diagnostic('E0382', "An '@' pattern cannot move both a value and a non-Copy part", item.span);
         pending.push(item.pattern);
       }
@@ -547,7 +549,7 @@ export class SemanticAnalyzer {
         continue;
       }
       const type = this.infer(term.value, ctx);
-      this.pattern(term.pattern, type, ctx, false, ctx.methodScope.of(term.value));
+      this.pattern(term.pattern, type, ctx, false, ctx.methodScope.of(term.value), term.value);
       const bindings = ConditionChain.bindings(term.pattern);
       for (const pattern of bindings) {
         pattern.copy = ctx.methodScope.copyOf({kind: 'variable', binding: pattern.binding, type: pattern.type}) ?? this.hasTrait(pattern.type, 'Copy');
@@ -556,7 +558,7 @@ export class SemanticAnalyzer {
       while (pending.length) {
         const pattern = pending.pop();
         if (pattern.kind === 'atPattern') {
-          if (!pattern.binder.copy && ConditionChain.bindings(pattern.pattern).some(binding => !binding.copy))
+          if (!pattern.binder.byRef && !pattern.binder.copy && ConditionChain.bindings(pattern.pattern).some(binding => !binding.byRef && !binding.copy))
             throw new Diagnostic('E0382', "An '@' condition cannot move both a value and a non-Copy part", pattern.span);
           pending.push(pattern.pattern);
         }
@@ -564,7 +566,7 @@ export class SemanticAnalyzer {
         if (pattern.fields) pending.push(...pattern.fields.map(field => field.pattern));
       }
       term.irrefutable = this.checkCoverage([term.pattern], type, term).exhaustive;
-      term.moves = bindings.some(pattern => !pattern.copy);
+      term.moves = bindings.some(pattern => !pattern.byRef && !pattern.copy);
       term.binding = term.pattern.kind === 'bindingPattern' ? term.pattern.binding : null;
       if (bindings.length && ConditionChain.containsReferences(this, type) &&
           (!term.binding || !T.reference(type) && !term.value.borrowCarrier))
@@ -812,7 +814,7 @@ export class SemanticAnalyzer {
         if (!(ctx.methodScope.sizedOrigin(origin) ?? this.hasTrait(inferred,'core::marker::Sized')))
           throw new Diagnostic('E0277',`Local value ${origin} needs a Sized bound`,node.span);
         this.index.sizedTypes.checkConcrete(inferred,this,node);
-        this.pattern(node.pattern, inferred, ctx, node.mutable, origin);
+        this.pattern(node.pattern, inferred, ctx, node.mutable, origin, node.value);
         this.checkCoverage([node.pattern], inferred, node, !node.otherwise);
         node.binding = node.pattern.binding; break;
       }
@@ -859,7 +861,7 @@ export class SemanticAnalyzer {
       }
       case 'whileLet': {
         const scrutinee = this.infer(node.value, ctx);
-        ctx.push(); this.pattern(node.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value));
+        ctx.push(); this.pattern(node.pattern, scrutinee, ctx, false, ctx.methodScope.of(node.value), node.value);
         ctx.loops.push({kind: 'while', id: node.id, label: node.label, type: '!'});
         T.unify('()', this.block(node.then, ctx, '()'), new Map(), node.then);
         ctx.loops.pop(); ctx.pop(); break;

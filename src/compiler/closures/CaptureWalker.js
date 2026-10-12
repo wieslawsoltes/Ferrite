@@ -6,10 +6,30 @@ export class CaptureWalker {
     if (pattern.kind === 'atPattern') return [...this.bindings(pattern.binder), ...this.bindings(pattern.pattern)];
     return [...(pattern.items ?? []).flatMap(p => this.bindings(p)), ...(pattern.fields ?? []).flatMap(f => this.bindings(f.pattern))];
   }
+  static patternUses(pattern, fallback = 'consume') {
+    const modes = new Set(), pending = Array.isArray(pattern) ? [...pattern] : [pattern]; let borrowed = false;
+    while (pending.length) {
+      const item = pending.pop(); if (!item) continue;
+      if (item.kind === 'bindingPattern') {
+        if (item.byRef) { borrowed = true; modes.add(item.refMutable ? 'mutate' : 'read'); }
+        else modes.add('consume');
+      }
+      if (item.binder) pending.push(item.binder);
+      if (item.pattern) pending.push(item.pattern);
+      if (item.items) pending.push(...item.items);
+      if (item.fields) pending.push(...item.fields.map(field => field.pattern));
+    }
+    return borrowed ? [...modes] : [fallback];
+  }
   static transform(node, names, onFree, use = 'read') {
     if (!node || typeof node !== 'object') return node;
     if (Array.isArray(node)) return node.map(n => this.transform(n, names, onFree, use));
     const walk = (n, scope = names, mode = 'read') => this.transform(n, scope, onFree, mode);
+    const scrutinee = (value, patterns, scope = names, fallback = 'consume') => {
+      let result;
+      for (const mode of this.patternUses(patterns, fallback)) result = walk(value, scope, mode);
+      return result;
+    };
     if (node.kind === 'variable') return node.name === '_' || names.has(node.name) ? node : onFree(node, use);
     if (node.kind === 'block') {
       const scope = new Set(names), body = [];
@@ -19,7 +39,7 @@ export class CaptureWalker {
       }
       return {...node, body, tail: walk(node.tail, scope, 'consume')};
     }
-    if (node.kind === 'let') return {...node, value: walk(node.value, names, 'consume')};
+    if (node.kind === 'let') return {...node, value: scrutinee(node.value, [node.pattern])};
     if (node.kind === 'return' || node.kind === 'break') return {...node, value: walk(node.value, names, 'consume')};
     if (node.kind === 'assign') return {...node, target: walk(node.target, names, 'mutate'), value: walk(node.value, names, node.target.kind === 'variable' && node.target.name === '_' ? 'read' : 'consume')};
     if (node.kind === 'unary' && node.op === '&') return {...node, value: walk(node.value, names, node.mutable ? 'mutate' : 'read')};
@@ -30,15 +50,15 @@ export class CaptureWalker {
       const scope = new Set(names);
       const conditions = node.conditions.map(term => {
         if (term.kind !== 'letCondition') return walk(term, scope);
-        const value = walk(term.value, scope, this.bindings(term.pattern).length ? 'consume' : 'read');
+        const value = scrutinee(term.value, [term.pattern], scope, this.bindings(term.pattern).length ? 'consume' : 'read');
         this.bindings(term.pattern).forEach(name => scope.add(name));
         return {...term, value};
       });
       return {...node, conditions, then: walk(node.then, scope), otherwise: walk(node.otherwise)};
     }
-    if (node.kind === 'ifLet' || node.kind === 'whileLet') return {...node, value: walk(node.value, names, 'consume'),
+    if (node.kind === 'ifLet' || node.kind === 'whileLet') return {...node, value: scrutinee(node.value, [node.pattern]),
       then: walk(node.then, new Set([...names, ...this.bindings(node.pattern)])), otherwise: walk(node.otherwise)};
-    if (node.kind === 'match') return {...node, value: walk(node.value, names, 'consume'), arms: node.arms.map(arm => {
+    if (node.kind === 'match') return {...node, value: scrutinee(node.value, node.arms.map(arm => arm.pattern)), arms: node.arms.map(arm => {
       const scope = new Set([...names, ...this.bindings(arm.pattern)]);
       return {...arm, guard: walk(arm.guard, scope), body: walk(arm.body, scope, 'consume')};
     })};

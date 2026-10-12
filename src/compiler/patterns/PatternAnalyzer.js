@@ -31,6 +31,11 @@ export class PatternAnalyzer {
   }
 
   analyze(pattern, type, context, mutable = false, bindings = new Map(), names = new Set(), reuse = false) {
+    if (pattern.byRef && pattern.kind !== 'bindingPattern' ||
+        pattern.byRef !== undefined && typeof pattern.byRef !== 'boolean' ||
+        pattern.refMutable !== undefined && (typeof pattern.refMutable !== 'boolean' || !pattern.byRef))
+      throw new Diagnostic('F_PATTERN_BINDING_MODE', 'Malformed explicit reference binding mode', pattern.span);
+    delete pattern.matchedType; // Only this typed pass may assign the source projection type.
     pattern.type = type;
     if (pattern.kind === 'variantPattern' && !pattern.items.length) {
       const literal = this.constant(pattern, context, false);
@@ -48,7 +53,7 @@ export class PatternAnalyzer {
         if (pattern.binder.kind !== 'bindingPattern') throw new Diagnostic('E0530', "Expected a new binding before '@'", pattern.binder.span);
         this.analyze(pattern.pattern, type, context, mutable, bindings, names, reuse);
         const copy = this.analyzer.hasTrait(type, 'Copy');
-        if (!copy && this.hasNonCopyBinding(pattern.pattern)) {
+        if (!pattern.binder.byRef && !copy && this.hasNonCopyBinding(pattern.pattern)) {
           throw new Diagnostic('E0382', "An '@' pattern cannot move both the whole value and a non-Copy part", pattern.span);
         }
         pattern.binder.copy = copy;
@@ -59,7 +64,7 @@ export class PatternAnalyzer {
         const constant = index.resolve(index.constants, pattern.name, context.instance.fn.module, pattern, false);
         const constructor = index.constructorFor(pattern.name, context.instance.fn.module);
         if (constant || constructor) {
-          if (pattern.mutable) throw new Diagnostic('E0530', 'A binding cannot shadow a constant or enum constructor', pattern.span);
+          if (pattern.mutable || pattern.byRef) throw new Diagnostic('E0530', 'A binding cannot shadow a constant or enum constructor', pattern.span);
           if (constructor) {
             pattern.kind = 'variantPattern'; pattern.items = []; pattern.tupleSyntax = false;
           } else {
@@ -71,15 +76,22 @@ export class PatternAnalyzer {
         }
         if (names.has(pattern.name)) throw new Diagnostic('E0416', `Identifier '${pattern.name}' is bound more than once in this pattern`, pattern.span);
         names.add(pattern.name);
+        if (pattern.byRef && (mutable || pattern.mutable))
+          throw new Diagnostic('E0308', 'A ref binding cannot also make its reference handle mutable', pattern.span);
+        if (pattern.byRef) { pattern.matchedType = type; type = '&' + (pattern.refMutable ? 'mut ' : '') + type; pattern.type = type; }
         const mode = mutable || !!pattern.mutable;
+        const referenceMode = pattern.byRef ? pattern.refMutable ? 'ref mut' : 'ref' : 'move';
         if (reuse) {
           const binding = bindings.get(pattern.name);
           if (!binding) throw new Diagnostic('E0408', `Variable '${pattern.name}' is not bound in all alternatives`, pattern.span);
+          if ((binding.referenceMode ?? 'move') !== referenceMode)
+            throw new Diagnostic('E0409', `Inconsistent reference binding mode for '${pattern.name}'`, pattern.span);
           T.unify(binding.type, type, new Map(), pattern);
           if (binding.mutable !== mode) throw new Diagnostic('E0409', `Inconsistent binding mode for '${pattern.name}'`, pattern.span);
           pattern.binding = binding;
         } else {
           pattern.binding = context.declare(pattern.name, type, mode, pattern);
+          if (pattern.byRef) pattern.binding.referenceMode = referenceMode;
           bindings.set(pattern.name, pattern.binding);
         }
         return;
@@ -207,6 +219,7 @@ export class PatternAnalyzer {
     if (length < 0) throw new Diagnostic(code, 'Pattern has more elements than the value', pattern.span);
     if (rest.kind === 'atPattern') {
       if (!array) throw new Diagnostic('E0308', "A binding to '..' is only valid in an array pattern", rest.span);
+      if (rest.binder.byRef) throw new Diagnostic('F_PATTERN_BORROW_REST', 'Borrowed array-rest bindings require a checked subarray-view ABI', rest.span);
       pattern.restBinding = {binder: rest.binder, start: index, length};
     }
     pattern.restSpan = rest.span;
@@ -214,7 +227,7 @@ export class PatternAnalyzer {
   }
 
   hasNonCopyBinding(pattern) {
-    if (pattern.binding && !this.analyzer.hasTrait(pattern.binding.type, 'Copy')) return true;
+    if (pattern.binding && !pattern.byRef && !this.analyzer.hasTrait(pattern.binding.type, 'Copy')) return true;
     if (pattern.kind === 'atPattern') return this.hasNonCopyBinding(pattern.binder) || this.hasNonCopyBinding(pattern.pattern);
     if (pattern.items?.some(p => this.hasNonCopyBinding(p))) return true;
     if (pattern.fields?.some(f => this.hasNonCopyBinding(f.pattern))) return true;

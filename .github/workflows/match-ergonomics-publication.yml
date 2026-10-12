@@ -1,0 +1,65 @@
+name: Publish checked match ergonomics
+on:
+  push:
+    branches: [automation/reference-patterns-publication]
+    paths: ['.github/workflows/match-ergonomics-publication.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_BRANCH: feat/ownership-match-ergonomics
+      EXPECTED_HEAD: 83578612b41d76c9405be537ddd4845fbe77067e
+      EXPECTED_TREE: b4f0c326f4e95955610a2de88eae004034f58db3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Decode and verify reviewed source patch
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os
+          from pathlib import Path
+          encoded = ''.join(Path(f'.delivery/match-ergonomics.{i}.b64').read_text().strip() for i in [1, 2])
+          patch = lzma.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '25d1ae8c04136f827f192c4ebd03606b7d49cd77db58cfe8bec52eb6e8f2f59e'
+          Path(os.environ['RUNNER_TEMP'], 'source.patch').write_bytes(patch)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/ownership-match-ergonomics
+      - name: Reproduce exact reviewed source tree
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git apply --check --whitespace=error-all "$RUNNER_TEMP/source.patch"
+          git apply --index --whitespace=error-all "$RUNNER_TEMP/source.patch"
+          npm run build:workers
+          npm run build:sdk
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+      - name: Run unchanged syntax, bundle and regression gates
+        run: |
+          npm run check > "$RUNNER_TEMP/check.log" 2>&1
+          node --test --test-concurrency=4 tests/*.test.js > "$RUNNER_TEMP/tests.log" 2>&1
+          tail -n 12 "$RUNNER_TEMP/tests.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: match-ergonomics-publication-evidence
+          path: |
+            ${{ runner.temp }}/check.log
+            ${{ runner.temp }}/tests.log
+          retention-days: 7
+      - name: Commit validated content and non-force push
+        run: |
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git config user.name 'Wiesław Šoltés'
+          git config user.email 'wieslawsoltes@users.noreply.github.com'
+          git commit -m 'feat: check reference-aware patterns and Rust 2024 match ergonomics' -m 'Add explicit reference prefixes and checked inferred binding modes through tracked projected places. Preserve pointer-storage origins, reborrow ancestry, declaration evidence and source ASTs. Include native fixtures, actual query replay, bounded recovery, documentation and regenerated bundles. Exact reviewed tree: b4f0c326f4e95955610a2de88eae004034f58db3. Full normal PR CI remains required before merge.'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git rev-parse HEAD HEAD^{tree}

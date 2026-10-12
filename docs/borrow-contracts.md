@@ -113,7 +113,8 @@ reference locals; it is not general aggregate reference dataflow.
 ## Work bounds and inspection
 
 Signature traversal has a 64-level nesting limit and 65,536 work-unit limit;
-resource exhaustion produces `F_OWNERSHIP_LIMIT`. Loan dependency work is charged
+resource exhaustion produces `F_OWNERSHIP_LIMIT`. Every visited generic input is
+charged, including direct inputs with zero dereference layers. Loan dependency work is charged
 to the existing projected-place budget. Failed analyses cannot publish successful
 ownership query results. Tests lower the signature budgets, verify the failure,
 then rerun using the same query cache after restoring the limits.
